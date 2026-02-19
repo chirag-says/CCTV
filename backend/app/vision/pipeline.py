@@ -2,6 +2,19 @@
 Main Vision Processing Pipeline.
 
 Orchestrates frame capture → detection → recognition → tracking → event emission.
+
+Supports two modes:
+  FACE mode (default):
+    - Face Detection → Recognition → Tracking → Entry/Exit
+    - Attribute Recognition (gender + clothing color)
+    - Crowd / Gathering Detection
+    - Loitering / Idle Detection
+    - Hazard Detection (YOLOv8)
+
+  TRAFFIC mode:
+    - Vehicle Detection + License Plate Recognition (ANPR)
+    - Human-Vehicle proximity safety alerts
+
 Runs as a background worker per camera.
 """
 
@@ -12,7 +25,7 @@ import time
 import asyncio
 import logging
 import os
-from typing import Optional, Dict, List, Callable
+from typing import Optional, Dict, List, Callable, Tuple
 from datetime import datetime, timezone
 from uuid import uuid4
 
@@ -20,6 +33,14 @@ from app.config import settings
 from app.vision.detector import FaceDetector
 from app.vision.recognizer import FaceRecognizer, MatchResult
 from app.vision.tracker import PersonTracker
+from app.vision.safety_analytics import (
+    AttributeRecognizer,
+    CrowdDetector,
+    LoiteringDetector,
+)
+from app.vision.hazard_detector import HazardDetector
+from app.vision.anpr import PlateRecognizer
+from app.vision.traffic import TrafficMonitor
 from app.utils.image_utils import save_snapshot, frame_to_jpeg_bytes
 
 logger = logging.getLogger(__name__)
@@ -29,15 +50,8 @@ class VisionPipeline:
     """
     Main processing pipeline for a single camera stream.
     
-    Flow:
-    1. Capture frame from camera
-    2. Skip frames for performance
-    3. Detect faces
-    4. Generate encodings
-    5. Recognize faces (match vs known)
-    6. Track entry/exit
-    7. Handle unknown faces
-    8. Emit events via callbacks
+    Supports FACE mode and TRAFFIC mode (see module docstring).
+    Mode is controlled by settings.PIPELINE_MODE.
     """
 
     def __init__(
@@ -66,6 +80,74 @@ class VisionPipeline:
             on_exit=self._handle_exit_event,
         )
 
+        # ── Safety & Security Modules ─────────────────────────────
+        # Attribute Recognition (gender + clothing)
+        self.attribute_recognizer: Optional[AttributeRecognizer] = None
+        if settings.ENABLE_ATTRIBUTE_RECOGNITION:
+            self.attribute_recognizer = AttributeRecognizer(max_workers=2)
+            logger.info(f"[{camera_id}] Attribute Recognition enabled")
+
+        # Crowd / Gathering Detection
+        self.crowd_detector: Optional[CrowdDetector] = None
+        if settings.ENABLE_CROWD_DETECTION:
+            self.crowd_detector = CrowdDetector(
+                proximity_px=settings.CROWD_PROXIMITY_PX,
+                min_persons=settings.CROWD_MIN_PERSONS,
+                sustain_seconds=settings.CROWD_SUSTAIN_SECONDS,
+                on_alert=self._handle_security_alert,
+            )
+            logger.info(f"[{camera_id}] Crowd Detection enabled")
+
+        # Loitering / Idle Detection
+        self.loitering_detector: Optional[LoiteringDetector] = None
+        if settings.ENABLE_LOITERING_DETECTION:
+            self.loitering_detector = LoiteringDetector(
+                movement_threshold_px=settings.LOITER_MOVEMENT_THRESHOLD_PX,
+                time_window_sec=settings.LOITER_TIME_WINDOW_SEC,
+                alert_cooldown_sec=settings.LOITER_ALERT_COOLDOWN_SEC,
+                on_alert=self._handle_security_alert,
+            )
+            logger.info(f"[{camera_id}] Loitering Detection enabled")
+
+        # Hazard Detection (YOLOv8)
+        self.hazard_detector: Optional[HazardDetector] = None
+        if settings.ENABLE_HAZARD_DETECTION:
+            self.hazard_detector = HazardDetector(
+                model_path=settings.HAZARD_MODEL_PATH,
+                frame_interval=settings.HAZARD_FRAME_INTERVAL,
+                alert_cooldown_sec=settings.HAZARD_ALERT_COOLDOWN_SEC,
+                on_alert=self._handle_security_alert,
+            )
+            logger.info(f"[{camera_id}] Hazard Detection enabled")
+
+        # ── Traffic Mode Modules ───────────────────────────────────
+        self.pipeline_mode = settings.PIPELINE_MODE.lower()
+
+        # ANPR (License Plate Recognition)
+        self.plate_recognizer: Optional[PlateRecognizer] = None
+        if self.pipeline_mode in ("traffic", "hybrid") and settings.ENABLE_ANPR:
+            languages = [l.strip() for l in settings.ANPR_OCR_LANGUAGES.split(",")]
+            self.plate_recognizer = PlateRecognizer(
+                yolo_model_path=settings.ANPR_MODEL_PATH,
+                frame_interval=settings.ANPR_FRAME_INTERVAL,
+                plate_cooldown_sec=settings.ANPR_PLATE_COOLDOWN_SEC,
+                on_plate=self._handle_vehicle_event,
+                languages=languages,
+            )
+            logger.info(f"[{camera_id}] ANPR enabled (languages={languages})")
+
+        # Traffic Monitor (Vehicle-Person Safety)
+        self.traffic_monitor: Optional[TrafficMonitor] = None
+        if self.pipeline_mode in ("traffic", "hybrid") and settings.ENABLE_TRAFFIC_MONITOR:
+            self.traffic_monitor = TrafficMonitor(
+                model_path=settings.TRAFFIC_MODEL_PATH,
+                frame_interval=settings.TRAFFIC_FRAME_INTERVAL,
+                proximity_px=settings.TRAFFIC_PROXIMITY_PX,
+                alert_cooldown_sec=settings.TRAFFIC_ALERT_COOLDOWN_SEC,
+                on_alert=self._handle_security_alert,
+            )
+            logger.info(f"[{camera_id}] Traffic Monitor enabled (proximity={settings.TRAFFIC_PROXIMITY_PX}px)")
+
         # Pipeline state
         self._frame_count = 0
         self._last_frame = None  # Last processed frame (for MJPEG streaming)
@@ -73,13 +155,15 @@ class VisionPipeline:
         self._last_exit_check = time.time()
         self._exit_check_interval = 2  # Check exits every 2 seconds for faster response
         self._unknown_cache: Dict[str, dict] = {}  # Temp unknown face dedup
+        self._last_safety_check = time.time()
+        self._safety_check_interval = 1.0  # Run crowd/loiter checks every 1s
 
         # Performance metrics
         self._fps = 0.0
         self._last_fps_time = time.time()
         self._fps_frame_count = 0
 
-        logger.info(f"Pipeline created for camera {camera_id}: source={stream_source}")
+        logger.info(f"Pipeline created for camera {camera_id}: source={stream_source}, mode={self.pipeline_mode}")
 
     def start(self):
         """Start the video capture."""
@@ -110,11 +194,23 @@ class VisionPipeline:
             self._capture = None
         # Flush remaining exits
         self.tracker.check_exits()
+
+        # Shutdown safety modules
+        if self.attribute_recognizer:
+            self.attribute_recognizer.shutdown()
+        if self.hazard_detector:
+            self.hazard_detector.shutdown()
+        if self.plate_recognizer:
+            self.plate_recognizer.shutdown()
+        if self.traffic_monitor:
+            self.traffic_monitor.shutdown()
+
         logger.info(f"Camera {self.camera_id} stopped")
 
     def process_frame(self) -> Optional[np.ndarray]:
         """
         Process a single frame through the full pipeline.
+        Dispatches to face mode or traffic mode based on settings.
         
         Returns:
             Annotated frame (with bounding boxes) or None if no frame available
@@ -128,9 +224,29 @@ class VisionPipeline:
             return None
 
         self._frame_count += 1
-        
+
+        # ── TRAFFIC MODE ──────────────────────────────────────
+        if self.pipeline_mode == "traffic":
+            return self._process_frame_traffic(frame)
+
+        # ── HYBRID MODE ───────────────────────────────────────
+        if self.pipeline_mode == "hybrid":
+            return self._process_frame_hybrid(frame)
+
+        # ── FACE MODE (default) ───────────────────────────────
         # Keep a clean copy for snapshots (before drawing boxes)
         clean_frame = frame.copy()
+
+        # ── HAZARD DETECTION (runs on its own schedule) ───────
+        # Submit frame to hazard detector — it internally throttles
+        # to every Nth frame and runs inference on a background thread.
+        # This is intentionally BEFORE the face-processing frame skip
+        # so hazard detection has its own independent sampling rate.
+        if self.hazard_detector:
+            try:
+                self.hazard_detector.submit_frame(clean_frame, self.camera_id)
+            except Exception as e:
+                logger.debug(f"Hazard detection submission failed: {e}")
 
         # Frame skip for performance
         if self._frame_count % settings.FRAME_SKIP != 0:
@@ -141,6 +257,7 @@ class VisionPipeline:
         face_locations, rgb_frame = self.detector.detect_faces(frame)
 
         if not face_locations:
+            self._run_safety_analytics()
             self._check_periodic_exits()
             self._update_fps()
             self._last_frame = frame
@@ -158,6 +275,9 @@ class VisionPipeline:
 
             top, right, bottom, left = location
 
+            # Compute centroid for this detection
+            centroid = ((left + right) // 2, (top + bottom) // 2)
+
             # Try to recognize
             result: MatchResult = self.recognizer.recognize_face(encoding)
 
@@ -171,17 +291,29 @@ class VisionPipeline:
                     person_name=result.person_name,
                     camera_id=self.camera_id,
                     confidence=result.confidence,
+                    centroid=centroid,
                 )
 
-                # NOTE: We intentionally do NOT emit a "detection" event
-                # every frame. The tracker already emits entry/exit events
-                # on state changes. Broadcasting per-frame detections would
-                # flood the WebSocket (10+ events/sec/person × 100s of people).
+                # ── ATTRIBUTE RECOGNITION (once per track) ────
+                if self.attribute_recognizer:
+                    try:
+                        self.attribute_recognizer.maybe_extract(
+                            track_id=result.person_id,
+                            frame=clean_frame,
+                            face_location=location,
+                            on_complete=self._handle_attributes_complete,
+                        )
+                    except Exception as e:
+                        logger.debug(f"Attribute extraction error: {e}")
+
             else:
                 # ── UNKNOWN PERSON ────────────────────────────
                 self._draw_box(frame, location, "UNKNOWN", (0, 0, 255), 0.0)
                 # Pass clean_frame to ensure snapshot doesn't have the red box
                 self._handle_unknown_face(clean_frame, rgb_frame, location, encoding)
+
+        # ── SAFETY ANALYTICS (crowd + loitering) ──────────────
+        self._run_safety_analytics()
 
         # ── PERIODIC EXIT CHECK ───────────────────────────────
         self._check_periodic_exits()
@@ -189,6 +321,77 @@ class VisionPipeline:
 
         self._last_frame = frame
         return frame
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    #  Safety & Security Integration
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _run_safety_analytics(self):
+        """
+        Run crowd and loitering detection at a throttled interval.
+        Uses centroid data from the tracker — completely non-blocking
+        since all heavy work is already done by the time centroids exist.
+        """
+        now = time.time()
+        if now - self._last_safety_check < self._safety_check_interval:
+            return
+        self._last_safety_check = now
+
+        try:
+            centroids = self.tracker.get_person_centroids()
+            names = self.tracker.get_person_names()
+
+            # Crowd Detection
+            if self.crowd_detector and len(centroids) >= 2:
+                self.crowd_detector.update(centroids, self.camera_id)
+
+            # Loitering Detection
+            if self.loitering_detector and centroids:
+                self.loitering_detector.update(
+                    centroids, names, self.camera_id
+                )
+        except Exception as e:
+            logger.debug(f"Safety analytics error: {e}")
+
+    def _handle_security_alert(self, alert: dict):
+        """
+        Callback for all security alerts (crowd, loitering, hazard,
+        vehicle_proximity). Routes through standard event system.
+        """
+        logger.warning(
+            f"Security alert on camera {self.camera_id}: "
+            f"{alert.get('subtype', 'unknown')} — {alert}"
+        )
+        if self.on_event:
+            self.on_event(alert)
+
+    def _handle_vehicle_event(self, event: dict):
+        """
+        Callback for ANPR vehicle entry events.
+        Routes through the standard event system.
+        """
+        logger.info(
+            f"Vehicle event on camera {self.camera_id}: "
+            f"plate={event.get('metadata', {}).get('plate', '???')}"
+        )
+        if self.on_event:
+            self.on_event(event)
+
+    def _handle_attributes_complete(self, track_id: str, attributes: dict):
+        """
+        Called when attribute recognition finishes for a person.
+        The attributes (gender, clothing color) can be attached to
+        detection events via the metadata JSONB column.
+        """
+        logger.info(
+            f"Attributes ready for {track_id[:8]}…: {attributes}"
+        )
+        # The attributes are cached in AttributeRecognizer._results
+        # and will be included in future events via get_attributes()
+
+    # ═══════════════════════════════════════════════════════════════════════════
+    #  Original Pipeline Methods (unchanged logic)
+    # ═══════════════════════════════════════════════════════════════════════════
 
     def _handle_unknown_face(
         self,
@@ -261,11 +464,27 @@ class VisionPipeline:
 
     def _handle_entry_event(self, event: dict):
         """Callback when tracker confirms an entry."""
+        # Enrich with attribute data if available
+        if self.attribute_recognizer:
+            attrs = self.attribute_recognizer.get_attributes(
+                event.get("person_id", "")
+            )
+            if attrs:
+                event.setdefault("metadata", {}).update(attrs)
+
         if self.on_event:
             self.on_event(event)
 
     def _handle_exit_event(self, event: dict):
         """Callback when tracker detects an exit."""
+        # Enrich with attribute data if available
+        if self.attribute_recognizer:
+            attrs = self.attribute_recognizer.get_attributes(
+                event.get("person_id", "")
+            )
+            if attrs:
+                event.setdefault("metadata", {}).update(attrs)
+
         if self.on_event:
             self.on_event(event)
 
@@ -364,14 +583,155 @@ class VisionPipeline:
     def fps(self) -> float:
         return round(self._fps, 1)
 
+    # ═══════════════════════════════════════════════════════════════════════════
+    #  Traffic Mode Processing
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _process_frame_traffic(self, frame: np.ndarray) -> np.ndarray:
+        """
+        Process a frame in TRAFFIC mode.
+        Skips face recognition entirely; runs ANPR + TrafficMonitor.
+        """
+        frame = self._process_frame_traffic_logic(frame)
+        self._update_fps()
+        self._last_frame = frame
+        return frame
+
+
+    def _process_frame_hybrid(self, frame: np.ndarray) -> np.ndarray:
+        """
+        Process a frame in HYBRID mode.
+        Runs BOTH Traffic (ANPR/Safety) and Face Recognition/Tracking.
+        """
+        # Keep a truly clean copy for Face Detection (must be before ANY drawing)
+        clean_frame_for_face = frame.copy()
+
+        # 1. Run Traffic Modules (they draw on frame first)
+        frame = self._process_frame_traffic_logic(frame)
+
+        # 2. Run Face Mode Logic
+        # Keep a copy for other uses (snapshots etc) - reusing the one above
+        clean_frame = clean_frame_for_face
+
+        # Hazard detection (if enabled)
+        if self.hazard_detector:
+             try:
+                 # Hazard detector manages its own threading/copying
+                 self.hazard_detector.submit_frame(clean_frame, self.camera_id)
+             except Exception as e:
+                 logger.debug(f"Hazard detection error: {e}")
+
+        # Frame skip for Face Rec (heavy)
+        if self._frame_count % settings.FRAME_SKIP != 0:
+            self._update_fps()
+            self._last_frame = frame
+            return frame
+
+        # Face Detection (Run on CLEAN frame, not the one with traffic boxes)
+        face_locations, rgb_frame = self.detector.detect_faces(clean_frame)
+
+        if not face_locations:
+            self._run_safety_analytics()
+            self._check_periodic_exits()
+            self._update_fps()
+            self._last_frame = frame
+            return frame
+
+        # Encoding
+        encodings = self.recognizer.batch_generate_encodings(rgb_frame, face_locations)
+
+        # Recognition & Tracking
+        for i, (location, encoding) in enumerate(zip(face_locations, encodings)):
+             if encoding is None: continue
+             top, right, bottom, left = location
+             centroid = ((left + right) // 2, (top + bottom) // 2)
+
+             result = self.recognizer.recognize_face(encoding)
+             if result.matched:
+                 # Known - Draw on the ACCUMULATED frame
+                 self._draw_box(frame, location, result.person_name, (0, 255, 0), result.confidence)
+                 self.tracker.on_detection(
+                     person_id=result.person_id,
+                     person_name=result.person_name,
+                     camera_id=self.camera_id,
+                     confidence=result.confidence,
+                     centroid=centroid,
+                 )
+                 # Attributes
+                 if self.attribute_recognizer:
+                     try:
+                         self.attribute_recognizer.maybe_extract(result.person_id, clean_frame, location, self._handle_attributes_complete)
+                     except Exception: pass
+             else:
+                 # Unknown - Draw on the ACCUMULATED frame
+                 self._draw_box(frame, location, "UNKNOWN", (0, 0, 255), 0.0)
+                 self._handle_unknown_face(clean_frame, rgb_frame, location, encoding)
+
+        # Analytics
+        self._run_safety_analytics()
+        self._check_periodic_exits()
+        self._update_fps()
+        self._last_frame = frame
+        return frame
+
+    def _process_frame_traffic_logic(self, frame: np.ndarray) -> np.ndarray:
+        """Helper to run traffic logic and return modified frame."""
+        clean_frame = frame.copy()
+        # Traffic Monitor
+        if self.traffic_monitor:
+            try:
+                self.traffic_monitor.submit_frame(clean_frame, self.camera_id)
+                frame = self.traffic_monitor.draw_detections(frame)
+            except Exception as e:
+                logger.debug(f"Traffic monitor error: {e}")
+        # ANPR
+        if self.plate_recognizer:
+            try:
+                self.plate_recognizer.submit_frame(clean_frame, self.camera_id)
+            except Exception as e:
+                logger.debug(f"ANPR error: {e}")
+        return frame
+
     @property
     def status(self) -> dict:
-        return {
+        base = {
             "camera_id": self.camera_id,
             "running": self._running,
             "fps": self.fps,
             "frames_processed": self._frame_count,
-            "faces_in_cache": self.recognizer.known_count,
-            "active_tracks": self.tracker.stats,
-            "unknown_cache_size": len(self._unknown_cache),
+            "pipeline_mode": self.pipeline_mode,
         }
+
+        if self.pipeline_mode == "traffic":
+            # Traffic mode stats
+            if self.traffic_monitor:
+                base["traffic_monitor"] = self.traffic_monitor.stats
+            if self.plate_recognizer:
+                base["plate_recognizer"] = self.plate_recognizer.stats
+        elif self.pipeline_mode == "hybrid":
+            # Hybrid stats
+            if self.traffic_monitor:
+                base["traffic_monitor"] = self.traffic_monitor.stats
+            if self.plate_recognizer:
+                base["plate_recognizer"] = self.plate_recognizer.stats
+            base["faces_in_cache"] = self.recognizer.known_count
+            base["active_tracks"] = self.tracker.stats
+            base["unknown_cache_size"] = len(self._unknown_cache)
+        else:
+            # Face mode stats
+            base["faces_in_cache"] = self.recognizer.known_count
+            base["active_tracks"] = self.tracker.stats
+            base["unknown_cache_size"] = len(self._unknown_cache)
+            if self.hazard_detector:
+                base["hazard_detector"] = self.hazard_detector.stats
+
+        base["safety_modules"] = {
+            "attribute_recognition": settings.ENABLE_ATTRIBUTE_RECOGNITION,
+            "crowd_detection": settings.ENABLE_CROWD_DETECTION,
+            "loitering_detection": settings.ENABLE_LOITERING_DETECTION,
+            "hazard_detection": settings.ENABLE_HAZARD_DETECTION,
+            "pipeline_mode": self.pipeline_mode,
+            "anpr": self.pipeline_mode in ("traffic", "hybrid") and settings.ENABLE_ANPR,
+            "traffic_monitor": self.pipeline_mode in ("traffic", "hybrid") and settings.ENABLE_TRAFFIC_MONITOR,
+        }
+        return base

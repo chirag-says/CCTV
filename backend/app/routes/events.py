@@ -19,6 +19,7 @@ router = APIRouter(prefix="/api", tags=["Events & Tracking"])
 @router.get("/events")
 async def list_events(
     event_type: Optional[str] = Query(None, description="entry/exit/detection/unknown"),
+    subtype: Optional[str] = Query(None, description="loitering/gathering/vehicle_proximity"),
     person_id: Optional[str] = Query(None),
     camera_id: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
@@ -32,12 +33,20 @@ async def list_events(
 
     if db is None:
         # Mock mode — use in-memory store
-        return mock_store.list_events(limit=limit, offset=offset)
+        return mock_store.list_events(
+            event_type=event_type,
+            subtype=subtype,
+            camera_id=camera_id,
+            limit=limit,
+            offset=offset,
+        )
 
     query = db.table("detection_events").select("*", count="exact")
 
     if event_type:
         query = query.eq("event_type", event_type)
+    if subtype:
+        query = query.eq("subtype", subtype)
     if person_id:
         query = query.eq("person_id", person_id)
     if camera_id:

@@ -169,6 +169,21 @@ class ApiClient {
     return this.request('/api/sessions/active');
   }
 
+  async getSecurityAlerts(params = {}) {
+    const query = new URLSearchParams({ event_type: 'security_alert', ...params }).toString();
+    return this.request(`/api/events${query ? `?${query}` : ''}`);
+  }
+
+  async getVehicleEvents(params = {}) {
+    const query = new URLSearchParams({ event_type: 'vehicle_entry', ...params }).toString();
+    return this.request(`/api/events${query ? `?${query}` : ''}`);
+  }
+
+  async getTrafficAlerts(params = {}) {
+    const query = new URLSearchParams({ event_type: 'security_alert', subtype: 'vehicle_proximity', ...params }).toString();
+    return this.request(`/api/events${query ? `?${query}` : ''}`);
+  }
+
   // ── Unknown Faces ─────────────────────────────────────────
   async getUnknownFaces(params = {}) {
     const query = new URLSearchParams(params).toString();

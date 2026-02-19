@@ -21,12 +21,12 @@ class Settings(BaseSettings):
 
     # ── Vision Pipeline ───────────────────────────────────────
     DETECTION_MODEL: str = "hog"  # "hog" (CPU) or "cnn" (GPU)
-    FACE_MATCH_TOLERANCE: float = 0.45
+    FACE_MATCH_TOLERANCE: float = 0.55  # Relaxed from 0.45 to improve recognition
     FRAME_SKIP: int = 3
     DETECTION_SCALE: float = 0.5
     EXIT_THRESHOLD_SECONDS: int = 15  # 15 seconds — responsive for live monitoring
     ENTRY_THRESHOLD_SECONDS: int = 3
-    UNKNOWN_SIMILARITY_THRESHOLD: float = 0.4
+    UNKNOWN_SIMILARITY_THRESHOLD: float = 0.50  # Relaxed from 0.4
 
     # ── Camera ────────────────────────────────────────────────
     DEFAULT_CAMERA_SOURCE: str = "0"
@@ -41,6 +41,47 @@ class Settings(BaseSettings):
     # ── Storage ───────────────────────────────────────────────
     SNAPSHOT_DIR: str = "./snapshots"
     MAX_SNAPSHOT_SIZE_KB: int = 200
+
+    # ── Safety & Security Modules ─────────────────────────────
+    # Attribute Recognition
+    ENABLE_ATTRIBUTE_RECOGNITION: bool = True
+
+    # Crowd / Gathering Detection
+    ENABLE_CROWD_DETECTION: bool = True
+    CROWD_PROXIMITY_PX: int = 150       # ~1.5m at typical camera distance
+    CROWD_MIN_PERSONS: int = 3
+    CROWD_SUSTAIN_SECONDS: float = 5.0
+
+    # Loitering / Idle Detection
+    ENABLE_LOITERING_DETECTION: bool = True
+    LOITER_MOVEMENT_THRESHOLD_PX: int = 50
+    LOITER_TIME_WINDOW_SEC: float = 300.0    # 5 minutes
+    LOITER_ALERT_COOLDOWN_SEC: float = 600.0 # 10 min re-alert cooldown
+
+    # Hazard Detection (YOLOv8)
+    ENABLE_HAZARD_DETECTION: bool = True
+    HAZARD_MODEL_PATH: str = "yolov8n.pt"
+    HAZARD_FRAME_INTERVAL: int = 30      # Process every 30th frame
+    HAZARD_ALERT_COOLDOWN_SEC: float = 30.0
+
+    # ── Pipeline Mode ─────────────────────────────────────────
+    # "face" = Face Recognition mode (default, existing behaviour)
+    # "traffic" = Traffic mode (ANPR + vehicle-person safety)
+    PIPELINE_MODE: str = "face"
+
+    # ── Traffic Mode: ANPR (License Plate Recognition) ────────
+    ENABLE_ANPR: bool = True
+    ANPR_MODEL_PATH: str = "yolov8n.pt"
+    ANPR_FRAME_INTERVAL: int = 5         # Process every 5th frame
+    ANPR_PLATE_COOLDOWN_SEC: float = 60.0
+    ANPR_OCR_LANGUAGES: str = "en"       # Comma-separated EasyOCR languages
+
+    # ── Traffic Mode: Vehicle-Person Safety Monitor ───────────
+    ENABLE_TRAFFIC_MONITOR: bool = True
+    TRAFFIC_MODEL_PATH: str = "yolov8n.pt"
+    TRAFFIC_FRAME_INTERVAL: int = 5      # Process every 5th frame
+    TRAFFIC_PROXIMITY_PX: int = 50       # Pixel proximity for danger alert
+    TRAFFIC_ALERT_COOLDOWN_SEC: float = 15.0
 
     @property
     def cors_origins_list(self) -> List[str]:

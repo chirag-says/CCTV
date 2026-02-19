@@ -5,13 +5,15 @@ Implements time-based entry/exit tracking with:
 - Configurable thresholds
 - Cooldown periods to prevent rapid re-entry
 - State machine per tracked person
+- Centroid history for loitering / crowd analytics
 - Thread-safe operation
 """
 
 import threading
 import time
 import logging
-from typing import Dict, Optional, List, Callable
+from collections import deque
+from typing import Dict, Optional, List, Tuple, Callable
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 
@@ -32,6 +34,9 @@ class TrackState:
     entry_confirmed: bool = False
     exit_emitted: bool = False
     session_id: Optional[str] = None
+    # Centroid history for loitering/crowd analysis: deque of (timestamp, cx, cy)
+    centroid_history: deque = field(default_factory=lambda: deque(maxlen=600))
+    last_centroid: Optional[Tuple[int, int]] = None
 
     @property
     def duration(self) -> float:
@@ -95,6 +100,7 @@ class PersonTracker:
         camera_id: str,
         confidence: float = 0.0,
         timestamp: Optional[float] = None,
+        centroid: Optional[Tuple[int, int]] = None,
     ) -> Optional[dict]:
         """
         Process a face detection event.
@@ -123,6 +129,11 @@ class PersonTracker:
                 track = self._active_tracks[person_id]
                 track.last_seen = ts
                 track.detection_count += 1
+
+                # Update centroid history
+                if centroid is not None:
+                    track.last_centroid = centroid
+                    track.centroid_history.append((ts, centroid[0], centroid[1]))
 
                 # Update camera if person moved
                 if track.camera_id != camera_id:
@@ -156,13 +167,18 @@ class PersonTracker:
                 return None
             else:
                 # New person spotted — start tracking
-                self._active_tracks[person_id] = TrackState(
+                new_track = TrackState(
                     person_id=person_id,
                     person_name=person_name,
                     camera_id=camera_id,
                     first_seen=ts,
                     last_seen=ts,
                 )
+                # Store initial centroid
+                if centroid is not None:
+                    new_track.last_centroid = centroid
+                    new_track.centroid_history.append((ts, centroid[0], centroid[1]))
+                self._active_tracks[person_id] = new_track
 
                 # Check immediate entry (threshold=0)
                 if self.entry_threshold <= 0:
@@ -282,6 +298,29 @@ class PersonTracker:
         with self._lock:
             if person_id in self._active_tracks:
                 self._active_tracks[person_id].session_id = session_id
+
+    def get_person_centroids(self) -> Dict[str, Tuple[int, int]]:
+        """
+        Get current centroid position for all actively tracked persons.
+        Used by crowd/loitering detectors.
+
+        Returns:
+            {person_id: (cx, cy)} for persons with a known centroid
+        """
+        with self._lock:
+            return {
+                pid: track.last_centroid
+                for pid, track in self._active_tracks.items()
+                if track.last_centroid is not None
+            }
+
+    def get_person_names(self) -> Dict[str, str]:
+        """Get {person_id: person_name} for all active tracks."""
+        with self._lock:
+            return {
+                pid: track.person_name
+                for pid, track in self._active_tracks.items()
+            }
 
     def reset(self):
         """Clear all tracking state."""

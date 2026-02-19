@@ -260,31 +260,52 @@ class MockStore:
 
     def add_event(self, event: dict) -> dict:
         """Store a detection event."""
+        # Ensure we store all relevant fields
         record = {
             "id": str(uuid4()),
             "person_id": event.get("person_id"),
             "camera_id": event.get("camera_id", ""),
             "event_type": event.get("event_type", "detection"),
+            "subtype": event.get("subtype"),
             "person_name": event.get("person_name", "Unknown"),
             "confidence": event.get("confidence", 0.0),
             "snapshot_url": event.get("snapshot_url"),
             "timestamp": event.get("timestamp", datetime.now(timezone.utc).isoformat()),
             "created_at": datetime.now(timezone.utc).isoformat(),
+            "metadata": event.get("metadata", {}),
         }
 
         with self._lock:
             self._events.append(record)
             if len(self._events) > self._max_events:
+                # Keep most recent
                 self._events = self._events[-self._max_events:]
 
         return record
 
-    def list_events(self, limit: int = 50, offset: int = 0) -> dict:
-        """Get recent events."""
+    def list_events(
+        self,
+        event_type: Optional[str] = None,
+        subtype: Optional[str] = None,
+        camera_id: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict:
+        """Get recent events with filtering."""
         with self._lock:
-            events = list(reversed(self._events))  # Most recent first
+            # Events are stored oldest->newest, reverse for newest->oldest
+            events = list(reversed(self._events))
+
+        # Filter
+        if event_type:
+            events = [e for e in events if e.get("event_type") == event_type]
+        if subtype:
+            events = [e for e in events if e.get("subtype") == subtype]
+        if camera_id:
+            events = [e for e in events if e.get("camera_id") == camera_id]
+
         total = len(events)
-        data = events[offset: offset + limit]
+        data = events[offset : offset + limit]
         return {"data": data, "total": total}
 
 

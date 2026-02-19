@@ -11,6 +11,13 @@ dlib-bin>=20.0.0
 numpy>=1.26.0
 Pillow>=10.2.0
 
+# Safety & Security Modules
+deepface>=0.0.89
+ultralytics>=8.1.0
+scipy>=1.12.0
+tf-keras>=2.16.0
+easyocr>=1.7.0
+
 # Database
 supabase>=2.3.0
 python-dotenv>=1.0.1

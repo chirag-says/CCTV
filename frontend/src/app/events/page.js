@@ -8,7 +8,7 @@
 import { useState, useEffect } from 'react';
 import AppShell from '@/components/AppShell';
 import api from '@/lib/api';
-import { EntryIcon, ExitIcon, DetectionIcon, UnknownFaceIcon, EventLogIcon } from '@/components/Icons';
+import { EntryIcon, ExitIcon, DetectionIcon, UnknownFaceIcon, EventLogIcon, SecurityIcon, CrowdIcon, LoiterIcon, HazardIcon, VehicleIcon, PlateIcon } from '@/components/Icons';
 
 export default function EventsPage() {
     const [events, setEvents] = useState([]);
@@ -59,15 +59,15 @@ export default function EventsPage() {
             {/* Filters */}
             <div className="card" style={{ marginBottom: '20px' }}>
                 <div className="toolbar-responsive" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                    {['', 'entry', 'exit', 'detection', 'unknown'].map((type) => (
+                    {['', 'entry', 'exit', 'detection', 'unknown', 'security_alert', 'vehicle_entry'].map((type) => (
                         <button
                             key={type || 'all'}
                             className={`btn btn-sm ${typeFilter === type ? 'btn-primary' : 'btn-secondary'}`}
                             onClick={() => setTypeFilter(type)}
                         >
                             {type ? (
-                                <span className={`badge ${type}`} style={{ padding: '2px 8px' }}>
-                                    {type.charAt(0).toUpperCase() + type.slice(1)}
+                                <span className={`badge ${type === 'security_alert' ? 'security-alert' : type === 'vehicle_entry' ? 'vehicle-entry' : type}`} style={{ padding: '2px 8px' }}>
+                                    {type === 'security_alert' ? 'Security Alert' : type === 'vehicle_entry' ? 'Vehicle Entry' : type.charAt(0).toUpperCase() + type.slice(1)}
                                 </span>
                             ) : 'All Events'}
                         </button>
@@ -125,16 +125,23 @@ export default function EventsPage() {
                                             </span>
                                         </td>
                                         <td>
-                                            <span className={`badge ${event.event_type}`} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                                            <span className={`badge ${event.event_type === 'security_alert' ? 'security-alert' : event.event_type}`} style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
                                                 {event.event_type === 'entry' && <EntryIcon size={12} />}
                                                 {event.event_type === 'exit' && <ExitIcon size={12} />}
                                                 {event.event_type === 'unknown' && <UnknownFaceIcon size={12} />}
                                                 {event.event_type === 'detection' && <DetectionIcon size={12} />}
-                                                {event.event_type}
+                                                {event.event_type === 'security_alert' && <SecurityIcon size={12} />}
+                                                {event.event_type === 'security_alert'
+                                                    ? (event.metadata?.subtype || 'alert').toUpperCase()
+                                                    : event.event_type}
                                             </span>
                                         </td>
                                         <td>
-                                            {event.person_name ? (
+                                            {event.event_type === 'security_alert' ? (
+                                                <span style={{ color: 'var(--text-secondary)', fontSize: '0.813rem' }}>
+                                                    {event.metadata?.person_name || event.metadata?.threat_class || event.metadata?.person_count ? `${event.metadata.person_count} people` : '—'}
+                                                </span>
+                                            ) : event.person_name ? (
                                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                                                     <div className="avatar sm">{event.person_name.charAt(0)}</div>
                                                     <span style={{ color: 'var(--text-primary)', fontWeight: 500 }}>{event.person_name}</span>

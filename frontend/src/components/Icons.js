@@ -279,3 +279,89 @@ export const VideoCameraOffIcon = (props) => (
         <line x1="1" y1="1" x2="23" y2="23" />
     </Icon>
 );
+
+// ── Security / Safety Icons ────────────────────────────
+
+export const FireIcon = (props) => (
+    <Icon {...props}>
+        <path d="M12 12c0-3 2.5-6 2.5-6s2.5 3 2.5 6a2.5 2.5 0 1 1-5 0z" />
+        <path d="M12 22c-4.97 0-9-4.03-9-9 0-4 4-9 9-14 5 5 9 10 9 14 0 4.97-4.03 9-9 9z" />
+    </Icon>
+);
+
+export const CrowdIcon = (props) => (
+    <Icon {...props}>
+        <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+        <circle cx="9" cy="7" r="4" />
+        <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+        <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+        <circle cx="9" cy="7" r="2" fill="currentColor" stroke="none" />
+    </Icon>
+);
+
+export const LoiterIcon = (props) => (
+    <Icon {...props}>
+        <circle cx="12" cy="5" r="3" />
+        <path d="M12 8v6" />
+        <path d="M9 20l3-6 3 6" />
+        <path d="M18 12a6 6 0 0 0-12 0" strokeDasharray="2 2" />
+    </Icon>
+);
+
+export const HazardIcon = (props) => (
+    <Icon {...props}>
+        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <circle cx="12" cy="17" r="1" fill="currentColor" stroke="none" />
+    </Icon>
+);
+
+export const SecurityIcon = (props) => (
+    <Icon {...props}>
+        <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+        <path d="M12 8v4" />
+        <path d="M12 16h.01" />
+    </Icon>
+);
+
+// ── Traffic / Vehicle Icons ──────────────────────────────
+
+export const VehicleIcon = (props) => (
+    <Icon {...props}>
+        <path d="M5 17h14" />
+        <path d="M5 17a2 2 0 0 1-2-2V9a2 2 0 0 1 2-2h1l1.5-3h9L18 7h1a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2" />
+        <circle cx="7.5" cy="17" r="2" />
+        <circle cx="16.5" cy="17" r="2" />
+    </Icon>
+);
+
+export const PlateIcon = (props) => (
+    <Icon {...props}>
+        <rect x="2" y="6" width="20" height="12" rx="2" />
+        <path d="M6 12h2" />
+        <path d="M12 10v4" />
+        <path d="M16 12h2" />
+        <path d="M8 15h8" />
+    </Icon>
+);
+
+export const TrafficIcon = (props) => (
+    <Icon {...props}>
+        <rect x="6" y="1" width="12" height="22" rx="2" />
+        <circle cx="12" cy="6" r="2" fill="currentColor" stroke="none" />
+        <circle cx="12" cy="12" r="2" />
+        <circle cx="12" cy="18" r="2" />
+    </Icon>
+);
+
+export const ProximityIcon = (props) => (
+    <Icon {...props}>
+        <circle cx="7" cy="5" r="2" />
+        <path d="M5 9h4v5L7 20" />
+        <path d="M9 14l-2 6" />
+        <path d="M13 10l2-2 2 2-2 2z" fill="currentColor" stroke="none" />
+        <path d="M17 7h3a2 2 0 0 1 2 2v4" />
+        <path d="M22 15h-5v2h5" />
+        <circle cx="18" cy="19" r="1.5" />
+    </Icon>
+);

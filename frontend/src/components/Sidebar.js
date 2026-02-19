@@ -16,6 +16,8 @@ import {
     EventLogIcon,
     AnalyticsIcon,
     ShieldIcon,
+    SecurityIcon,
+    TrafficIcon,
 } from './Icons';
 
 const navItems = [
@@ -32,6 +34,13 @@ const navItems = [
             { href: '/persons', icon: UsersIcon, label: 'Persons', id: 'nav-persons' },
             { href: '/cameras', icon: CameraIcon, label: 'Cameras', id: 'nav-cameras' },
             { href: '/unknown-faces', icon: UnknownFaceIcon, label: 'Unknown Faces', id: 'nav-unknown', badge: true },
+        ],
+    },
+    {
+        section: 'Security',
+        items: [
+            { href: '/security-alerts', icon: SecurityIcon, label: 'Security Alerts', id: 'nav-security', alertBadge: true },
+            { href: '/traffic', icon: TrafficIcon, label: 'Traffic Monitor', id: 'nav-traffic' },
         ],
     },
     {

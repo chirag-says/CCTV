@@ -1543,3 +1543,475 @@ select.input {
     /* Ensure table doesn't squish columns */
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   Security Alerts Styles
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Badge for security_alert events */
+.badge.security_alert,
+.badge.security-alert {
+  background: rgba(239, 68, 68, 0.15);
+  color: var(--danger-light);
+}
+
+.badge.security-alert.gathering {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--warning-light);
+}
+
+.badge.security-alert.loitering {
+  background: rgba(6, 182, 212, 0.15);
+  color: var(--accent-light);
+}
+
+.badge.security-alert.hazard {
+  background: rgba(239, 68, 68, 0.18);
+  color: var(--danger-light);
+}
+
+/* Activity feed icon for security alerts */
+.activity-icon.security-alert {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--danger-light);
+}
+
+.activity-icon.security-alert.danger {
+  background: rgba(239, 68, 68, 0.2);
+  color: var(--danger);
+  animation: pulse-alert 2s infinite;
+}
+
+/* Pulse animation for active danger alerts */
+@keyframes pulse-alert {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.3);
+  }
+
+  50% {
+    box-shadow: 0 0 0 6px rgba(239, 68, 68, 0);
+  }
+}
+
+/* Security alert item highlight in feed */
+.activity-item.security-alert-item {
+  border-left: 3px solid var(--danger);
+  padding-left: 12px;
+}
+
+/* ── Security Alerts Page ─────────────────────────────────────── */
+
+.security-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .security-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.security-alert-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: all var(--transition-fast);
+}
+
+.security-alert-card:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+/* Severity indicators */
+.security-alert-card.severity-high {
+  border-left: 4px solid var(--danger);
+}
+
+.security-alert-card.severity-medium {
+  border-left: 4px solid var(--warning);
+}
+
+.security-alert-card.severity-low {
+  border-left: 4px solid var(--accent);
+}
+
+.security-alert-card .alert-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.security-alert-card .alert-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.security-alert-card.severity-high .alert-icon {
+  background: rgba(239, 68, 68, 0.12);
+  color: var(--danger-light);
+}
+
+.security-alert-card.severity-medium .alert-icon {
+  background: rgba(245, 158, 11, 0.12);
+  color: var(--warning-light);
+}
+
+.security-alert-card.severity-low .alert-icon {
+  background: rgba(6, 182, 212, 0.12);
+  color: var(--accent-light);
+}
+
+.security-alert-card .alert-title {
+  font-weight: 600;
+  font-size: 0.938rem;
+  color: var(--text-primary);
+}
+
+.security-alert-card .alert-subtitle {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.security-alert-card .alert-details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.security-alert-card .alert-detail-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  border-radius: 20px;
+  font-size: 0.688rem;
+  font-weight: 500;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-color);
+}
+
+.security-alert-card .alert-time {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  margin-top: 12px;
+}
+
+/* Severity stats */
+.security-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.security-stat {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 16px;
+  text-align: center;
+}
+
+.security-stat .stat-number {
+  font-size: 1.75rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+}
+
+.security-stat .stat-label {
+  font-size: 0.688rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  margin-top: 4px;
+}
+
+.security-stat.danger .stat-number {
+  color: var(--danger-light);
+}
+
+.security-stat.warning .stat-number {
+  color: var(--warning-light);
+}
+
+.security-stat.info .stat-number {
+  color: var(--accent-light);
+}
+
+.security-stat.total .stat-number {
+  color: var(--text-primary);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   Traffic / Vehicle Styles
+   ═══════════════════════════════════════════════════════════════ */
+
+.badge.vehicle-entry,
+.badge.vehicle_entry {
+  background: rgba(59, 130, 246, 0.15);
+  color: #60a5fa;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.activity-icon.vehicle-entry {
+  background: rgba(59, 130, 246, 0.12);
+  color: #60a5fa;
+}
+
+/* ── Traffic Grid ─────────────────────────────────────── */
+
+.traffic-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 768px) {
+  .traffic-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ── Stat Cards ───────────────────────────────────────── */
+
+.traffic-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 14px;
+  margin-bottom: 24px;
+}
+
+.traffic-stat {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px 16px 18px;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  transition: all var(--transition-fast);
+}
+
+.traffic-stat:hover {
+  border-color: var(--border-hover);
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-md);
+}
+
+.traffic-stat::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+}
+
+.traffic-stat.vehicles::before {
+  background: linear-gradient(90deg, #3b82f6, #60a5fa);
+}
+
+.traffic-stat.plates::before {
+  background: linear-gradient(90deg, #10b981, #34d399);
+}
+
+.traffic-stat.alerts::before {
+  background: linear-gradient(90deg, #ef4444, #f87171);
+}
+
+.traffic-stat.proximity::before {
+  background: linear-gradient(90deg, #f59e0b, #fbbf24);
+}
+
+.traffic-stat .stat-icon-wrap {
+  transition: transform var(--transition-fast);
+}
+
+.traffic-stat:hover .stat-icon-wrap {
+  transform: scale(1.1);
+}
+
+.traffic-stat .stat-number {
+  font-size: 1.75rem;
+  font-weight: 800;
+  line-height: 1;
+  margin-bottom: 6px;
+  letter-spacing: -0.02em;
+}
+
+.traffic-stat.vehicles .stat-number {
+  color: #60a5fa;
+}
+
+.traffic-stat.plates .stat-number {
+  color: #34d399;
+}
+
+.traffic-stat.alerts .stat-number {
+  color: #f87171;
+}
+
+.traffic-stat.proximity .stat-number {
+  color: #fbbf24;
+}
+
+.traffic-stat .stat-label {
+  font-size: 0.688rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+/* ── Vehicle ANPR Card ────────────────────────────────── */
+
+.vehicle-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: all var(--transition-fast);
+}
+
+.vehicle-card:hover {
+  border-color: rgba(59, 130, 246, 0.3);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(59, 130, 246, 0.1);
+}
+
+.vehicle-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(180deg, #3b82f6, #60a5fa);
+  border-radius: 0 2px 2px 0;
+}
+
+.vehicle-card .plate-number {
+  font-family: 'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+  font-size: 1.2rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--text-primary);
+  background: rgba(59, 130, 246, 0.08);
+  border: 1px solid rgba(59, 130, 246, 0.18);
+  border-radius: var(--radius-md);
+  padding: 8px 16px;
+  display: inline-block;
+  transition: all var(--transition-fast);
+}
+
+.vehicle-card:hover .plate-number {
+  background: rgba(59, 130, 246, 0.12);
+  border-color: rgba(59, 130, 246, 0.3);
+  box-shadow: 0 0 12px rgba(59, 130, 246, 0.1);
+}
+
+.vehicle-card .vehicle-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.vehicle-card .vehicle-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border-color);
+  border-radius: 20px;
+  font-size: 0.688rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.vehicle-card .vehicle-chip:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border-hover);
+}
+
+/* ── Proximity Alert Card (uses security-alert-card infra) ── */
+
+.proximity-card {
+  background: var(--bg-card);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  position: relative;
+  overflow: hidden;
+  transition: all var(--transition-fast);
+}
+
+.proximity-card::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: linear-gradient(180deg, #ef4444, #f87171);
+  border-radius: 0 2px 2px 0;
+}
+
+.proximity-card:hover {
+  border-color: rgba(239, 68, 68, 0.35);
+  transform: translateY(-2px);
+  box-shadow: 0 6px 24px rgba(239, 68, 68, 0.1);
+}
+
+.proximity-card .distance-indicator {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: #f87171;
+}
+
+.proximity-card .distance-indicator.overlap {
+  color: #ef4444;
+  animation: pulse-alert 2s infinite;
+}
+
+@keyframes plate-flash {
+
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.3);
+  }
+
+  50% {
+    box-shadow: 0 0 16px 6px rgba(59, 130, 246, 0.15);
+  }
+}
+
+.vehicle-card.new-entry {
+  animation: plate-flash 1.5s ease 1;
+}
