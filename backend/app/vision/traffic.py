@@ -124,18 +124,22 @@ class TrafficMonitor:
             if self._model_loaded:
                 return self._model_available
             try:
+                import torch
                 from ultralytics import YOLO
-                logger.info(f"Loading YOLOv8 for TrafficMonitor: {self.model_path}")
+                self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                logger.info(f"Loading YOLOv8 for TrafficMonitor: {self.model_path} on {self._device}")
                 self._model = YOLO(self.model_path)
                 self._model_available = True
-                logger.info("YOLOv8 model loaded for TrafficMonitor")
+                logger.info(f"YOLOv8 model loaded for TrafficMonitor on {self._device}")
             except ImportError:
+                self._device = 'cpu'
                 self._model_available = False
                 logger.warning(
                     "ultralytics not installed — traffic monitoring disabled. "
                     "Install with: pip install ultralytics"
                 )
             except Exception as e:
+                self._device = 'cpu'
                 self._model_available = False
                 logger.error(f"Failed to load YOLOv8 for TrafficMonitor: {e}")
             finally:
@@ -176,6 +180,7 @@ class TrafficMonitor:
                 conf=0.35,
                 classes=ALL_TRAFFIC_CLASSES,
                 verbose=False,
+                device=getattr(self, '_device', 'cpu'),
             )
 
             inference_ms = (time.monotonic() - start_time) * 1000

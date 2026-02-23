@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
     # ── Vision Pipeline ───────────────────────────────────────
-    DETECTION_MODEL: str = "hog"  # "hog" (CPU) or "cnn" (GPU)
+    DETECTION_MODEL: str = "cnn"  # "hog" (CPU) or "cnn" (GPU) — using CNN for GPU acceleration
     FACE_MATCH_TOLERANCE: float = 0.55  # Relaxed from 0.45 to improve recognition
     FRAME_SKIP: int = 3
     DETECTION_SCALE: float = 0.5

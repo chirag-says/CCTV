@@ -127,18 +127,22 @@ class HazardDetector:
                 return self._model_available
 
             try:
+                import torch
                 from ultralytics import YOLO
-                logger.info(f"Loading YOLOv8 model: {self.model_path}")
+                self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                logger.info(f"Loading YOLOv8 model: {self.model_path} on {self._device}")
                 self._model = YOLO(self.model_path)
                 self._model_available = True
-                logger.info("YOLOv8 model loaded successfully")
+                logger.info(f"YOLOv8 model loaded successfully on {self._device}")
             except ImportError:
+                self._device = 'cpu'
                 self._model_available = False
                 logger.warning(
                     "ultralytics not installed — hazard detection disabled. "
                     "Install with: pip install ultralytics"
                 )
             except Exception as e:
+                self._device = 'cpu'
                 self._model_available = False
                 logger.error(f"Failed to load YOLOv8 model: {e}")
             finally:
@@ -187,6 +191,7 @@ class HazardDetector:
                 conf=0.35,       # Base confidence threshold
                 verbose=False,
                 stream=False,
+                device=getattr(self, '_device', 'cpu'),
             )
 
             inference_ms = (time.monotonic() - start_time) * 1000

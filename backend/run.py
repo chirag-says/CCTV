@@ -3,6 +3,11 @@ Application entry point.
 Run with: python run.py
 """
 
+import os
+# Force CUDA to use the NVIDIA GPU (not Intel iGPU) on hybrid GPU laptops
+os.environ["CUDA_DEVICE_ORDER"] = "PCI_BUS_ID"
+os.environ["CUDA_VISIBLE_DEVICES"] = "0"
+
 import uvicorn
 from app.config import settings
 
