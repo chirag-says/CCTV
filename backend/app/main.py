@@ -252,7 +252,7 @@ app.mount("/snapshots", StaticFiles(directory=settings.SNAPSHOT_DIR), name="snap
 
 
 # ── Register Routes ───────────────────────────────────────────
-from app.routes import auth, persons, cameras, events, unknown_faces, analytics, movements
+from app.routes import auth, persons, cameras, events, unknown_faces, analytics, movements, video_analysis
 
 app.include_router(auth.router)
 app.include_router(persons.router)
@@ -261,6 +261,7 @@ app.include_router(events.router)
 app.include_router(unknown_faces.router)
 app.include_router(analytics.router)
 app.include_router(movements.router)
+app.include_router(video_analysis.router)
 
 
 # ── Health Check ──────────────────────────────────────────────

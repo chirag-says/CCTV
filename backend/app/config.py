@@ -67,11 +67,11 @@ class Settings(BaseSettings):
     # ── Pipeline Mode ─────────────────────────────────────────
     # "face" = Face Recognition mode (default, existing behaviour)
     # "traffic" = Traffic mode (ANPR + vehicle-person safety)
-    PIPELINE_MODE: str = "face"
+    PIPELINE_MODE: str = "hybrid"
 
     # ── Traffic Mode: ANPR (License Plate Recognition) ────────
     ENABLE_ANPR: bool = True
-    ANPR_MODEL_PATH: str = "yolov8n.pt"
+    ANPR_MODEL_PATH: str = "./models/license_plate_detector.pt"
     ANPR_FRAME_INTERVAL: int = 5         # Process every 5th frame
     ANPR_PLATE_COOLDOWN_SEC: float = 60.0
     ANPR_OCR_LANGUAGES: str = "en"       # Comma-separated EasyOCR languages
@@ -82,6 +82,13 @@ class Settings(BaseSettings):
     TRAFFIC_FRAME_INTERVAL: int = 5      # Process every 5th frame
     TRAFFIC_PROXIMITY_PX: int = 50       # Pixel proximity for danger alert
     TRAFFIC_ALERT_COOLDOWN_SEC: float = 15.0
+
+    # ── Video Analysis ────────────────────────────────────────
+    VIDEO_UPLOAD_DIR: str = "./uploads/videos"
+    MAX_VIDEO_SIZE_MB: int = 500
+    ALLOWED_VIDEO_EXTENSIONS: str = "mp4,avi,mkv,mov,wmv,flv,webm"
+    VIDEO_ANALYSIS_FRAME_SKIP: int = 5   # Process every 5th frame for speed
+    VIDEO_ANALYSIS_MAX_CONCURRENT: int = 2
 
     @property
     def cors_origins_list(self) -> List[str]:
@@ -97,3 +104,5 @@ settings = Settings()
 
 # Ensure snapshot directory exists
 os.makedirs(settings.SNAPSHOT_DIR, exist_ok=True)
+# Ensure video upload directory exists
+os.makedirs(settings.VIDEO_UPLOAD_DIR, exist_ok=True)

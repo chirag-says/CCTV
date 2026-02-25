@@ -365,3 +365,12 @@ export const ProximityIcon = (props) => (
         <circle cx="18" cy="19" r="1.5" />
     </Icon>
 );
+
+export const VideoUploadIcon = (props) => (
+    <Icon {...props}>
+        <polygon points="23 7 16 12 23 17 23 7" />
+        <rect x="1" y="5" width="14" height="14" rx="2" />
+        <polyline points="8 9 8 15" />
+        <polyline points="5 12 8 9 11 12" />
+    </Icon>
+);

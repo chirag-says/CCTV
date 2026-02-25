@@ -17,8 +17,30 @@ venv/
 env/
 ENV/
 
-# Backend snapshots (runtime generated)
+# ===========================
+# ML Models & Weights
+# ===========================
+*.pt
+*.pth
+*.onnx
+*.tflite
+*.h5
+*.pb
+*.savedmodel/
+
+# ===========================
+# Datasets & Training Data
+# ===========================
+backend/datasets/
+datasets/
+
+# ===========================
+# Runtime / Uploads / Snapshots
+# ===========================
 backend/snapshots/
+backend/uploads/
+uploads/
+snapshots/
 
 # ===========================
 # Node.js / Frontend

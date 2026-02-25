@@ -1,9 +1,14 @@
 """
 ANPR — License Plate Recognition Module.
 
-Detects and reads vehicle license plates using:
-  - YOLOv8 for vehicle detection (reuses existing ultralytics dependency)
-  - EasyOCR for plate text extraction
+Two-stage detection pipeline:
+  Stage 1: YOLOv8 COCO model detects vehicles (car, motorcycle, bus, truck)
+  Stage 2: Custom plate detector finds plate regions within vehicle crops
+  Stage 3: EasyOCR reads detected plate text
+
+Falls back to single-stage if only one model is available:
+  - If only plate model: run plate detector on full frame
+  - If only COCO model: use contour-based plate extraction + OCR
 
 Designed for non-blocking operation via ThreadPoolExecutor.
 
@@ -36,25 +41,29 @@ VEHICLE_CLASSES: Dict[int, str] = {
     7: "truck",
 }
 
-# Regex patterns for Indian license plates (can be extended)
+# Regex patterns for license plates — tuned for Indian plates.
+# We keep these strict to avoid accepting random text.
 PLATE_PATTERNS = [
-    # Standard Indian: KA01AB1234 / KA 01 AB 1234
+    # Standard Indian: KA01AB1234 / KA-01-AB-1234 / KA 01 AB 1234
     re.compile(r'[A-Z]{2}\s*\d{1,2}\s*[A-Z]{1,3}\s*\d{1,4}'),
-    # Older format: MH 12 1234
+    # Condensed Indian (OCR output, no spaces): KA02HM1826
+    re.compile(r'[A-Z]{1,3}\d{1,2}[A-Z]{1,3}\d{1,5}'),
+    # Older Indian format (no series letters): MH 12 1234
     re.compile(r'[A-Z]{2}\s*\d{2}\s*\d{4}'),
-    # Generic: at least 2 letters + digits
-    re.compile(r'[A-Z0-9]{4,12}'),
 ]
 
 
 class PlateRecognizer:
     """
-    License Plate Recognition (ANPR) using YOLOv8 + EasyOCR.
+    License Plate Recognition (ANPR) using two-stage YOLO + EasyOCR.
+
+    Pipeline:
+    1. YOLOv8 COCO model detects vehicles in full frame
+    2. Custom plate model detects plate regions within each vehicle crop
+    3. EasyOCR reads text from detected plate regions
 
     Features:
-    - YOLOv8 detects vehicles in frame
-    - Plate region extraction via edge detection + contour analysis
-    - EasyOCR reads detected plate text
+    - Two-stage detection for high accuracy
     - Frame skipping for performance
     - Deduplication cooldown (same plate won't re-trigger within cooldown)
     - Runs inference in ThreadPoolExecutor (non-blocking)
@@ -75,27 +84,37 @@ class PlateRecognizer:
     ):
         """
         Args:
-            yolo_model_path: Path to YOLO model weights
+            yolo_model_path: Path to custom plate YOLO model weights
             frame_interval: Only process every Nth frame
             plate_cooldown_sec: Don't re-alert for same plate within this window
             on_plate: Callback(plate_dict) when a plate is recognized
             languages: EasyOCR language list (default: ['en'])
             max_workers: Thread pool size
         """
-        self.yolo_model_path = yolo_model_path
+        self.plate_model_path = yolo_model_path
         self.frame_interval = frame_interval
         self.plate_cooldown_sec = plate_cooldown_sec
         self.on_plate = on_plate
         self.languages = languages or ['en']
 
-        self._yolo = None
+        # Models
+        self._vehicle_model = None    # COCO model for vehicle detection
+        self._plate_model = None      # Custom model for plate detection
         self._ocr = None
-        self._model_loaded = False
+
+        # Loading flags
+        self._vehicle_model_loaded = False
+        self._vehicle_model_available = False
+        self._plate_model_loaded = False
+        self._plate_model_available = False
         self._ocr_loaded = False
-        self._model_available = False
         self._ocr_available = False
-        self._model_lock = threading.Lock()
+
+        # Thread safety
+        self._vehicle_model_lock = threading.Lock()
+        self._plate_model_lock = threading.Lock()
         self._ocr_lock = threading.Lock()
+        self._device = 'cpu'
 
         self._frame_counter = 0
         self._executor = ThreadPoolExecutor(
@@ -113,37 +132,60 @@ class PlateRecognizer:
         self._last_inference_ms = 0.0
 
         logger.info(
-            f"PlateRecognizer initialized: model={yolo_model_path}, "
+            f"PlateRecognizer initialized: plate_model={yolo_model_path}, "
             f"interval={frame_interval}, cooldown={plate_cooldown_sec}s"
         )
 
-    def _load_yolo(self) -> bool:
-        """Lazy-load YOLOv8 model. Thread-safe."""
-        with self._model_lock:
-            if self._model_loaded:
-                return self._model_available
+    # ── Model Loading ─────────────────────────────────────────────────────
+
+    def _load_vehicle_model(self) -> bool:
+        """Lazy-load YOLOv8 COCO model for vehicle detection. Thread-safe."""
+        with self._vehicle_model_lock:
+            if self._vehicle_model_loaded:
+                return self._vehicle_model_available
             try:
                 import torch
                 from ultralytics import YOLO
                 self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                logger.info(f"Loading YOLOv8 for ANPR: {self.yolo_model_path} on {self._device}")
-                self._yolo = YOLO(self.yolo_model_path)
-                self._model_available = True
-                logger.info(f"YOLOv8 model loaded for ANPR on {self._device}")
-            except ImportError:
-                self._device = 'cpu'
-                self._model_available = False
-                logger.warning(
-                    "ultralytics not installed — ANPR vehicle detection disabled. "
-                    "Install with: pip install ultralytics"
+                logger.info(f"Loading YOLOv8 COCO model for vehicle detection on {self._device}")
+                self._vehicle_model = YOLO("yolov8n.pt")
+                self._vehicle_model_available = True
+                logger.info(f"Vehicle detection model loaded (COCO yolov8n) on {self._device}")
+            except Exception as e:
+                self._vehicle_model_available = False
+                logger.error(f"Failed to load vehicle detection model: {e}")
+            finally:
+                self._vehicle_model_loaded = True
+            return self._vehicle_model_available
+
+    def _load_plate_model(self) -> bool:
+        """Lazy-load custom plate detection model. Thread-safe."""
+        with self._plate_model_lock:
+            if self._plate_model_loaded:
+                return self._plate_model_available
+            try:
+                from ultralytics import YOLO
+                import os
+                if not os.path.exists(self.plate_model_path):
+                    logger.warning(f"Plate model not found: {self.plate_model_path}")
+                    self._plate_model_available = False
+                    return False
+
+                logger.info(f"Loading custom plate detection model: {self.plate_model_path}")
+                self._plate_model = YOLO(self.plate_model_path)
+                model_names = getattr(self._plate_model, 'names', {})
+                num_classes = len(model_names) if model_names else 0
+                self._plate_model_available = True
+                logger.info(
+                    f"Custom plate model loaded: {num_classes} classes = "
+                    f"{list(model_names.values())}"
                 )
             except Exception as e:
-                self._device = 'cpu'
-                self._model_available = False
-                logger.error(f"Failed to load YOLOv8 for ANPR: {e}")
+                self._plate_model_available = False
+                logger.error(f"Failed to load plate detection model: {e}")
             finally:
-                self._model_loaded = True
-            return self._model_available
+                self._plate_model_loaded = True
+            return self._plate_model_available
 
     def _load_ocr(self) -> bool:
         """Lazy-load EasyOCR reader. Thread-safe."""
@@ -171,6 +213,8 @@ class PlateRecognizer:
                 self._ocr_loaded = True
             return self._ocr_available
 
+    # ── Frame Submission ──────────────────────────────────────────────────
+
     def submit_frame(
         self,
         frame: np.ndarray,
@@ -191,62 +235,70 @@ class PlateRecognizer:
         self._executor.submit(self._process, frame_copy, camera_id)
         return True
 
-    def _process(self, frame: np.ndarray, camera_id: str):
-        """Detect vehicles → extract plate regions → OCR → emit events."""
-        if not self._load_yolo():
-            return
+    # ── Main Processing ───────────────────────────────────────────────────
 
+    def _process(self, frame: np.ndarray, camera_id: str):
+        """
+        Two-stage ANPR pipeline:
+        1. Detect vehicles using COCO model
+        2. Find plates within each vehicle using plate model
+        3. OCR the plate regions
+        """
         try:
             start_time = time.monotonic()
 
-            # Step 1: Detect vehicles
-            results = self._yolo(
-                frame,
-                conf=0.40,
-                classes=list(VEHICLE_CLASSES.keys()),
-                verbose=False,
-                device=getattr(self, '_device', 'cpu'),
-            )
+            # Stage 1: Detect vehicles
+            vehicles = self._detect_vehicles(frame)
 
-            inference_ms = (time.monotonic() - start_time) * 1000
-            self._last_inference_ms = inference_ms
-            self._total_inferences += 1
-
-            if not results:
+            if not vehicles:
                 return
+
+            logger.debug(f"ANPR: Found {len(vehicles)} vehicles in frame")
 
             now = time.time()
 
-            for result in results:
-                if result.boxes is None:
+            for vehicle in vehicles:
+                vx1, vy1, vx2, vy2 = vehicle['box']
+                vehicle_type = vehicle['type']
+                vehicle_conf = vehicle['confidence']
+
+                # Crop vehicle region
+                vehicle_crop = frame[vy1:vy2, vx1:vx2]
+                if vehicle_crop.size == 0 or vehicle_crop.shape[0] < 30 or vehicle_crop.shape[1] < 30:
                     continue
 
-                for box in result.boxes:
-                    cls_id = int(box.cls[0])
-                    confidence = float(box.conf[0])
+                # Stage 2: Find plate within vehicle crop
+                plate_regions = self._detect_plates_in_crop(vehicle_crop)
 
-                    if cls_id not in VEHICLE_CLASSES:
+                if not plate_regions:
+                    # Fallback: try contour-based plate extraction
+                    plate_text, plate_confidence = self._extract_plate_contours(vehicle_crop)
+                    if plate_text:
+                        plate_regions = [{'text': plate_text, 'confidence': plate_confidence}]
+                    else:
                         continue
 
-                    vehicle_type = VEHICLE_CLASSES[cls_id]
-                    x1, y1, x2, y2 = [int(c) for c in box.xyxy[0].tolist()]
-
-                    # Step 2: Extract plate region from vehicle bounding box
-                    vehicle_crop = frame[y1:y2, x1:x2]
-                    if vehicle_crop.size == 0:
+                # Stage 3: OCR each plate region
+                for plate_info in plate_regions:
+                    if 'crop' in plate_info:
+                        # We have a crop from the plate detector
+                        plate_text, ocr_confidence = self._ocr_region(plate_info['crop'])
+                    elif 'text' in plate_info:
+                        # Already got text from contour method
+                        plate_text = plate_info['text']
+                        ocr_confidence = plate_info['confidence']
+                    else:
                         continue
-
-                    plate_text, plate_confidence = self._extract_plate(vehicle_crop)
 
                     if plate_text is None:
                         continue
 
-                    # Step 3: Normalize plate text
+                    # Normalize
                     normalized = self._normalize_plate(plate_text)
                     if not normalized or len(normalized) < 4:
                         continue
 
-                    # Step 4: Cooldown check
+                    # Cooldown check
                     with self._cooldown_lock:
                         last_seen = self._plate_cooldowns.get(normalized, 0)
                         if now - last_seen < self.plate_cooldown_sec:
@@ -255,46 +307,130 @@ class PlateRecognizer:
 
                     self._total_plates += 1
 
-                    # Step 5: Emit event
+                    # Emit event
                     event = {
                         "event_type": "vehicle_entry",
                         "camera_id": camera_id,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                         "metadata": {
                             "plate": normalized,
-                            "confidence": round(plate_confidence, 3),
+                            "confidence": round(ocr_confidence, 3),
                             "vehicle_type": vehicle_type,
-                            "vehicle_confidence": round(confidence, 3),
+                            "vehicle_confidence": round(vehicle_conf, 3),
                             "bounding_box": {
-                                "x1": x1, "y1": y1,
-                                "x2": x2, "y2": y2,
+                                "x1": vx1, "y1": vy1,
+                                "x2": vx2, "y2": vy2,
                             },
                         },
                     }
 
                     logger.info(
                         f"🚗 PLATE DETECTED: {normalized} "
-                        f"({vehicle_type}, conf={plate_confidence:.2f}) "
+                        f"({vehicle_type}, conf={ocr_confidence:.2f}) "
                         f"on camera {camera_id}"
                     )
 
                     if self.on_plate:
                         self.on_plate(event)
 
+            inference_ms = (time.monotonic() - start_time) * 1000
+            self._last_inference_ms = inference_ms
+            self._total_inferences += 1
+
         except Exception as e:
             logger.error(f"ANPR processing failed: {e}", exc_info=True)
 
-    def _extract_plate(
+    # ── Stage 1: Vehicle Detection ────────────────────────────────────────
+
+    def _detect_vehicles(self, frame: np.ndarray) -> List[dict]:
+        """Detect vehicles in the frame using COCO YOLOv8."""
+        if not self._load_vehicle_model():
+            return []
+
+        results = self._vehicle_model(
+            frame,
+            conf=0.35,
+            classes=list(VEHICLE_CLASSES.keys()),
+            verbose=False,
+            device=self._device,
+        )
+
+        vehicles = []
+        for result in results:
+            if result.boxes is None:
+                continue
+            for box in result.boxes:
+                cls_id = int(box.cls[0])
+                if cls_id not in VEHICLE_CLASSES:
+                    continue
+                confidence = float(box.conf[0])
+                x1, y1, x2, y2 = [int(c) for c in box.xyxy[0].tolist()]
+                vehicles.append({
+                    'box': (x1, y1, x2, y2),
+                    'type': VEHICLE_CLASSES[cls_id],
+                    'confidence': confidence,
+                })
+
+        return vehicles
+
+    # ── Stage 2: Plate Detection within Vehicle ──────────────────────────
+
+    def _detect_plates_in_crop(self, vehicle_crop: np.ndarray) -> List[dict]:
+        """
+        Detect plate regions within a vehicle crop.
+        
+        Uses the custom plate detection model if available.
+        Returns list of plate regions with their crops.
+        """
+        if not self._load_plate_model():
+            return []
+
+        h, w = vehicle_crop.shape[:2]
+
+        results = self._plate_model(
+            vehicle_crop,
+            conf=0.25,
+            verbose=False,
+            device=self._device,
+        )
+
+        plates = []
+        for result in results:
+            if result.boxes is None:
+                continue
+            for box in result.boxes:
+                confidence = float(box.conf[0])
+                x1, y1, x2, y2 = [int(c) for c in box.xyxy[0].tolist()]
+
+                # Clamp to vehicle crop bounds
+                x1, y1 = max(0, x1), max(0, y1)
+                x2, y2 = min(w, x2), min(h, y2)
+
+                plate_crop = vehicle_crop[y1:y2, x1:x2]
+                if plate_crop.size == 0 or plate_crop.shape[0] < 8 or plate_crop.shape[1] < 15:
+                    continue
+
+                plates.append({
+                    'crop': plate_crop,
+                    'box': (x1, y1, x2, y2),
+                    'confidence': confidence,
+                })
+
+        return plates
+
+    # ── Stage 3: Plate Text Extraction ────────────────────────────────────
+
+    def _extract_plate_contours(
         self,
         vehicle_crop: np.ndarray,
     ) -> Tuple[Optional[str], float]:
         """
-        Extract license plate text from a vehicle crop image.
+        Fallback plate extraction using image processing.
 
         Strategy:
         1. Focus on the lower half of the vehicle (where plates usually are)
         2. Preprocess: grayscale → bilateral filter → edge detection
-        3. Find contours that look like plate regions (rectangular, right aspect ratio)
+        3. Find contours that look like plate regions
         4. Run EasyOCR on the best candidate region
 
         Returns:
@@ -322,20 +458,15 @@ class PlateRecognizer:
 
         plate_candidates = []
         for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:15]:
-            # Approximate contour
             peri = cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
 
-            # License plates are roughly rectangular (4 corners)
             if len(approx) >= 4:
                 x, y, cw, ch = cv2.boundingRect(approx)
                 aspect_ratio = cw / ch if ch > 0 else 0
-
-                # Plates typically have aspect ratio between 2:1 and 6:1
                 if 1.5 < aspect_ratio < 7.0 and cw > 40 and ch > 10:
                     plate_candidates.append((x, y, cw, ch))
 
-        # OCR on the best candidate(s) or fall back to full region
         best_text = None
         best_confidence = 0.0
 
@@ -347,7 +478,6 @@ class PlateRecognizer:
                     best_text = text
                     best_confidence = conf
         else:
-            # No good contours — try OCR on the whole plate region
             best_text, best_confidence = self._ocr_region(plate_region)
 
         return best_text, best_confidence
@@ -357,31 +487,44 @@ class PlateRecognizer:
         image: np.ndarray,
     ) -> Tuple[Optional[str], float]:
         """Run EasyOCR on a region and return the best plate-like match."""
+        if not self._load_ocr():
+            return None, 0.0
+
         try:
-            if image.size == 0 or image.shape[0] < 10 or image.shape[1] < 10:
+            if image.size == 0 or image.shape[0] < 8 or image.shape[1] < 15:
                 return None, 0.0
 
-            results = self._ocr.readtext(image, detail=1)
+            # Preprocess: enhance contrast for better OCR
+            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+
+            # Resize small crops for better OCR
+            h, w = enhanced.shape[:2]
+            if w < 100:
+                scale = 100 / w
+                enhanced = cv2.resize(enhanced, None, fx=scale, fy=scale,
+                                      interpolation=cv2.INTER_CUBIC)
+
+            results = self._ocr.readtext(enhanced, detail=1)
+
+            if not results:
+                # Try on original color image too
+                results = self._ocr.readtext(image, detail=1)
 
             if not results:
                 return None, 0.0
 
             # Find the best match that looks like a plate
             for (bbox, text, confidence) in sorted(results, key=lambda r: r[2], reverse=True):
-                cleaned = text.strip().upper().replace(' ', '')
+                cleaned = re.sub(r'[^A-Z0-9]', '', text.strip().upper())
 
-                # Check if it matches known plate patterns
                 for pattern in PLATE_PATTERNS:
                     if pattern.match(cleaned):
                         return cleaned, confidence
 
-            # If no pattern match, return the highest-confidence text
-            # (if it looks roughly alphanumeric)
-            if results:
-                best = max(results, key=lambda r: r[2])
-                text = best[1].strip().upper().replace(' ', '')
-                if len(text) >= 4 and any(c.isdigit() for c in text):
-                    return text, best[2]
+            # No pattern matched — reject this reading entirely
+            # (don't return random text as a "plate")
 
         except Exception as e:
             logger.debug(f"OCR failed on region: {e}")
@@ -393,17 +536,26 @@ class PlateRecognizer:
         if not text:
             return None
 
-        # Remove non-alphanumeric characters
         cleaned = re.sub(r'[^A-Z0-9]', '', text.strip().upper())
 
-        # Must have both letters and digits
+        # Minimum 6 characters (e.g. KA02H1) and must have both letters and digits
+        if len(cleaned) < 6:
+            return None
+
         has_letters = any(c.isalpha() for c in cleaned)
         has_digits = any(c.isdigit() for c in cleaned)
 
-        if has_letters and has_digits and len(cleaned) >= 4:
-            return cleaned
+        if not (has_letters and has_digits):
+            return None
+
+        # Must match an Indian plate format pattern
+        for pattern in PLATE_PATTERNS:
+            if pattern.match(cleaned):
+                return cleaned
 
         return None
+
+    # ── Visualization ─────────────────────────────────────────────────────
 
     def draw_detections(
         self,
@@ -419,7 +571,6 @@ class PlateRecognizer:
             x1, y1 = bbox.get("x1", 0), bbox.get("y1", 0)
             x2, y2 = bbox.get("x2", 0), bbox.get("y2", 0)
 
-            # Green box for vehicles with plates
             cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
 
             label = f"PLATE: {plate}"
@@ -439,10 +590,13 @@ class PlateRecognizer:
 
         return frame
 
+    # ── Properties ────────────────────────────────────────────────────────
+
     @property
     def stats(self) -> dict:
         return {
-            "model_loaded": self._model_available,
+            "vehicle_model_loaded": self._vehicle_model_available,
+            "plate_model_loaded": self._plate_model_available,
             "ocr_loaded": self._ocr_available,
             "total_inferences": self._total_inferences,
             "total_plates_detected": self._total_plates,
@@ -451,5 +605,9 @@ class PlateRecognizer:
 
     def shutdown(self):
         """Shutdown the thread pool."""
-        self._executor.shutdown(wait=False)
-        logger.info("PlateRecognizer shut down")
+        self._executor.shutdown(wait=True)
+        logger.info(
+            f"PlateRecognizer shut down "
+            f"(total inferences: {self._total_inferences}, "
+            f"plates detected: {self._total_plates})"
+        )

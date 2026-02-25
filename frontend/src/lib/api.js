@@ -298,6 +298,83 @@ class ApiClient {
     };
     return ws;
   }
+
+  // ── Video Analysis ─────────────────────────────────────────
+  async uploadVideo(file, onProgress) {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const url = `${this.baseUrl}/api/video-analysis/upload`;
+    const token = this.getToken();
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', url, true);
+
+      if (token) {
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      }
+
+      xhr.upload.onprogress = (e) => {
+        if (e.lengthComputable && onProgress) {
+          onProgress(Math.round((e.loaded / e.total) * 100));
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          resolve(JSON.parse(xhr.responseText));
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(new Error(err.detail || 'Upload failed'));
+          } catch {
+            reject(new Error('Upload failed'));
+          }
+        }
+      };
+
+      xhr.onerror = () => reject(new Error('Network error'));
+      xhr.send(formData);
+    });
+  }
+
+  async getAnalysisStatus(jobId) {
+    return this.request(`/api/video-analysis/${jobId}/status`);
+  }
+
+  async getAnalysisResults(jobId) {
+    return this.request(`/api/video-analysis/${jobId}/results`);
+  }
+
+  async getAnalysisHistory() {
+    return this.request('/api/video-analysis/history');
+  }
+
+  async deleteAnalysis(jobId) {
+    return this.request(`/api/video-analysis/${jobId}`, { method: 'DELETE' });
+  }
+
+  connectAnalysisStream(jobId, onMessage, onError) {
+    const wsUrl = this.baseUrl.replace(/^http/, 'ws');
+    const ws = new WebSocket(`${wsUrl}/api/video-analysis/${jobId}/stream`);
+    ws.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (onMessage) onMessage(data);
+      } catch (e) {
+        console.warn('Failed to parse analysis WS message:', e);
+      }
+    };
+    ws.onerror = onError || console.error;
+    ws.onopen = () => {
+      console.log('Analysis progress WebSocket connected');
+    };
+    ws.onclose = () => {
+      console.log('Analysis progress WebSocket disconnected');
+    };
+    return ws;
+  }
 }
 
 const api = new ApiClient();

@@ -18,6 +18,7 @@ import {
     ShieldIcon,
     SecurityIcon,
     TrafficIcon,
+    VideoUploadIcon,
 } from './Icons';
 
 const navItems = [
@@ -41,6 +42,12 @@ const navItems = [
         items: [
             { href: '/security-alerts', icon: SecurityIcon, label: 'Security Alerts', id: 'nav-security', alertBadge: true },
             { href: '/traffic', icon: TrafficIcon, label: 'Traffic Monitor', id: 'nav-traffic' },
+        ],
+    },
+    {
+        section: 'Tools',
+        items: [
+            { href: '/video-analysis', icon: VideoUploadIcon, label: 'Video Analysis', id: 'nav-video-analysis' },
         ],
     },
     {
