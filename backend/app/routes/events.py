@@ -1,5 +1,6 @@
 """
 Events & Tracking API Routes.
+Now uses SQLAlchemy + PostgreSQL.
 """
 
 from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect, Query
@@ -8,12 +9,38 @@ from typing import Optional
 from app.models.event import DetectionEventResponse, TrackingSessionResponse
 from app.core.security import get_current_user
 from app.core.websocket import ws_manager
-from app.database import get_admin_db
+from app.db.session import SessionLocal
+from app.db.models import DetectionEvent, TrackingSession
 from app.vision.camera_worker import camera_manager
 
-from app.core.mock_store import mock_store
-
 router = APIRouter(prefix="/api", tags=["Events & Tracking"])
+
+
+def _event_to_dict(event: DetectionEvent) -> dict:
+    return {
+        "id": event.id,
+        "person_id": event.person_id,
+        "camera_id": event.camera_id,
+        "event_type": event.event_type,
+        "subtype": event.subtype,
+        "confidence": event.confidence,
+        "snapshot_url": event.snapshot_url,
+        "metadata": event.metadata_json or {},
+        "created_at": event.created_at.isoformat() if event.created_at else None,
+    }
+
+
+def _session_to_dict(s: TrackingSession) -> dict:
+    return {
+        "id": s.id,
+        "person_id": s.person_id,
+        "camera_id": s.camera_id,
+        "entry_time": s.entry_time.isoformat() if s.entry_time else None,
+        "exit_time": s.exit_time.isoformat() if s.exit_time else None,
+        "duration_sec": s.duration_sec,
+        "status": s.status,
+        "created_at": s.created_at.isoformat() if s.created_at else None,
+    }
 
 
 @router.get("/events")
@@ -29,42 +56,37 @@ async def list_events(
     current_user: dict = Depends(get_current_user),
 ):
     """List detection events with filtering."""
-    db = get_admin_db()
+    db = SessionLocal()
+    try:
+        query = db.query(DetectionEvent)
 
-    if db is None:
-        # Mock mode — use in-memory store
-        return mock_store.list_events(
-            event_type=event_type,
-            subtype=subtype,
-            camera_id=camera_id,
-            limit=limit,
-            offset=offset,
+        if event_type:
+            query = query.filter(DetectionEvent.event_type == event_type)
+        if subtype:
+            query = query.filter(DetectionEvent.subtype == subtype)
+        if person_id:
+            query = query.filter(DetectionEvent.person_id == person_id)
+        if camera_id:
+            query = query.filter(DetectionEvent.camera_id == camera_id)
+        if start_date:
+            query = query.filter(DetectionEvent.created_at >= start_date)
+        if end_date:
+            query = query.filter(DetectionEvent.created_at <= end_date)
+
+        total = query.count()
+        events = (
+            query.order_by(DetectionEvent.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
         )
 
-    query = db.table("detection_events").select("*", count="exact")
-
-    if event_type:
-        query = query.eq("event_type", event_type)
-    if subtype:
-        query = query.eq("subtype", subtype)
-    if person_id:
-        query = query.eq("person_id", person_id)
-    if camera_id:
-        query = query.eq("camera_id", camera_id)
-    if start_date:
-        query = query.gte("created_at", start_date)
-    if end_date:
-        query = query.lte("created_at", end_date)
-
-    query = query.order("created_at", desc=True)
-    query = query.range(offset, offset + limit - 1)
-
-    result = query.execute()
-
-    return {
-        "data": result.data or [],
-        "total": result.count or 0,
-    }
+        return {
+            "data": [_event_to_dict(e) for e in events],
+            "total": total,
+        }
+    finally:
+        db.close()
 
 
 @router.websocket("/events/live")
@@ -94,33 +116,35 @@ async def list_sessions(
     current_user: dict = Depends(get_current_user),
 ):
     """List tracking sessions with filtering."""
-    db = get_admin_db()
+    db = SessionLocal()
+    try:
+        query = db.query(TrackingSession)
 
-    if db is None:
-        return {"data": [], "total": 0}
+        if person_id:
+            query = query.filter(TrackingSession.person_id == person_id)
+        if camera_id:
+            query = query.filter(TrackingSession.camera_id == camera_id)
+        if status:
+            query = query.filter(TrackingSession.status == status)
+        if start_date:
+            query = query.filter(TrackingSession.entry_time >= start_date)
+        if end_date:
+            query = query.filter(TrackingSession.entry_time <= end_date)
 
-    query = db.table("tracking_sessions").select("*", count="exact")
+        total = query.count()
+        sessions = (
+            query.order_by(TrackingSession.entry_time.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
 
-    if person_id:
-        query = query.eq("person_id", person_id)
-    if camera_id:
-        query = query.eq("camera_id", camera_id)
-    if status:
-        query = query.eq("status", status)
-    if start_date:
-        query = query.gte("entry_time", start_date)
-    if end_date:
-        query = query.lte("entry_time", end_date)
-
-    query = query.order("entry_time", desc=True)
-    query = query.range(offset, offset + limit - 1)
-
-    result = query.execute()
-
-    return {
-        "data": result.data or [],
-        "total": result.count or 0,
-    }
+        return {
+            "data": [_session_to_dict(s) for s in sessions],
+            "total": total,
+        }
+    finally:
+        db.close()
 
 
 @router.get("/sessions/active")

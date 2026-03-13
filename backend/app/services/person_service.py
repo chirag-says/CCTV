@@ -1,21 +1,40 @@
 """
 Person Service — CRUD operations for persons and face encodings.
+Now uses SQLAlchemy + PostgreSQL instead of Supabase / MockStore.
 """
 
 import pickle
 import logging
-from typing import Optional, List, Dict, Any
+from typing import Optional, Dict, Any
 from uuid import uuid4
 from datetime import datetime, timezone
 
 import numpy as np
+from sqlalchemy.orm import Session
+from sqlalchemy import func
 
-from app.database import get_admin_db
+from app.db.session import SessionLocal
+from app.db.models import Person, FaceEncoding, TrackingSession
 from app.core.exceptions import NotFoundException
-from app.core.mock_store import mock_store
-from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+def _person_to_dict(person: Person, encoding_count: int = 0) -> dict:
+    """Convert a Person ORM object to a dict matching the API response format."""
+    return {
+        "id": person.id,
+        "name": person.name,
+        "role": person.role,
+        "department": person.department,
+        "phone": person.phone,
+        "email": person.email,
+        "avatar_url": person.avatar_url,
+        "is_active": person.is_active,
+        "created_at": person.created_at.isoformat() if person.created_at else None,
+        "updated_at": person.updated_at.isoformat() if person.updated_at else None,
+        "encoding_count": encoding_count,
+    }
 
 
 class PersonService:
@@ -30,150 +49,142 @@ class PersonService:
         offset: int = 0,
     ) -> Dict[str, Any]:
         """List persons with optional filtering."""
-        db = get_admin_db()
+        db: Session = SessionLocal()
+        try:
+            query = db.query(Person)
 
-        if db is None:
-            return mock_store.list_persons(
-                role=role,
-                is_active=is_active,
-                search=search,
-                limit=limit,
-                offset=offset,
+            if role:
+                query = query.filter(Person.role == role)
+            if is_active is not None:
+                query = query.filter(Person.is_active == is_active)
+            if search:
+                query = query.filter(Person.name.ilike(f"%{search}%"))
+
+            total = query.count()
+            persons_orm = (
+                query.order_by(Person.created_at.desc())
+                .offset(offset)
+                .limit(limit)
+                .all()
             )
 
-        query = db.table("persons").select("*", count="exact")
+            # Get encoding counts for each person
+            persons = []
+            for p in persons_orm:
+                enc_count = (
+                    db.query(func.count(FaceEncoding.id))
+                    .filter(FaceEncoding.person_id == p.id)
+                    .scalar()
+                )
+                persons.append(_person_to_dict(p, enc_count or 0))
 
-        if role:
-            query = query.eq("role", role)
-        if is_active is not None:
-            query = query.eq("is_active", is_active)
-        if search:
-            query = query.ilike("name", f"%{search}%")
-
-        query = query.order("created_at", desc=True)
-        query = query.range(offset, offset + limit - 1)
-
-        result = query.execute()
-
-        # Get encoding counts for each person
-        persons = result.data or []
-        for person in persons:
-            enc_result = (
-                db.table("face_encodings")
-                .select("id", count="exact")
-                .eq("person_id", person["id"])
-                .execute()
-            )
-            person["encoding_count"] = enc_result.count or 0
-
-        return {
-            "data": persons,
-            "total": result.count or 0,
-        }
+            return {
+                "data": persons,
+                "total": total,
+            }
+        finally:
+            db.close()
 
     @staticmethod
     def get_person(person_id: str) -> dict:
         """Get a specific person by ID."""
-        db = get_admin_db()
-
-        if db is None:
-            p = mock_store.get_person(person_id)
-            if not p:
+        db: Session = SessionLocal()
+        try:
+            person = db.query(Person).filter(Person.id == person_id).first()
+            if not person:
                 raise NotFoundException("Person", person_id)
-            return p
 
-        result = db.table("persons").select("*").eq("id", person_id).execute()
+            enc_count = (
+                db.query(func.count(FaceEncoding.id))
+                .filter(FaceEncoding.person_id == person_id)
+                .scalar()
+            )
 
-        if not result.data:
-            raise NotFoundException("Person", person_id)
-
-        person = result.data[0]
-
-        # Get encoding count
-        enc_result = (
-            db.table("face_encodings")
-            .select("id", count="exact")
-            .eq("person_id", person_id)
-            .execute()
-        )
-        person["encoding_count"] = enc_result.count or 0
-
-        return person
+            return _person_to_dict(person, enc_count or 0)
+        finally:
+            db.close()
 
     @staticmethod
     def create_person(data: dict) -> dict:
         """Create a new person."""
-        db = get_admin_db()
-
-        person_data = {
-            "id": str(uuid4()),
-            "name": data["name"],
-            "role": data.get("role", "visitor"),
-            "department": data.get("department"),
-            "phone": data.get("phone"),
-            "email": data.get("email"),
-            "is_active": True,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        if db is None:
-            return mock_store.add_person(person_data)
-
-        result = db.table("persons").insert(person_data).execute()
-        if result.data:
-            return result.data[0]
-
-        raise Exception("Failed to create person")
+        db: Session = SessionLocal()
+        try:
+            person = Person(
+                id=str(uuid4()),
+                name=data["name"],
+                role=data.get("role", "visitor"),
+                department=data.get("department"),
+                phone=data.get("phone"),
+                email=data.get("email"),
+                is_active=True,
+                created_at=datetime.now(timezone.utc),
+                updated_at=datetime.now(timezone.utc),
+            )
+            db.add(person)
+            db.commit()
+            db.refresh(person)
+            return _person_to_dict(person, 0)
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to create person: {e}")
+            raise Exception("Failed to create person")
+        finally:
+            db.close()
 
     @staticmethod
     def update_person(person_id: str, data: dict) -> dict:
         """Update a person's information."""
-        db = get_admin_db()
-
-        if db is None:
-            p = mock_store.update_person(person_id, data)
-            if not p:
+        db: Session = SessionLocal()
+        try:
+            person = db.query(Person).filter(Person.id == person_id).first()
+            if not person:
                 raise NotFoundException("Person", person_id)
-            return p
 
-        # Filter out None values
-        update_data = {k: v for k, v in data.items() if v is not None}
-        update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+            update_data = {k: v for k, v in data.items() if v is not None}
+            for key, value in update_data.items():
+                if hasattr(person, key):
+                    setattr(person, key, value)
 
-        result = (
-            db.table("persons")
-            .update(update_data)
-            .eq("id", person_id)
-            .execute()
-        )
+            person.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(person)
 
-        if not result.data:
-            raise NotFoundException("Person", person_id)
-
-        return result.data[0]
+            enc_count = (
+                db.query(func.count(FaceEncoding.id))
+                .filter(FaceEncoding.person_id == person_id)
+                .scalar()
+            )
+            return _person_to_dict(person, enc_count or 0)
+        except NotFoundException:
+            raise
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to update person: {e}")
+            raise
+        finally:
+            db.close()
 
     @staticmethod
     def delete_person(person_id: str) -> bool:
         """Soft-delete a person."""
-        db = get_admin_db()
+        db: Session = SessionLocal()
+        try:
+            person = db.query(Person).filter(Person.id == person_id).first()
+            if not person:
+                raise NotFoundException("Person", person_id)
 
-        if db is None:
-            if not mock_store.delete_person(person_id):
-                 raise NotFoundException("Person", person_id)
+            person.is_active = False
+            person.updated_at = datetime.now(timezone.utc)
+            db.commit()
             return True
-
-        result = (
-            db.table("persons")
-            .update({"is_active": False, "updated_at": datetime.now(timezone.utc).isoformat()})
-            .eq("id", person_id)
-            .execute()
-        )
-
-        if not result.data:
-            raise NotFoundException("Person", person_id)
-
-        return True
+        except NotFoundException:
+            raise
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to delete person: {e}")
+            raise
+        finally:
+            db.close()
 
     @staticmethod
     def add_face_encoding(
@@ -183,44 +194,39 @@ class PersonService:
         quality: float = 1.0,
     ) -> dict:
         """Store a face encoding for a person."""
-        db = get_admin_db()
+        db: Session = SessionLocal()
+        try:
+            # Verify person exists
+            person = db.query(Person).filter(Person.id == person_id).first()
+            if not person:
+                raise NotFoundException("Person", person_id)
 
-        encoding_data = {
-            "id": str(uuid4()),
-            "person_id": person_id,
-            "encoding": pickle.dumps(encoding),
-            "source_image": source_image,
-            "quality": quality,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
+            enc = FaceEncoding(
+                id=str(uuid4()),
+                person_id=person_id,
+                encoding_data=pickle.dumps(encoding),  # store as binary
+                source_image=source_image,
+                quality=quality,
+                created_at=datetime.now(timezone.utc),
+            )
+            db.add(enc)
+            db.commit()
 
-        if db is None:
-            mock_store.add_encoding(encoding_data)
             return {
-                "id": encoding_data["id"],
+                "id": enc.id,
                 "person_id": person_id,
                 "source_image": source_image,
                 "quality": quality,
-                "created_at": encoding_data["created_at"],
+                "created_at": enc.created_at.isoformat() if enc.created_at else None,
             }
-
-        # Need to handle bytes for Supabase — store as base64 or use storage
-        import base64
-        db_data = encoding_data.copy()
-        db_data["encoding"] = base64.b64encode(encoding_data["encoding"]).decode()
-
-        result = db.table("face_encodings").insert(db_data).execute()
-
-        if result.data:
-            return {
-                "id": result.data[0]["id"],
-                "person_id": person_id,
-                "source_image": source_image,
-                "quality": quality,
-                "created_at": result.data[0]["created_at"],
-            }
-
-        raise Exception("Failed to store face encoding")
+        except NotFoundException:
+            raise
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to store face encoding: {e}")
+            raise Exception("Failed to store face encoding")
+        finally:
+            db.close()
 
     @staticmethod
     def get_all_encodings() -> list:
@@ -228,52 +234,33 @@ class PersonService:
         Load all face encodings from database.
         Returns list of dicts ready for FaceRecognizer.load_encodings().
         """
-        db = get_admin_db()
+        db: Session = SessionLocal()
+        try:
+            results = (
+                db.query(FaceEncoding, Person.name)
+                .join(Person, Person.id == FaceEncoding.person_id)
+                .filter(Person.is_active == True)
+                .all()
+            )
 
-        if db is None:
-            raw_encs = mock_store.get_encodings()
-            processed = []
-            for item in raw_encs:
+            encodings = []
+            for enc, person_name in results:
                 try:
-                    # item['encoding'] is pickled bytes
-                    arr = pickle.loads(item['encoding'])
-                    processed.append({
-                        "encoding_id": item["id"],
-                        "person_id": item["person_id"],
-                        "person_name": item.get("person_name", "Unknown"),
+                    arr = pickle.loads(enc.encoding_data)
+                    encodings.append({
+                        "encoding_id": enc.id,
+                        "person_id": enc.person_id,
+                        "person_name": person_name or "Unknown",
                         "encoding": arr,
-                        "quality": item.get("quality", 1.0),
+                        "quality": enc.quality or 1.0,
                     })
                 except Exception as e:
-                    logger.warning(f"Mock encoding decode fail: {e}")
-            return processed
+                    logger.warning(f"Failed to decode encoding {enc.id}: {e}")
 
-        import base64
-
-        # Join with persons to get names
-        result = (
-            db.table("face_encodings")
-            .select("id, person_id, encoding, quality, persons(name)")
-            .execute()
-        )
-
-        encodings = []
-        for row in result.data or []:
-            try:
-                # Decode base64 → bytes → numpy array
-                encoding_bytes = base64.b64decode(row["encoding"])
-                encodings.append({
-                    "encoding_id": row["id"],
-                    "person_id": row["person_id"],
-                    "person_name": row.get("persons", {}).get("name", "Unknown"),
-                    "encoding": encoding_bytes,
-                    "quality": row.get("quality", 1.0),
-                })
-            except Exception as e:
-                logger.warning(f"Failed to decode encoding {row['id']}: {e}")
-
-        logger.info(f"Loaded {len(encodings)} encodings from database")
-        return encodings
+            logger.info(f"Loaded {len(encodings)} encodings from database")
+            return encodings
+        finally:
+            db.close()
 
     @staticmethod
     def get_person_history(
@@ -282,21 +269,36 @@ class PersonService:
         offset: int = 0,
     ) -> Dict[str, Any]:
         """Get tracking session history for a person."""
-        db = get_admin_db()
+        db: Session = SessionLocal()
+        try:
+            query = (
+                db.query(TrackingSession)
+                .filter(TrackingSession.person_id == person_id)
+            )
 
-        if db is None:
-            return {"data": [], "total": 0}
+            total = query.count()
+            sessions = (
+                query.order_by(TrackingSession.entry_time.desc())
+                .offset(offset)
+                .limit(limit)
+                .all()
+            )
 
-        result = (
-            db.table("tracking_sessions")
-            .select("*", count="exact")
-            .eq("person_id", person_id)
-            .order("entry_time", desc=True)
-            .range(offset, offset + limit - 1)
-            .execute()
-        )
-
-        return {
-            "data": result.data or [],
-            "total": result.count or 0,
-        }
+            return {
+                "data": [
+                    {
+                        "id": s.id,
+                        "person_id": s.person_id,
+                        "camera_id": s.camera_id,
+                        "entry_time": s.entry_time.isoformat() if s.entry_time else None,
+                        "exit_time": s.exit_time.isoformat() if s.exit_time else None,
+                        "duration_sec": s.duration_sec,
+                        "status": s.status,
+                        "created_at": s.created_at.isoformat() if s.created_at else None,
+                    }
+                    for s in sessions
+                ],
+                "total": total,
+            }
+        finally:
+            db.close()

@@ -46,7 +46,7 @@ export default function LoginPage() {
                         fontSize: '1.75rem',
                         margin: '0 auto 16px',
                     }}>
-                        <ShieldIcon size={32} style={{ color: '#fff' }} />
+                        <ShieldIcon size={32} style={{ color: 'var(--text-inverse)' }} />
                     </div>
                     <h1>SentinelAI</h1>
                     <p className="subtitle">AI-Powered Surveillance System</p>

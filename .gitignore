@@ -20,7 +20,13 @@ ENV/
 # ===========================
 # ML Models & Weights
 # ===========================
-*.pt
+# Standard pretrained models (auto-downloaded by ultralytics)
+yolov8*.pt
+
+# Custom trained models are tracked via Git LFS (see .gitattributes)
+# Do NOT add *.pt here — license_plate_detector.pt needs to be in the repo
+
+# Other model formats (if generated)
 *.pth
 *.onnx
 *.tflite
@@ -122,3 +128,21 @@ next-env.d.ts
 
 # Gemini agent files
 .gemini/
+.agents/
+.agent/
+_agents/
+_agent/
+
+# Resolved artifacts (auto-generated)
+*.resolved
+*.resolved.*
+
+# Recordings & clips (runtime generated)
+backend/recordings/
+backend/clips/
+recordings/
+clips/
+
+# Temporary files
+/tmp/
+*.tmp

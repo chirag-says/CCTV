@@ -760,6 +760,7 @@ Runs as a background worker per camera.
 # ── Standard Library ──────────────────────────────────────────────────────────
 import asyncio
 import logging
+import threading
 import os
 import pickle
 import time
@@ -843,6 +844,17 @@ class VisionPipeline:
             on_entry=self._handle_entry_event,
             on_exit=self._handle_exit_event,
         )
+
+        # ── YOLO Person Detector (for body-level person detection) ────
+        # Used in FACE mode to assist face detection when face_recognition
+        # misses faces (e.g. partial occlusion, small faces, angled faces).
+        # In HYBRID mode, we reuse the TrafficMonitor's YOLO detections.
+        self._yolo_person_detector = None
+        self._yolo_person_loaded = False
+        self._yolo_person_lock = threading.Lock()
+        self._yolo_body_unknown_cache: Dict[str, dict] = {}  # Dedup for body-only unknowns
+        self._last_yolo_assist_check = 0.0  # Throttle: last time we ran YOLO-assist
+        self._yolo_assist_interval = 3.0    # Only run YOLO-assisted every 3 seconds
 
         # ── Safety & Security Modules ─────────────────────────────
         # Attribute Recognition (gender + clothing)
@@ -1075,6 +1087,24 @@ class VisionPipeline:
                 self._draw_box(frame, location, "UNKNOWN", (0, 0, 255), 0.0)
                 # Pass clean_frame to ensure snapshot doesn't have the red box
                 self._handle_unknown_face(clean_frame, rgb_frame, location, encoding, centroid)
+
+        # ── YOLO-ASSISTED DETECTION (catch missed persons) ────
+        # Throttled: only runs every N seconds to avoid killing FPS.
+        # In FACE mode, runs a dedicated YOLO person detection.
+        # In HYBRID mode, this path is NOT used (see _process_frame_hybrid).
+        now_assist = time.time()
+        if now_assist - self._last_yolo_assist_check >= self._yolo_assist_interval:
+            self._last_yolo_assist_check = now_assist
+            try:
+                yolo_persons = self._get_yolo_person_detections(clean_frame)
+                if yolo_persons:
+                    missed = self._find_missed_persons(yolo_persons, face_locations)
+                    for person_det in missed:
+                        self._attempt_yolo_assisted_detection(
+                            frame, clean_frame, person_det
+                        )
+            except Exception as e:
+                logger.debug(f"YOLO-assisted detection error: {e}")
 
         # ── SAFETY ANALYTICS (crowd + loitering) ──────────────
         self._run_safety_analytics()
@@ -1373,6 +1403,354 @@ class VisionPipeline:
         return round(self._fps, 1)
 
     # ═══════════════════════════════════════════════════════════════════════════
+    #  YOLO-Assisted Person Detection
+    #  When face_recognition misses a face but YOLO detects a person body,
+    #  we attempt focused face detection on the head region and create an
+    #  unknown snapshot if the face is still undetectable.
+    # ═══════════════════════════════════════════════════════════════════════════
+
+    def _load_yolo_person_detector(self) -> bool:
+        """Lazy-load a YOLO model for person detection (used in FACE mode)."""
+        with self._yolo_person_lock:
+            if self._yolo_person_loaded:
+                return self._yolo_person_detector is not None
+            try:
+                from ultralytics import YOLO
+                import torch
+                device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                model_path = getattr(settings, 'HAZARD_MODEL_PATH', 'yolov8n.pt')
+                self._yolo_person_detector = YOLO(model_path)
+                self._yolo_person_device = device
+                logger.info(f"[{self.camera_id}] YOLO person detector loaded on {device}")
+            except Exception as e:
+                logger.warning(f"[{self.camera_id}] YOLO person detector unavailable: {e}")
+                self._yolo_person_detector = None
+            finally:
+                self._yolo_person_loaded = True
+            return self._yolo_person_detector is not None
+
+    def _get_yolo_person_detections(self, frame: np.ndarray) -> List[dict]:
+        """
+        Run YOLO person detection on a frame (FACE mode only).
+        Returns list of person detection dicts with 'bbox' and 'confidence'.
+        """
+        if not self._load_yolo_person_detector():
+            return []
+
+        try:
+            results = self._yolo_person_detector(
+                frame,
+                conf=0.25,
+                classes=[0],  # person class only
+                verbose=False,
+                device=getattr(self, '_yolo_person_device', 'cpu'),
+            )
+
+            persons = []
+            for result in results:
+                if result.boxes is None:
+                    continue
+                for box in result.boxes:
+                    cls_id = int(box.cls[0])
+                    if cls_id != 0:
+                        continue
+                    confidence = float(box.conf[0])
+                    x1, y1, x2, y2 = [int(c) for c in box.xyxy[0].tolist()]
+                    persons.append({
+                        "confidence": confidence,
+                        "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                    })
+            return persons
+        except Exception as e:
+            logger.debug(f"YOLO person detection failed: {e}")
+            return []
+
+    def _get_yolo_person_detections_from_traffic(self) -> List[dict]:
+        """
+        Get person detections from the TrafficMonitor (HYBRID mode).
+        Avoids running YOLO twice since TrafficMonitor already does it.
+        """
+        if not self.traffic_monitor:
+            return []
+
+        try:
+            with self.traffic_monitor._detections_lock:
+                persons = list(self.traffic_monitor._last_detections.get("persons", []))
+            return persons
+        except Exception:
+            return []
+
+    def _find_missed_persons(
+        self,
+        yolo_persons: List[dict],
+        face_locations: List[Tuple],
+    ) -> List[dict]:
+        """
+        Find YOLO person detections that don't overlap with any detected face.
+        These are persons whose faces were missed by face_recognition.
+        """
+        missed = []
+        for person in yolo_persons:
+            pb = person["bbox"]
+            has_matching_face = False
+
+            for face_loc in face_locations:
+                if self._face_overlaps_person(face_loc, pb):
+                    has_matching_face = True
+                    break
+
+            if not has_matching_face:
+                missed.append(person)
+
+        return missed
+
+    @staticmethod
+    def _face_overlaps_person(
+        face_loc: Tuple[int, int, int, int],
+        person_bbox: dict,
+    ) -> bool:
+        """
+        Check whether a face detection (top, right, bottom, left) overlaps
+        with a YOLO person bbox (x1, y1, x2, y2).
+        """
+        f_top, f_right, f_bottom, f_left = face_loc
+        p_x1, p_y1, p_x2, p_y2 = (
+            person_bbox["x1"], person_bbox["y1"],
+            person_bbox["x2"], person_bbox["y2"],
+        )
+
+        # Check for overlap
+        overlap_x = max(0, min(f_right, p_x2) - max(f_left, p_x1))
+        overlap_y = max(0, min(f_bottom, p_y2) - max(f_top, p_y1))
+
+        if overlap_x > 0 and overlap_y > 0:
+            # Some overlap exists — check if it's significant
+            face_area = (f_right - f_left) * (f_bottom - f_top)
+            overlap_area = overlap_x * overlap_y
+            # The face center should be inside the person box
+            face_cx = (f_left + f_right) // 2
+            face_cy = (f_top + f_bottom) // 2
+            if p_x1 <= face_cx <= p_x2 and p_y1 <= face_cy <= p_y2:
+                return True
+            # Or significant overlap ratio
+            if face_area > 0 and overlap_area / face_area > 0.3:
+                return True
+
+        return False
+
+    def _attempt_yolo_assisted_detection(
+        self,
+        frame: np.ndarray,
+        clean_frame: np.ndarray,
+        person_det: dict,
+    ):
+        """
+        Attempt to detect a face in the upper body of a YOLO person detection.
+        If face detection succeeds, process normally. If not, create a body-only
+        unknown person snapshot.
+        """
+        pb = person_det["bbox"]
+        person_confidence = person_det.get("confidence", 0.0)
+
+        # Skip very low confidence person detections
+        if person_confidence < 0.30:
+            return
+
+        h, w = clean_frame.shape[:2]
+
+        # Extract the upper body region (head + shoulders)
+        head_region = self.detector.estimate_head_region(pb, clean_frame.shape)
+        head_top, head_right, head_bottom, head_left = head_region
+
+        # Ensure valid crop dimensions
+        if head_bottom <= head_top or head_right <= head_left:
+            return
+
+        head_crop = clean_frame[head_top:head_bottom, head_left:head_right]
+        if head_crop.size == 0:
+            return
+
+        # Attempt face detection on the focused crop at full resolution
+        crop_face_locs, crop_rgb = self.detector.detect_faces_in_crop(head_crop)
+
+        if crop_face_locs:
+            # Face found in the crop! Process each face
+            for crop_loc in crop_face_locs:
+                c_top, c_right, c_bottom, c_left = crop_loc
+                # Convert crop-local coordinates back to frame-global
+                global_loc = (
+                    c_top + head_top,
+                    c_right + head_left,
+                    c_bottom + head_top,
+                    c_left + head_left,
+                )
+
+                # Generate encoding from the crop (better quality than downscaled)
+                encoding = self.recognizer.generate_encoding(crop_rgb, crop_loc)
+                if encoding is None:
+                    continue
+
+                centroid = ((global_loc[3] + global_loc[1]) // 2,
+                            (global_loc[0] + global_loc[2]) // 2)
+
+                # Try to recognize
+                result = self.recognizer.recognize_face(encoding)
+                if result.matched:
+                    self._draw_box(frame, global_loc, result.person_name, (0, 255, 0), result.confidence)
+                    self.tracker.on_detection(
+                        person_id=result.person_id,
+                        person_name=result.person_name,
+                        camera_id=self.camera_id,
+                        confidence=result.confidence,
+                        centroid=centroid,
+                    )
+                else:
+                    self._draw_box(frame, global_loc, "UNKNOWN", (0, 0, 255), 0.0)
+                    rgb_frame = cv2.cvtColor(clean_frame, cv2.COLOR_BGR2RGB)
+                    self._handle_unknown_face(clean_frame, rgb_frame, global_loc, encoding, centroid)
+
+            logger.info(
+                f"[{self.camera_id}] YOLO-assisted: found {len(crop_face_locs)} face(s) "
+                f"in missed person body (conf={person_confidence:.0%})"
+            )
+        else:
+            # No face detected even in the focused crop — create body-only unknown
+            # This person is visible but their face cannot be detected
+            # (e.g., facing away, heavy occlusion, very small)
+            self._handle_unknown_person_body(frame, clean_frame, person_det)
+
+    def _handle_unknown_person_body(
+        self,
+        frame: np.ndarray,
+        clean_frame: np.ndarray,
+        person_det: dict,
+    ):
+        """
+        Handle a person detected by YOLO whose face could NOT be detected.
+        Creates a body-only unknown person snapshot and tracks them.
+
+        Uses centroid-based dedup to avoid spamming unknowns for the
+        same body detection across frames.
+        """
+        pb = person_det["bbox"]
+        person_confidence = person_det.get("confidence", 0.0)
+
+        # Compute person centroid
+        pcx = (pb["x1"] + pb["x2"]) // 2
+        pcy = (pb["y1"] + pb["y2"]) // 2
+        centroid = (pcx, pcy)
+
+        # Dedup: check if we already have a body-only unknown near this centroid
+        DEDUP_DISTANCE = 100  # pixels
+        similar_body_id = None
+        now = time.time()
+        for uid, udata in self._yolo_body_unknown_cache.items():
+            dx = abs(udata["centroid"][0] - pcx)
+            dy = abs(udata["centroid"][1] - pcy)
+            if dx < DEDUP_DISTANCE and dy < DEDUP_DISTANCE:
+                similar_body_id = uid
+                break
+
+        if similar_body_id:
+            # Update existing body unknown
+            self._yolo_body_unknown_cache[similar_body_id]["count"] += 1
+            self._yolo_body_unknown_cache[similar_body_id]["last_seen"] = now
+            self._yolo_body_unknown_cache[similar_body_id]["centroid"] = centroid
+
+            # Keep tracking them
+            unknown_label = self._yolo_body_unknown_cache[similar_body_id].get("label", "Unknown Person")
+            self.tracker.on_detection(
+                person_id=similar_body_id,
+                person_name=unknown_label,
+                camera_id=self.camera_id,
+                confidence=0.0,
+                centroid=centroid,
+            )
+        else:
+            # New body-only unknown person
+            unknown_id = str(uuid4())
+            unknown_number = len(self._unknown_cache) + len(self._yolo_body_unknown_cache) + 1
+            unknown_label = f"Unknown #{unknown_number}"
+
+            # Crop the person body from the clean frame
+            h, w = clean_frame.shape[:2]
+            body_crop = clean_frame[
+                max(0, pb["y1"]):min(h, pb["y2"]),
+                max(0, pb["x1"]):min(w, pb["x2"]),
+            ].copy()
+
+            # Also extract head region for a better snapshot
+            head_region = self.detector.estimate_head_region(pb, clean_frame.shape)
+            head_top, head_right, head_bottom, head_left = head_region
+            head_crop = clean_frame[head_top:head_bottom, head_left:head_right].copy()
+
+            # Save snapshots
+            _, body_url = save_snapshot(
+                body_crop, f"unknown_body_{unknown_id}", subdirectory="unknowns", quality=95
+            )
+            _, head_url = save_snapshot(
+                head_crop, f"unknown_head_{unknown_id}", subdirectory="unknowns", quality=95
+            )
+            _, full_frame_url = save_snapshot(
+                clean_frame, f"fullframe_{unknown_id}", subdirectory="frames", quality=90
+            )
+
+            self._yolo_body_unknown_cache[unknown_id] = {
+                "centroid": centroid,
+                "count": 1,
+                "first_seen": now,
+                "last_seen": now,
+                "snapshot_path": body_url,
+                "head_path": head_url,
+                "full_frame_path": full_frame_url,
+                "label": unknown_label,
+                "confidence": person_confidence,
+            }
+
+            # Track this unknown person
+            self.tracker.on_detection(
+                person_id=unknown_id,
+                person_name=unknown_label,
+                camera_id=self.camera_id,
+                confidence=0.0,
+                centroid=centroid,
+            )
+
+            # Draw a box around the body
+            body_loc = (pb["y1"], pb["x2"], pb["y2"], pb["x1"])
+            self._draw_box(frame, body_loc, f"UNKNOWN (body)", (0, 128, 255), person_confidence)
+
+            logger.info(
+                f"[{self.camera_id}] Body-only unknown person detected: "
+                f"{unknown_label} (YOLO conf={person_confidence:.0%})"
+            )
+
+            # Emit unknown face event (using body snapshot)
+            if self.on_unknown:
+                self.on_unknown({
+                    "unknown_id": unknown_id,
+                    "camera_id": self.camera_id,
+                    "snapshot_path": body_url,
+                    "context_path": head_url,
+                    "full_frame_path": full_frame_url,
+                    "encoding": None,  # No face encoding available
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "bounding_box": {
+                        "top": pb["y1"], "right": pb["x2"],
+                        "bottom": pb["y2"], "left": pb["x1"],
+                    },
+                    "detection_type": "body_only",
+                })
+
+        # Clean up old body unknowns (older than 60 seconds)
+        stale_ids = [
+            uid for uid, udata in self._yolo_body_unknown_cache.items()
+            if now - udata["last_seen"] > 60
+        ]
+        for uid in stale_ids:
+            del self._yolo_body_unknown_cache[uid]
+
+    # ═══════════════════════════════════════════════════════════════════════════
     #  Traffic Mode Processing
     # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1455,6 +1833,23 @@ class VisionPipeline:
                  # Unknown - Draw on the ACCUMULATED frame
                  self._draw_box(frame, location, "UNKNOWN", (0, 0, 255), 0.0)
                  self._handle_unknown_face(clean_frame, rgb_frame, location, encoding, centroid)
+
+        # ── YOLO-ASSISTED DETECTION (for HYBRID mode) ──────────
+        # Reuse TrafficMonitor's cached person detections (zero inference cost).
+        # Throttled to every N seconds to avoid expensive crop-face-detection.
+        now_assist = time.time()
+        if now_assist - self._last_yolo_assist_check >= self._yolo_assist_interval:
+            self._last_yolo_assist_check = now_assist
+            try:
+                yolo_persons = self._get_yolo_person_detections_from_traffic()
+                if yolo_persons:
+                    missed = self._find_missed_persons(yolo_persons, face_locations)
+                    for person_det in missed:
+                        self._attempt_yolo_assisted_detection(
+                            frame, clean_frame, person_det
+                        )
+            except Exception as e:
+                logger.debug(f"YOLO-assisted detection (hybrid) error: {e}")
 
         # Analytics
         self._run_safety_analytics()

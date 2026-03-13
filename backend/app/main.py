@@ -22,7 +22,8 @@ from app.config import settings
 from app.services.person_service import PersonService
 from app.vision.camera_worker import camera_manager
 from app.core.websocket import ws_manager
-from app.core.mock_store import mock_store
+from app.db.session import SessionLocal, init_db, create_default_admin
+from app.db.models import DetectionEvent, TrackingSession, UnknownFace
 from app.utils.image_utils import frame_to_jpeg_bytes, resize_frame
 
 # ── Logging Setup ─────────────────────────────────────────────
@@ -62,61 +63,69 @@ def handle_pipeline_event(event: dict):
     """
     Called by vision pipeline on entry/exit/detection events.
     Bridges sync pipeline → async WebSocket.
-    Also persists events to database.
+    Also persists events to PostgreSQL.
     """
     logger.info(f"📡 Event: {event.get('event_type', 'unknown')} — {event.get('person_name', 'N/A')}")
 
-    # Persist to database (async in background)
+    # Persist to PostgreSQL
     try:
-        from app.database import get_admin_db
-        db = get_admin_db()
-        if db:
-            from uuid import uuid4
-            from datetime import datetime, timezone
+        from uuid import uuid4
+        from datetime import datetime, timezone
 
-            event_data = {
-                "id": str(uuid4()),
-                "person_id": event.get("person_id"),
-                "camera_id": event.get("camera_id", ""),
-                "event_type": event.get("event_type", "detection"),
-                "confidence": event.get("confidence", 0.0),
-                "snapshot_url": event.get("snapshot_url"),
-                "metadata": {
+        db = SessionLocal()
+        try:
+            # Create detection event
+            db_event = DetectionEvent(
+                id=str(uuid4()),
+                person_id=event.get("person_id"),
+                camera_id=event.get("camera_id", ""),
+                event_type=event.get("event_type", "detection"),
+                subtype=event.get("subtype"),
+                confidence=event.get("confidence", 0.0),
+                snapshot_url=event.get("snapshot_url"),
+                metadata_json={
                     k: v for k, v in event.items()
-                    if k not in ("person_id", "camera_id", "event_type", "confidence", "snapshot_url")
+                    if k not in ("person_id", "camera_id", "event_type", "confidence", "snapshot_url", "subtype")
                 },
-                "created_at": event.get("timestamp", datetime.now(timezone.utc).isoformat()),
-            }
-            db.table("detection_events").insert(event_data).execute()
+                created_at=datetime.fromisoformat(event["timestamp"]) if event.get("timestamp") else datetime.now(timezone.utc),
+            )
+            db.add(db_event)
 
             # Create/update tracking session for entry/exit
             if event["event_type"] == "entry" and event.get("person_id"):
-                session_data = {
-                    "id": str(uuid4()),
-                    "person_id": event["person_id"],
-                    "camera_id": event["camera_id"],
-                    "entry_time": event["timestamp"],
-                    "status": "active",
-                    "created_at": datetime.now(timezone.utc).isoformat(),
-                }
-                result = db.table("tracking_sessions").insert(session_data).execute()
-                if result.data:
-                    for cid in camera_manager.get_active_camera_ids():
-                        worker = camera_manager._workers.get(cid)
-                        if worker:
-                            worker.pipeline.tracker.set_session_id(
-                                event["person_id"], result.data[0]["id"]
-                            )
+                session = TrackingSession(
+                    id=str(uuid4()),
+                    person_id=event["person_id"],
+                    camera_id=event["camera_id"],
+                    entry_time=datetime.fromisoformat(event["timestamp"]) if event.get("timestamp") else datetime.now(timezone.utc),
+                    status="active",
+                    created_at=datetime.now(timezone.utc),
+                )
+                db.add(session)
+                db.commit()
 
+                # Set session ID on tracker
+                for cid in camera_manager.get_active_camera_ids():
+                    worker = camera_manager._workers.get(cid)
+                    if worker:
+                        worker.pipeline.tracker.set_session_id(
+                            event["person_id"], session.id
+                        )
             elif event["event_type"] == "exit" and event.get("session_id"):
-                db.table("tracking_sessions").update({
-                    "exit_time": event["timestamp"],
-                    "duration_sec": event.get("duration_sec", 0),
-                    "status": "completed",
-                }).eq("id", event["session_id"]).execute()
-        else:
-            # Mock mode — store in memory
-            mock_store.add_event(event)
+                session = db.query(TrackingSession).filter(
+                    TrackingSession.id == event["session_id"]
+                ).first()
+                if session:
+                    session.exit_time = datetime.fromisoformat(event["timestamp"]) if event.get("timestamp") else datetime.now(timezone.utc)
+                    session.duration_sec = event.get("duration_sec", 0)
+                    session.status = "completed"
+
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to persist event: {e}")
+        finally:
+            db.close()
 
     except Exception as e:
         logger.error(f"Failed to persist event: {e}")
@@ -132,40 +141,47 @@ def handle_pipeline_event(event: dict):
 
 def handle_unknown_face(data: dict):
     """
-    Called when an unknown face is detected.
-    Persists to unknown_faces table and broadcasts event.
+    Called when an unknown face (or body-only person) is detected.
+    Persists to unknown_faces table in PostgreSQL and broadcasts event.
     """
-    logger.info(f"👤 Unknown face detected on camera {data.get('camera_id')}")
+    detection_type = data.get("detection_type", "face")
+    logger.info(
+        f"👤 Unknown {detection_type} detected on camera {data.get('camera_id')}"
+    )
 
     try:
-        from app.database import get_admin_db
         import pickle
-        import base64
+        from uuid import uuid4
+        from datetime import datetime, timezone
 
-        db = get_admin_db()
-        if db:
-            from uuid import uuid4
-            from datetime import datetime, timezone
+        db = SessionLocal()
+        try:
+            # Handle encoding: may be None for body-only detections
+            encoding_bytes = None
+            if data.get("encoding") is not None:
+                encoding_bytes = pickle.dumps(data["encoding"])
 
-            unknown_data = {
-                "id": data.get("unknown_id", str(uuid4())),
-                "camera_id": data.get("camera_id", ""),
-                "snapshot_url": data.get("snapshot_path", ""),
-                "context_url": data.get("context_path", ""),
-                "full_frame": data.get("full_frame_path", ""),
-                "encoding": base64.b64encode(
-                    pickle.dumps(data["encoding"])
-                ).decode() if "encoding" in data else None,
-                "occurrence": 1,
-                "first_seen": data.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                "last_seen": data.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                "status": "pending",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            }
-            db.table("unknown_faces").insert(unknown_data).execute()
-        else:
-            # Mock mode — store in memory
-            mock_store.add_unknown_face(data)
+            ts = datetime.fromisoformat(data["timestamp"]) if data.get("timestamp") else datetime.now(timezone.utc)
+
+            unknown = UnknownFace(
+                id=data.get("unknown_id", str(uuid4())),
+                camera_id=data.get("camera_id", ""),
+                snapshot_url=data.get("snapshot_path", ""),
+                full_frame=data.get("full_frame_path", ""),
+                face_encoding=encoding_bytes,
+                occurrence=1,
+                first_seen=ts,
+                last_seen=ts,
+                status="pending",
+                created_at=datetime.now(timezone.utc),
+            )
+            db.add(unknown)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to persist unknown face: {e}")
+        finally:
+            db.close()
 
     except Exception as e:
         logger.error(f"Failed to persist unknown face: {e}")
@@ -176,6 +192,7 @@ def handle_unknown_face(data: dict):
         "camera_id": data.get("camera_id", ""),
         "timestamp": data.get("timestamp", ""),
         "snapshot_url": data.get("snapshot_path", ""),
+        "detection_type": detection_type,
     })
 
 
@@ -190,6 +207,15 @@ async def lifespan(app: FastAPI):
     logger.info("=" * 60)
     logger.info("🚀 AI CCTV Surveillance System Starting...")
     logger.info("=" * 60)
+
+    # Initialize PostgreSQL database (create tables if needed)
+    try:
+        init_db()
+        create_default_admin()
+    except Exception as e:
+        logger.error(f"❌ Database initialization failed: {e}")
+        logger.error("Make sure PostgreSQL is running and accessible")
+        raise
 
     # Set up pipeline callbacks (event + unknown + frame streaming)
     camera_manager.set_callbacks(

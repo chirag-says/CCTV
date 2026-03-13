@@ -5,7 +5,6 @@ JWT token generation, verification, and password hashing utilities.
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
-from passlib.context import CryptContext
 from fastapi import HTTPException, status, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config import settings
@@ -15,17 +14,25 @@ logger = logging.getLogger(__name__)
 
 # ── Password Hashing ──────────────────────────────────────────
 
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+import bcrypt
 
 
 def hash_password(password: str) -> str:
-    """Hash a plain-text password."""
-    return pwd_context.hash(password)
+    """Hash a plain-text password using bcrypt."""
+    password_bytes = password.encode("utf-8")[:72]  # bcrypt max 72 bytes
+    salt = bcrypt.gensalt()
+    return bcrypt.hashpw(password_bytes, salt).decode("utf-8")
 
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain-text password against its hash."""
-    return pwd_context.verify(plain_password, hashed_password)
+    try:
+        return bcrypt.checkpw(
+            plain_password.encode("utf-8")[:72],
+            hashed_password.encode("utf-8"),
+        )
+    except Exception:
+        return False
 
 
 # ── JWT Token ─────────────────────────────────────────────────

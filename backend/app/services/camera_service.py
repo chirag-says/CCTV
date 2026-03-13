@@ -1,6 +1,6 @@
 """
 Camera Service — CRUD operations for cameras and pipeline control.
-Uses Supabase when available, falls back to MockStore for persistence.
+Now uses SQLAlchemy + PostgreSQL instead of Supabase / MockStore.
 """
 
 import logging
@@ -8,12 +8,28 @@ from typing import Optional, Dict, Any
 from uuid import uuid4
 from datetime import datetime, timezone
 
-from app.database import get_admin_db
+from sqlalchemy.orm import Session
+
+from app.db.session import SessionLocal
+from app.db.models import Camera
 from app.core.exceptions import NotFoundException, CameraException
-from app.core.mock_store import mock_store
 from app.vision.camera_worker import camera_manager
 
 logger = logging.getLogger(__name__)
+
+
+def _camera_to_dict(camera: Camera) -> dict:
+    """Convert a Camera ORM object to a dict matching the API response format."""
+    return {
+        "id": camera.id,
+        "name": camera.name,
+        "location": camera.location,
+        "stream_url": camera.stream_url,
+        "camera_type": camera.camera_type,
+        "is_active": camera.is_active,
+        "config": camera.config or {},
+        "created_at": camera.created_at.isoformat() if camera.created_at else None,
+    }
 
 
 class CameraService:
@@ -22,110 +38,98 @@ class CameraService:
     @staticmethod
     def list_cameras(is_active: Optional[bool] = None) -> list:
         """List all cameras with their current status."""
-        db = get_admin_db()
+        db: Session = SessionLocal()
+        try:
+            query = db.query(Camera)
+            if is_active is not None:
+                query = query.filter(Camera.is_active == is_active)
 
-        if db is None:
-            # Use MockStore for persistence in dev mode
-            cameras = mock_store.list_cameras(is_active=is_active)
+            query = query.order_by(Camera.created_at.desc())
+            cameras = [_camera_to_dict(c) for c in query.all()]
+
+            # Add live status from camera_manager
             for camera in cameras:
                 status = camera_manager.get_camera_status(camera["id"])
                 camera["status"] = "online" if status and status.get("running") else "offline"
                 if status:
                     camera["fps"] = status.get("fps", 0)
                     camera["active_tracks"] = status.get("active_tracks", {})
+
             return cameras
-
-        query = db.table("cameras").select("*")
-        if is_active is not None:
-            query = query.eq("is_active", is_active)
-
-        result = query.order("created_at", desc=True).execute()
-
-        cameras = result.data or []
-        # Add live status
-        for camera in cameras:
-            status = camera_manager.get_camera_status(camera["id"])
-            camera["status"] = "online" if status and status["running"] else "offline"
-            if status:
-                camera["fps"] = status.get("fps", 0)
-                camera["active_tracks"] = status.get("active_tracks", {})
-
-        return cameras
+        finally:
+            db.close()
 
     @staticmethod
     def create_camera(data: dict) -> dict:
         """Register a new camera."""
-        db = get_admin_db()
-
-        camera_data = {
-            "id": str(uuid4()),
-            "name": data["name"],
-            "location": data.get("location", ""),
-            "stream_url": data.get("stream_url", "0"),
-            "camera_type": data.get("camera_type", "webcam"),
-            "is_active": True,
-            "config": data.get("config", {}),
-            "created_at": datetime.now(timezone.utc).isoformat(),
-        }
-
-        if db is None:
-            # Persist in MockStore so it survives across requests
-            return mock_store.add_camera(camera_data)
-
-        result = db.table("cameras").insert(camera_data).execute()
-        if result.data:
-            return result.data[0]
-
-        raise Exception("Failed to create camera")
+        db: Session = SessionLocal()
+        try:
+            camera = Camera(
+                id=str(uuid4()),
+                name=data["name"],
+                location=data.get("location", ""),
+                stream_url=data.get("stream_url", "0"),
+                camera_type=data.get("camera_type", "webcam"),
+                is_active=True,
+                config=data.get("config", {}),
+                created_at=datetime.now(timezone.utc),
+            )
+            db.add(camera)
+            db.commit()
+            db.refresh(camera)
+            return _camera_to_dict(camera)
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to create camera: {e}")
+            raise Exception("Failed to create camera")
+        finally:
+            db.close()
 
     @staticmethod
     def get_camera(camera_id: str) -> dict:
         """Get camera details with status."""
-        db = get_admin_db()
-
-        if db is None:
-            camera = mock_store.get_camera(camera_id)
+        db: Session = SessionLocal()
+        try:
+            camera = db.query(Camera).filter(Camera.id == camera_id).first()
             if not camera:
                 raise NotFoundException("Camera", camera_id)
+
+            result = _camera_to_dict(camera)
             status = camera_manager.get_camera_status(camera_id)
-            camera["status"] = "online" if status and status.get("running") else "offline"
-            return camera
-
-        result = db.table("cameras").select("*").eq("id", camera_id).execute()
-        if not result.data:
-            raise NotFoundException("Camera", camera_id)
-
-        camera = result.data[0]
-        status = camera_manager.get_camera_status(camera_id)
-        camera["status"] = "online" if status and status["running"] else "offline"
-
-        return camera
+            result["status"] = "online" if status and status.get("running") else "offline"
+            if status:
+                result["fps"] = status.get("fps", 0)
+                result["active_tracks"] = status.get("active_tracks", {})
+            return result
+        finally:
+            db.close()
 
     @staticmethod
     def update_camera(camera_id: str, data: dict) -> dict:
         """Update camera configuration."""
-        db = get_admin_db()
-
-        if db is None:
-            update_data = {k: v for k, v in data.items() if v is not None}
-            result = mock_store.update_camera(camera_id, update_data)
-            if not result:
+        db: Session = SessionLocal()
+        try:
+            camera = db.query(Camera).filter(Camera.id == camera_id).first()
+            if not camera:
                 raise NotFoundException("Camera", camera_id)
-            return result
 
-        update_data = {k: v for k, v in data.items() if v is not None}
+            update_data = {k: v for k, v in data.items() if v is not None}
+            for key, value in update_data.items():
+                if hasattr(camera, key):
+                    setattr(camera, key, value)
 
-        result = (
-            db.table("cameras")
-            .update(update_data)
-            .eq("id", camera_id)
-            .execute()
-        )
-
-        if not result.data:
-            raise NotFoundException("Camera", camera_id)
-
-        return result.data[0]
+            camera.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            db.refresh(camera)
+            return _camera_to_dict(camera)
+        except NotFoundException:
+            raise
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to update camera: {e}")
+            raise
+        finally:
+            db.close()
 
     @staticmethod
     def delete_camera(camera_id: str) -> bool:
@@ -133,31 +137,32 @@ class CameraService:
         # Stop pipeline if running
         camera_manager.stop_camera(camera_id)
 
-        db = get_admin_db()
-        if db is None:
-            mock_store.delete_camera(camera_id)
+        db: Session = SessionLocal()
+        try:
+            camera = db.query(Camera).filter(Camera.id == camera_id).first()
+            if camera:
+                db.delete(camera)
+                db.commit()
             return True
-
-        result = db.table("cameras").delete().eq("id", camera_id).execute()
-        return True
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Failed to delete camera: {e}")
+            raise
+        finally:
+            db.close()
 
     @staticmethod
     def start_camera(camera_id: str) -> dict:
         """Start AI processing for a camera."""
-        db = get_admin_db()
-
-        # Get camera info
-        if db is not None:
-            result = db.table("cameras").select("*").eq("id", camera_id).execute()
-            if not result.data:
-                raise NotFoundException("Camera", camera_id)
-            camera = result.data[0]
-            stream_url = camera["stream_url"]
-        else:
-            camera = mock_store.get_camera(camera_id)
+        db: Session = SessionLocal()
+        try:
+            camera = db.query(Camera).filter(Camera.id == camera_id).first()
             if not camera:
                 raise NotFoundException("Camera", camera_id)
-            stream_url = camera.get("stream_url", "0")
+
+            stream_url = camera.stream_url
+        finally:
+            db.close()
 
         success = camera_manager.start_camera(camera_id, stream_url)
         if not success:

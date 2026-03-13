@@ -30,7 +30,7 @@ class FaceDetector:
         self,
         model: str = None,
         scale_factor: float = None,
-        min_face_size: int = 30,
+        min_face_size: int = 20,
     ):
         self.model = model or settings.DETECTION_MODEL
         self.scale_factor = scale_factor or settings.DETECTION_SCALE
@@ -66,8 +66,8 @@ class FaceDetector:
         else:
             small_frame = rgb_frame
 
-        # Detect face locations with upsampling for better small face detection
-        upsample = 2 if self.scale_factor <= 1.0 else 1
+        # Detect face locations
+        upsample = 1
         face_locations_raw = face_recognition.face_locations(
             small_frame, model=self.model, number_of_times_to_upsample=upsample
         )
@@ -167,6 +167,66 @@ class FaceDetector:
         # Weighted combination
         quality = (size_score * 0.3) + (blur_score * 0.4) + (brightness_score * 0.3)
         return round(max(0.0, min(1.0, quality)), 3)
+
+    def detect_faces_in_crop(
+        self, crop: np.ndarray
+    ) -> Tuple[List[Tuple[int, int, int, int]], np.ndarray]:
+        """
+        Detect faces in a pre-cropped region (e.g. from YOLO person bbox).
+        Runs at full resolution with extra upsampling for maximum sensitivity.
+
+        Args:
+            crop: BGR image crop (numpy array)
+
+        Returns:
+            Tuple of (face_locations_in_crop_coords, rgb_crop)
+        """
+        if crop.size == 0 or crop.shape[0] < 20 or crop.shape[1] < 20:
+            return [], cv2.cvtColor(crop, cv2.COLOR_BGR2RGB) if crop.size > 0 else crop
+
+        rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
+
+        # Run at full resolution (crop is already zoomed in, so 1 upsample is sufficient)
+        face_locations = face_recognition.face_locations(
+            rgb_crop, model=self.model, number_of_times_to_upsample=1
+        )
+
+        # Filter out impossibly small faces
+        face_locations = [
+            loc for loc in face_locations
+            if (loc[2] - loc[0]) >= 15 and (loc[1] - loc[3]) >= 15
+        ]
+
+        return face_locations, rgb_crop
+
+    @staticmethod
+    def estimate_head_region(
+        person_bbox: dict, frame_shape: tuple
+    ) -> Tuple[int, int, int, int]:
+        """
+        Estimate the head/upper-body region from a YOLO person bounding box.
+        Returns (top, right, bottom, left) in face_recognition format.
+
+        The head is approximately the top 35% of the person bounding box,
+        centered horizontally.
+        """
+        x1 = person_bbox["x1"]
+        y1 = person_bbox["y1"]
+        x2 = person_bbox["x2"]
+        y2 = person_bbox["y2"]
+        h, w = frame_shape[:2]
+
+        person_h = y2 - y1
+        person_w = x2 - x1
+
+        # Head region: top 40% of the person box, with some padding
+        head_bottom = y1 + int(person_h * 0.40)
+        head_top = max(0, y1 - int(person_h * 0.05))  # small pad above head
+        head_left = max(0, x1 - int(person_w * 0.1))
+        head_right = min(w, x2 + int(person_w * 0.1))
+        head_bottom = min(h, head_bottom)
+
+        return head_top, head_right, head_bottom, head_left
 
     @property
     def frames_processed(self) -> int:

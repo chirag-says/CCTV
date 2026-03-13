@@ -369,7 +369,7 @@ export default function VideoAnalysisPage() {
                                 margin: '20px',
                                 background: dragOver
                                     ? 'rgba(99, 102, 241, 0.05)'
-                                    : 'rgba(255, 255, 255, 0.02)',
+                                    : 'var(--hover-surface)',
                                 transition: 'all 0.3s ease',
                             }}
                         >
@@ -392,7 +392,7 @@ export default function VideoAnalysisPage() {
                                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                                         margin: '0 auto 20px', boxShadow: '0 8px 30px rgba(99, 102, 241, 0.3)',
                                     }}>
-                                        <VideoUploadIcon size={28} style={{ color: '#fff' }} />
+                                        <VideoUploadIcon size={28} style={{ color: 'var(--text-inverse)' }} />
                                     </div>
                                     <div style={{
                                         fontWeight: 600, fontSize: '1.125rem',
@@ -491,7 +491,7 @@ export default function VideoAnalysisPage() {
                                             alignItems: 'center',
                                             gap: '14px',
                                             padding: '14px 16px',
-                                            background: 'rgba(255,255,255,0.03)',
+                                            background: 'var(--hover-surface)',
                                             borderRadius: '10px',
                                             border: '1px solid var(--border-color)',
                                             cursor: job.status === 'completed' || job.status === 'processing' ? 'pointer' : 'default',
@@ -627,7 +627,7 @@ export default function VideoAnalysisPage() {
                         </div>
                         <div style={{
                             height: '10px',
-                            background: 'rgba(255,255,255,0.06)',
+                            background: 'var(--hover-surface)',
                             borderRadius: '10px',
                             overflow: 'hidden',
                         }}>
@@ -775,7 +775,7 @@ export default function VideoAnalysisPage() {
                                     ].map((item) => (
                                         <div key={item.label} style={{
                                             padding: '16px',
-                                            background: 'rgba(255,255,255,0.03)',
+                                            background: 'var(--hover-surface)',
                                             borderRadius: '10px',
                                             border: '1px solid var(--border-color)',
                                         }}>
@@ -818,7 +818,7 @@ export default function VideoAnalysisPage() {
                                                 <div key={idx} className="animate-in" style={{
                                                     display: 'flex', gap: '14px', alignItems: 'center',
                                                     padding: '14px 16px',
-                                                    background: 'rgba(255,255,255,0.03)',
+                                                    background: 'var(--hover-surface)',
                                                     borderRadius: '10px',
                                                     border: '1px solid var(--border-color)',
                                                     animationDelay: `${idx * 30}ms`,
@@ -946,7 +946,7 @@ export default function VideoAnalysisPage() {
                                         {results.detected_vehicles.map((vehicle, idx) => (
                                             <div key={idx} className="animate-in" style={{
                                                 padding: '18px',
-                                                background: 'rgba(255,255,255,0.03)',
+                                                background: 'var(--hover-surface)',
                                                 borderRadius: '10px',
                                                 border: '1px solid var(--border-color)',
                                                 animationDelay: `${idx * 30}ms`,
@@ -1052,7 +1052,7 @@ export default function VideoAnalysisPage() {
                                             <div key={idx} className="animate-in" style={{
                                                 padding: '14px 18px',
                                                 marginBottom: '12px',
-                                                background: 'rgba(255,255,255,0.03)',
+                                                background: 'var(--hover-surface)',
                                                 borderRadius: '10px',
                                                 border: '1px solid var(--border-color)',
                                                 position: 'relative',
@@ -1159,7 +1159,7 @@ export default function VideoAnalysisPage() {
                                                 />
                                                 <div style={{
                                                     padding: '10px 12px',
-                                                    background: 'rgba(255,255,255,0.03)',
+                                                    background: 'var(--hover-surface)',
                                                     fontSize: '0.75rem',
                                                     color: 'var(--text-muted)',
                                                     display: 'flex',
