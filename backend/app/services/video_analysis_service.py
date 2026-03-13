@@ -764,33 +764,36 @@ class VideoAnalysisJob:
             f"Consolidating {len(self._raw_plate_readings)} raw plate readings..."
         )
 
-        # ── Step 1: Pre-filter readings by plate format ───────────────────
-        # Indian plate format: 2 letters (state) + 2 digits (district) +
-        # 1-3 letters (series) + 1-4 digits (number)
-        # Examples: KA02HM1826, MH12AB1234, DL01CA5678
-        # We use relaxed patterns to allow for OCR imperfections
-        PLATE_PATTERNS = [
-            # Standard Indian: SS DD SS DDDD (e.g. KA02HM1826)
-            re.compile(r'^[A-Z]{1,3}\d{1,2}[A-Z]{1,3}\d{1,5}$'),
-            # With minor OCR errors: allow O/0 mixups
-            re.compile(r'^[A-Z0-9]{2}\d{2}[A-Z]{1,3}\d{2,5}$'),
-            # Partial plates: at least "letters + digits + letters + digits"
-            re.compile(r'^[A-Z]{1,2}\d{2}[A-Z]{1,3}\d{1,4}$'),
-        ]
+        # ── Step 1: Pre-filter and correct readings ─────────────────────────
+        # Use Indian plate correction to fix OCR errors (e.g., X02HH7256 → KA02MH7256)
+        from app.vision.anpr import _fix_indian_plate
 
         valid_readings = []
         for reading in self._raw_plate_readings:
             plate = reading["plate"]
-            # Basic checks: must be 6-12 chars, have both letters and digits
-            if len(plate) < 6 or len(plate) > 14:
+            # Basic checks: must be 6-14 chars, have both letters and digits
+            if len(plate) < 5 or len(plate) > 14:
                 continue
             has_letters = any(c.isalpha() for c in plate)
             has_digits = any(c.isdigit() for c in plate)
             if not (has_letters and has_digits):
                 continue
-            # Check against known plate patterns
-            if any(p.match(plate) for p in PLATE_PATTERNS):
+
+            # Try Indian plate correction (fixes OCR errors + validates state code)
+            corrected = _fix_indian_plate(plate)
+            if corrected:
+                reading = reading.copy()  # Don't mutate original
+                reading["plate"] = corrected
                 valid_readings.append(reading)
+            else:
+                # Fallback: accept if matches basic plate patterns
+                PLATE_PATTERNS = [
+                    re.compile(r'^[A-Z]{1,3}\d{1,2}[A-Z]{1,3}\d{1,5}$'),
+                    re.compile(r'^[A-Z0-9]{2}\d{2}[A-Z]{1,3}\d{2,5}$'),
+                    re.compile(r'^[A-Z]{1,2}\d{2}[A-Z]{1,3}\d{1,4}$'),
+                ]
+                if any(p.match(plate) for p in PLATE_PATTERNS):
+                    valid_readings.append(reading)
 
         logger.info(
             f"  Format filter: {len(self._raw_plate_readings)} → "
@@ -821,7 +824,7 @@ class VideoAnalysisJob:
                 clusters.append([reading])
 
         # ── Step 3: Filter by minimum evidence & build results ────────────
-        MIN_READINGS = 3  # Must appear in at least 3 frames
+        MIN_READINGS = 2  # Must appear in at least 2 frames
 
         for cluster in clusters:
             if len(cluster) < MIN_READINGS:

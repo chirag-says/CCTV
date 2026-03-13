@@ -25,7 +25,7 @@
   --danger: #ef4444;
   --danger-light: #f87171;
 
-  /* Pitch Black Theme */
+  /* Pitch Black Theme (Dark — default) */
   --bg-primary: #000000;
   --bg-secondary: #060606;
   --bg-tertiary: #0e0e0e;
@@ -41,6 +41,14 @@
   --border-color: rgba(255, 255, 255, 0.07);
   --border-hover: rgba(255, 255, 255, 0.13);
   --border-active: rgba(99, 102, 241, 0.45);
+
+  /* Overlay */
+  --overlay-bg: rgba(0, 0, 0, 0.7);
+
+  /* Hover surfaces (theme-aware) */
+  --hover-surface: rgba(255, 255, 255, 0.04);
+  --hover-surface-strong: rgba(255, 255, 255, 0.06);
+  --table-row-border: rgba(255, 255, 255, 0.04);
 
   /* Shadows */
   --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.6);
@@ -61,6 +69,49 @@
   --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
   --transition-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* ── Light Theme Override ────────────────────────────────────── */
+
+[data-theme="light"] {
+  /* Backgrounds */
+  --bg-primary: #f5f6fa;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #eef0f4;
+  --bg-card: rgba(255, 255, 255, 0.95);
+  --bg-card-hover: rgba(240, 242, 248, 0.98);
+  --bg-glass: rgba(255, 255, 255, 0.88);
+
+  /* Text */
+  --text-primary: #1a1d27;
+  --text-secondary: #5a5f72;
+  --text-muted: #8b8f9e;
+  --text-inverse: #ffffff;
+
+  /* Borders */
+  --border-color: rgba(0, 0, 0, 0.08);
+  --border-hover: rgba(0, 0, 0, 0.15);
+  --border-active: rgba(99, 102, 241, 0.5);
+
+  /* Overlay */
+  --overlay-bg: rgba(0, 0, 0, 0.3);
+
+  /* Hover surfaces */
+  --hover-surface: rgba(0, 0, 0, 0.03);
+  --hover-surface-strong: rgba(0, 0, 0, 0.05);
+  --table-row-border: rgba(0, 0, 0, 0.06);
+
+  /* Shadows (lighter, more diffused) */
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.08);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 8px 30px rgba(0, 0, 0, 0.12);
+  --shadow-glow: 0 0 20px rgba(99, 102, 241, 0.1);
+
+  /* Brand — slightly adjusted for contrast */
+  --primary: #5b5ef0;
+  --primary-light: #6366f1;
+  --primary-dark: #4338ca;
+  --primary-glow: rgba(99, 102, 241, 0.12);
 }
 
 /* ── Reset & Base ─────────────────────────────────────────────── */
@@ -95,7 +146,7 @@ body {
   overflow-x: hidden;
 }
 
-/* Subtle ambient background glow — very faint on pure black */
+/* Subtle ambient background glow */
 body::before {
   content: '';
   position: fixed;
@@ -104,7 +155,7 @@ body::before {
   width: 100%;
   height: 100%;
   background:
-    radial-gradient(ellipse at 20% 20%, rgba(99, 102, 241, 0.03) 0%, transparent 50%),
+    radial-gradient(ellipse at 20% 20%, var(--primary-glow) 0%, transparent 50%),
     radial-gradient(ellipse at 80% 80%, rgba(6, 182, 212, 0.02) 0%, transparent 50%);
   pointer-events: none;
   z-index: 0;
@@ -268,7 +319,7 @@ img {
 
 .sidebar-close-btn:hover {
   color: var(--danger-light);
-  background: rgba(255, 255, 255, 0.05);
+  background: var(--hover-surface);
 }
 
 .sidebar-overlay {
@@ -276,7 +327,7 @@ img {
   /* Hidden on desktop */
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: var(--overlay-bg);
   backdrop-filter: blur(2px);
   z-index: 950;
   animation: fadeIn 0.2s ease;
@@ -358,7 +409,7 @@ img {
 
 .nav-item:hover {
   color: var(--text-primary);
-  background: rgba(255, 255, 255, 0.04);
+  background: var(--hover-surface);
 }
 
 .nav-item.active {
@@ -586,14 +637,14 @@ img {
 }
 
 .data-table tbody tr:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--hover-surface);
 }
 
 .data-table tbody td {
   padding: 14px 16px;
   font-size: 0.875rem;
   color: var(--text-secondary);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--table-row-border);
   vertical-align: middle;
 }
 
@@ -869,7 +920,7 @@ select.input {
 }
 
 .activity-item:hover {
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--hover-surface);
 }
 
 .activity-icon {
@@ -993,7 +1044,7 @@ select.input {
   left: 0;
   width: 100%;
   height: 100%;
-  background: rgba(0, 0, 0, 0.8);
+  background: var(--overlay-bg);
   backdrop-filter: blur(4px);
   display: flex;
   align-items: center;
@@ -1403,7 +1454,7 @@ select.input {
 .skeleton {
   background: linear-gradient(90deg,
       var(--bg-tertiary) 25%,
-      rgba(255, 255, 255, 0.04) 50%,
+      var(--hover-surface) 50%,
       var(--bg-tertiary) 75%);
   background-size: 200% 100%;
   animation: shimmer 1.5s infinite;
@@ -1956,7 +2007,7 @@ select.input {
 }
 
 .vehicle-card .vehicle-chip:hover {
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--hover-surface-strong);
   border-color: var(--border-hover);
 }
 
@@ -2014,4 +2065,233 @@ select.input {
 
 .vehicle-card.new-entry {
   animation: plate-flash 1.5s ease 1;
+}
+
+/* ═══════════════════════════════════════════════════════════════════
+   Light Mode Overrides
+   Targeted fixes for elements that need more than variable swaps
+   ═══════════════════════════════════════════════════════════════════ */
+
+[data-theme="light"] .sidebar-wrapper.open {
+  box-shadow: 20px 0 50px rgba(0, 0, 0, 0.12);
+}
+
+[data-theme="light"] .modal-overlay {
+  background: rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(6px);
+}
+
+[data-theme="light"] .stat-card.primary .stat-card-icon {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+[data-theme="light"] .stat-card.accent .stat-card-icon {
+  background: rgba(6, 182, 212, 0.08);
+}
+
+[data-theme="light"] .stat-card.success .stat-card-icon {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+[data-theme="light"] .stat-card.warning .stat-card-icon {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+[data-theme="light"] .stat-card.danger .stat-card-icon {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+[data-theme="light"] .badge.entry {
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+}
+
+[data-theme="light"] .badge.exit {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+[data-theme="light"] .badge.active {
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+}
+
+[data-theme="light"] .badge.online {
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+}
+
+[data-theme="light"] .badge.offline {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+}
+
+[data-theme="light"] .badge.pending {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+}
+
+[data-theme="light"] .badge.unknown {
+  background: rgba(245, 158, 11, 0.1);
+  color: #d97706;
+}
+
+[data-theme="light"] .badge.detection {
+  background: rgba(99, 102, 241, 0.1);
+  color: #4f46e5;
+}
+
+[data-theme="light"] .badge.enrolled {
+  background: rgba(99, 102, 241, 0.1);
+  color: #4f46e5;
+}
+
+[data-theme="light"] .activity-icon.entry {
+  background: rgba(16, 185, 129, 0.08);
+}
+
+[data-theme="light"] .activity-icon.exit {
+  background: rgba(239, 68, 68, 0.08);
+}
+
+[data-theme="light"] .activity-icon.unknown {
+  background: rgba(245, 158, 11, 0.08);
+}
+
+[data-theme="light"] .activity-icon.detection {
+  background: rgba(99, 102, 241, 0.08);
+}
+
+[data-theme="light"] .avatar {
+  background: var(--primary);
+}
+
+[data-theme="light"] .btn-secondary {
+  background: var(--bg-secondary);
+  border-color: var(--border-color);
+}
+
+[data-theme="light"] .btn-secondary:hover:not(:disabled) {
+  background: var(--bg-tertiary);
+}
+
+[data-theme="light"] .btn-danger {
+  background: rgba(239, 68, 68, 0.06);
+  border-color: rgba(239, 68, 68, 0.12);
+}
+
+[data-theme="light"] .btn-success {
+  background: rgba(16, 185, 129, 0.06);
+  border-color: rgba(16, 185, 129, 0.12);
+}
+
+[data-theme="light"] .login-error {
+  background: rgba(239, 68, 68, 0.05);
+  border-color: rgba(239, 68, 68, 0.12);
+  color: #dc2626;
+}
+
+[data-theme="light"] .toast {
+  background: var(--bg-secondary);
+  box-shadow: var(--shadow-lg);
+}
+
+[data-theme="light"] .security-alert-card .alert-detail-chip {
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+
+[data-theme="light"] .vehicle-card:hover {
+  box-shadow: 0 6px 24px rgba(59, 130, 246, 0.08);
+}
+
+[data-theme="light"] .proximity-card {
+  border-color: rgba(239, 68, 68, 0.12);
+}
+
+[data-theme="light"] .proximity-card:hover {
+  box-shadow: 0 6px 24px rgba(239, 68, 68, 0.06);
+}
+
+/* ── Theme Toggle ────────────────────────────────────────────── */
+
+.theme-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: 0.813rem;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+  margin-bottom: 12px;
+}
+
+.theme-toggle-btn:hover {
+  background: var(--bg-card-hover);
+  border-color: var(--border-hover);
+  color: var(--text-primary);
+}
+
+.theme-toggle-btn:active {
+  transform: scale(0.97);
+}
+
+.theme-toggle-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--primary-glow);
+  color: var(--primary-light);
+  transition: all var(--transition-normal);
+}
+
+.theme-toggle-btn:hover .theme-toggle-icon {
+  background: rgba(99, 102, 241, 0.2);
+  transform: rotate(15deg);
+}
+
+/* Icon spin-in animation on theme switch */
+.theme-toggle-icon.spin-in {
+  animation: themeIconSpin 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+@keyframes themeIconSpin {
+  0% {
+    transform: rotate(-90deg) scale(0.5);
+    opacity: 0;
+  }
+
+  100% {
+    transform: rotate(0deg) scale(1);
+    opacity: 1;
+  }
+}
+
+/* ── Theme Transition (shadcn-style) ─────────────────────────── */
+/* Applied briefly during theme switch via JS, then removed.     */
+/* This ensures smooth color transitions ONLY when toggling,     */
+/* without affecting normal hover/click performance.             */
+
+.theme-transitioning,
+.theme-transitioning *,
+.theme-transitioning *::before,
+.theme-transitioning *::after {
+  transition:
+    background-color 500ms cubic-bezier(0.4, 0, 0.2, 1),
+    color 400ms cubic-bezier(0.4, 0, 0.2, 1),
+    border-color 500ms cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 500ms cubic-bezier(0.4, 0, 0.2, 1),
+    fill 400ms cubic-bezier(0.4, 0, 0.2, 1),
+    stroke 400ms cubic-bezier(0.4, 0, 0.2, 1) !important;
+  transition-delay: 0s !important;
 }

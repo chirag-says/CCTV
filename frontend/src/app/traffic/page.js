@@ -203,8 +203,8 @@ export default function TrafficPage() {
                             {tabCounts[key] > 0 && (
                                 <span style={{
                                     background: activeTab === key
-                                        ? 'rgba(255, 255, 255, 0.2)'
-                                        : 'rgba(255, 255, 255, 0.06)',
+                                        ? 'var(--primary-glow)'
+                                        : 'var(--hover-surface-strong)',
                                     padding: '1px 7px',
                                     borderRadius: '10px',
                                     fontSize: '0.625rem',

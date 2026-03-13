@@ -41,8 +41,68 @@ VEHICLE_CLASSES: Dict[int, str] = {
     7: "truck",
 }
 
+# ── Indian License Plate Validation ───────────────────────────────────────────
+
+# All valid Indian state/UT codes (RTO registration prefixes)
+INDIAN_STATE_CODES = {
+    "AN",  # Andaman & Nicobar
+    "AP",  # Andhra Pradesh
+    "AR",  # Arunachal Pradesh
+    "AS",  # Assam
+    "BR",  # Bihar
+    "CG",  # Chhattisgarh
+    "CH",  # Chandigarh
+    "DD",  # Dadra & Nagar Haveli and Daman & Diu
+    "DL",  # Delhi
+    "GA",  # Goa
+    "GJ",  # Gujarat
+    "HP",  # Himachal Pradesh
+    "HR",  # Haryana
+    "JH",  # Jharkhand
+    "JK",  # Jammu & Kashmir
+    "KA",  # Karnataka
+    "KL",  # Kerala
+    "LA",  # Ladakh
+    "LD",  # Lakshadweep
+    "MH",  # Maharashtra
+    "ML",  # Meghalaya
+    "MN",  # Manipur
+    "MP",  # Madhya Pradesh
+    "MZ",  # Mizoram
+    "NL",  # Nagaland
+    "OD",  # Odisha
+    "PB",  # Punjab
+    "PY",  # Puducherry
+    "RJ",  # Rajasthan
+    "SK",  # Sikkim
+    "TN",  # Tamil Nadu
+    "TR",  # Tripura
+    "TS",  # Telangana
+    "UK",  # Uttarakhand
+    "UP",  # Uttar Pradesh
+    "WB",  # West Bengal
+}
+
+# Common OCR misreads for characters on Indian plates
+# Map of (wrong char) → (likely correct char)
+OCR_CHAR_CORRECTIONS = {
+    "0": "O",  # zero  → O (in letter positions)
+    "O": "0",  # O     → zero (in digit positions)
+    "1": "I",  # one   → I (in letter positions)
+    "I": "1",  # I     → one (in digit positions)
+    "8": "B",  # eight → B (in letter positions)
+    "B": "8",  # B     → eight (in digit positions)
+    "5": "S",  # five  → S (in letter positions)
+    "S": "5",  # S     → five (in digit positions)
+    "6": "G",  # six   → G (in letter positions)
+    "G": "6",  # G     → six (in digit positions)
+    "2": "Z",  # two   → Z (in letter positions)
+    "Z": "2",  # Z     → two (in digit positions)
+    "D": "0",  # D     → zero (in digit positions)
+    "Q": "0",  # Q     → zero (in digit positions)
+}
+
 # Regex patterns for license plates — tuned for Indian plates.
-# We keep these strict to avoid accepting random text.
 PLATE_PATTERNS = [
     # Standard Indian: KA01AB1234 / KA-01-AB-1234 / KA 01 AB 1234
     re.compile(r'[A-Z]{2}\s*\d{1,2}\s*[A-Z]{1,3}\s*\d{1,4}'),
@@ -51,6 +111,141 @@ PLATE_PATTERNS = [
     # Older Indian format (no series letters): MH 12 1234
     re.compile(r'[A-Z]{2}\s*\d{2}\s*\d{4}'),
 ]
+
+
+def _fix_indian_plate(raw: str) -> Optional[str]:
+    """
+    Apply Indian-plate-aware OCR post-correction.
+
+    Indian plates follow: SS DD LLL DDDD
+      SS   = 2-letter state code (must be valid)
+      DD   = 2-digit district code
+      LLL  = 1-3 letter series
+      DDDD = 1-4 digit vehicle number
+
+    Common OCR errors:
+      - 'X' read instead of 'K' (KA → XA or just X)
+      - 'HH' instead of 'MH' (M misread as H)
+      - '0' / 'O' confusion in wrong positions
+    """
+    if not raw or len(raw) < 6:
+        return None
+
+    text = re.sub(r'[^A-Z0-9]', '', raw.strip().upper())
+    if len(text) < 6:
+        return None
+
+    # ── Step 1: Try to extract state code (first 2 letters) ──────────────
+    state = text[:2]
+
+    # If only 1 letter before digits (e.g., "X02HH7256" — K+A merged to X),
+    # try to expand known single-char → state mappings
+    if text[1].isdigit():
+        # Only 1 letter before digits — try common expansions
+        single_char_to_states = {
+            "X": "KA",  # Very common: KA merged → X
+            "K": "KA",
+            "M": "MH",
+            "D": "DL",
+            "T": "TN",
+            "A": "AP",
+            "G": "GJ",
+            "R": "RJ",
+            "U": "UP",
+            "W": "WB",
+            "H": "HR",
+            "P": "PB",
+            "J": "JH",
+            "C": "CG",
+            "N": "NL",
+            "B": "BR",
+            "S": "SK",
+        }
+        first_char = text[0]
+        if first_char in single_char_to_states:
+            expanded = single_char_to_states[first_char]
+            text = expanded + text[1:]
+            state = expanded
+
+    # ── Step 2: Fix common state code misreads ───────────────────────────
+    state_corrections = {
+        # Common OCR errors in state codes
+        "XA": "KA",  "X4": "KA",  "KR": "KA",  "K4": "KA",
+        "HH": "MH",  "NH": "MH",  "WH": "MH",
+        "0L": "DL",  "OL": "DL",  "D1": "DL",
+        "7N": "TN",  "IN": "TN",
+        "6J": "GJ",  "GI": "GJ",
+        "RJ": "RJ",  "R1": "RJ",
+        "U9": "UP",  "U0": "UP",
+        "W8": "WB",  "WR": "WB",
+        "H8": "HR",  "HK": "HR",
+        "P8": "PB",  "PR": "PB",
+        "8R": "BR",
+        "C6": "CG",
+    }
+
+    if state in state_corrections:
+        corrected = state_corrections[state]
+        text = corrected + text[2:]
+        state = corrected
+
+    # ── Step 3: Validate state code ──────────────────────────────────────
+    if state not in INDIAN_STATE_CODES:
+        return None
+
+    # ── Step 4: Fix digit/letter confusion in known positions ────────────
+    # Format: SS DD LLL DDDD
+    # Positions 2-3 must be digits (district code)
+    chars = list(text)
+    for i in [2, 3]:
+        if i < len(chars) and chars[i].isalpha():
+            if chars[i] in OCR_CHAR_CORRECTIONS:
+                replacement = OCR_CHAR_CORRECTIONS[chars[i]]
+                if replacement.isdigit():
+                    chars[i] = replacement
+
+    # Find where the series letters start (after district digits)
+    # and where the final number starts
+    district_end = 2
+    while district_end < len(chars) and chars[district_end].isdigit():
+        district_end += 1
+        if district_end > 4:  # Max 2 district digits
+            break
+
+    # Series letters: fix digits that should be letters
+    series_end = district_end
+    while series_end < len(chars) and chars[series_end].isalpha():
+        series_end += 1
+        if series_end - district_end > 3:  # Max 3 series letters
+            break
+
+    for i in range(district_end, min(series_end, len(chars))):
+        if chars[i].isdigit() and chars[i] in OCR_CHAR_CORRECTIONS:
+            replacement = OCR_CHAR_CORRECTIONS[chars[i]]
+            if replacement.isalpha():
+                chars[i] = replacement
+
+    # Final number digits: fix letters that should be digits
+    for i in range(series_end, len(chars)):
+        if chars[i].isalpha() and chars[i] in OCR_CHAR_CORRECTIONS:
+            replacement = OCR_CHAR_CORRECTIONS[chars[i]]
+            if replacement.isdigit():
+                chars[i] = replacement
+
+    result = "".join(chars)
+
+    # ── Step 5: Final format validation ──────────────────────────────────
+    # Must be: 2 letters + 1-2 digits + 1-3 letters + 1-4 digits
+    final_pattern = re.compile(r'^[A-Z]{2}\d{1,2}[A-Z]{1,3}\d{1,4}$')
+    if final_pattern.match(result):
+        return result
+
+    # Also accept older format: 2 letters + 2 digits + 4 digits (no series)
+    old_pattern = re.compile(r'^[A-Z]{2}\d{2}\d{4}$')
+    if old_pattern.match(result):
+        return result
+
+    return None
 
 
 class PlateRecognizer:
@@ -264,7 +459,7 @@ class PlateRecognizer:
 
                 # Crop vehicle region
                 vehicle_crop = frame[vy1:vy2, vx1:vx2]
-                if vehicle_crop.size == 0 or vehicle_crop.shape[0] < 30 or vehicle_crop.shape[1] < 30:
+                if vehicle_crop.size == 0 or vehicle_crop.shape[0] < 20 or vehicle_crop.shape[1] < 20:
                     continue
 
                 # Stage 2: Find plate within vehicle crop
@@ -349,7 +544,7 @@ class PlateRecognizer:
 
         results = self._vehicle_model(
             frame,
-            conf=0.35,
+            conf=0.25,
             classes=list(VEHICLE_CLASSES.keys()),
             verbose=False,
             device=self._device,
@@ -443,8 +638,8 @@ class PlateRecognizer:
         if h < 30 or w < 30:
             return None, 0.0
 
-        # Focus on lower 60% of vehicle (plate area)
-        plate_region = vehicle_crop[int(h * 0.4):, :]
+        # Focus on lower 70% of vehicle (plate area) — wider region for angled views
+        plate_region = vehicle_crop[int(h * 0.3):, :]
 
         # Preprocessing for plate detection
         gray = cv2.cvtColor(plate_region, cv2.COLOR_BGR2GRAY)
@@ -464,7 +659,8 @@ class PlateRecognizer:
             if len(approx) >= 4:
                 x, y, cw, ch = cv2.boundingRect(approx)
                 aspect_ratio = cw / ch if ch > 0 else 0
-                if 1.5 < aspect_ratio < 7.0 and cw > 40 and ch > 10:
+                # Relaxed: allow aspect ratio 1.2-8.0 for angled plates, lower min width
+                if 1.2 < aspect_ratio < 8.0 and cw > 30 and ch > 8:
                     plate_candidates.append((x, y, cw, ch))
 
         best_text = None
@@ -501,10 +697,30 @@ class PlateRecognizer:
 
             # Resize small crops for better OCR
             h, w = enhanced.shape[:2]
-            if w < 100:
-                scale = 100 / w
+            if w < 120:
+                scale = 120 / w
                 enhanced = cv2.resize(enhanced, None, fx=scale, fy=scale,
                                       interpolation=cv2.INTER_CUBIC)
+
+            # Try deskewing for angled plates
+            try:
+                coords = np.column_stack(np.where(enhanced > 0))
+                if len(coords) > 5:
+                    angle = cv2.minAreaRect(coords)[-1]
+                    if angle < -45:
+                        angle = -(90 + angle)
+                    else:
+                        angle = -angle
+                    if abs(angle) > 2 and abs(angle) < 45:
+                        center = (w // 2, h // 2)
+                        M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                        enhanced = cv2.warpAffine(
+                            enhanced, M, (w, h),
+                            flags=cv2.INTER_CUBIC,
+                            borderMode=cv2.BORDER_REPLICATE,
+                        )
+            except Exception:
+                pass
 
             results = self._ocr.readtext(enhanced, detail=1)
 
@@ -519,12 +735,17 @@ class PlateRecognizer:
             for (bbox, text, confidence) in sorted(results, key=lambda r: r[2], reverse=True):
                 cleaned = re.sub(r'[^A-Z0-9]', '', text.strip().upper())
 
+                # Try Indian plate correction first
+                corrected = _fix_indian_plate(cleaned)
+                if corrected:
+                    return corrected, confidence
+
+                # Fallback: raw pattern match (for non-Indian plates)
                 for pattern in PLATE_PATTERNS:
                     if pattern.match(cleaned):
                         return cleaned, confidence
 
             # No pattern matched — reject this reading entirely
-            # (don't return random text as a "plate")
 
         except Exception as e:
             logger.debug(f"OCR failed on region: {e}")
@@ -532,13 +753,18 @@ class PlateRecognizer:
         return None, 0.0
 
     def _normalize_plate(self, text: str) -> Optional[str]:
-        """Clean and normalize plate text."""
+        """Clean, correct, and normalize plate text using Indian plate rules."""
         if not text:
             return None
 
         cleaned = re.sub(r'[^A-Z0-9]', '', text.strip().upper())
 
-        # Minimum 6 characters (e.g. KA02H1) and must have both letters and digits
+        # Try Indian plate correction (handles OCR errors, validates state code)
+        corrected = _fix_indian_plate(cleaned)
+        if corrected:
+            return corrected
+
+        # Fallback: basic validation for any plate format
         if len(cleaned) < 6:
             return None
 
@@ -548,7 +774,6 @@ class PlateRecognizer:
         if not (has_letters and has_digits):
             return None
 
-        # Must match an Indian plate format pattern
         for pattern in PLATE_PATTERNS:
             if pattern.match(cleaned):
                 return cleaned

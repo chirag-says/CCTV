@@ -9,10 +9,13 @@ import os
 
 
 class Settings(BaseSettings):
-    # ── Supabase ──────────────────────────────────────────────
-    SUPABASE_URL: str = ""
-    SUPABASE_KEY: str = ""
-    SUPABASE_SERVICE_KEY: str = ""
+    # ── PostgreSQL Database ───────────────────────────────────
+    DB_HOST: str = "localhost"
+    DB_PORT: int = 5432
+    DB_NAME: str = "sentinelai"
+    DB_USER: str = "postgres"
+    DB_PASSWORD: str = "postgres"
+    DB_ECHO: bool = False  # Set True to log all SQL queries
 
     # ── JWT Auth ──────────────────────────────────────────────
     JWT_SECRET_KEY: str = "change-this-secret-key-in-production"
