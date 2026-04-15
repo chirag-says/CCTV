@@ -23,13 +23,25 @@ class Settings(BaseSettings):
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
     # ── Vision Pipeline ───────────────────────────────────────
-    DETECTION_MODEL: str = "cnn"  # "hog" (CPU) or "cnn" (GPU) — using CNN for GPU acceleration
-    FACE_MATCH_TOLERANCE: float = 0.55  # Relaxed from 0.45 to improve recognition
+    # Face Detection (SCRFD via insightface)
+    INSIGHTFACE_MODEL_NAME: str = "buffalo_l"  # buffalo_l has SCRFD_10G + ArcFace R50
+    INSIGHTFACE_DET_SIZE: int = 640  # Detection input size (640x640)
+    INSIGHTFACE_DET_THRESH: float = 0.5  # Face detection confidence threshold
+
+    # Face Recognition (ArcFace via insightface)
+    FACE_MATCH_TOLERANCE: float = 0.6  # Cosine distance threshold (lower = stricter)
+    FACE_EMBEDDING_DIM: int = 512  # ArcFace embedding dimension
+
+    # ByteTrack Multi-Object Tracking
+    BYTETRACK_TRACK_THRESH: float = 0.5  # High-confidence detection threshold
+    BYTETRACK_TRACK_BUFFER: int = 30  # Frames to keep lost tracks alive
+    BYTETRACK_MATCH_THRESH: float = 0.8  # IoU threshold for matching
+
     FRAME_SKIP: int = 3
     DETECTION_SCALE: float = 0.5
     EXIT_THRESHOLD_SECONDS: int = 15  # 15 seconds — responsive for live monitoring
     ENTRY_THRESHOLD_SECONDS: int = 3
-    UNKNOWN_SIMILARITY_THRESHOLD: float = 0.50  # Relaxed from 0.4
+    UNKNOWN_SIMILARITY_THRESHOLD: float = 0.6  # Cosine distance for unknown dedup
 
     # ── Camera ────────────────────────────────────────────────
     DEFAULT_CAMERA_SOURCE: str = "0"

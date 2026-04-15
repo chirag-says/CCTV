@@ -18,6 +18,9 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 import os
 
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+
 from app.config import settings
 from app.services.person_service import PersonService
 from app.vision.camera_worker import camera_manager
@@ -272,13 +275,22 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ── Request Logging Middleware ─────────────────────────────────
+from app.core.middleware import RequestLoggingMiddleware
+app.add_middleware(RequestLoggingMiddleware)
+
 # ── Static Files (Snapshots) ─────────────────────────────────
 os.makedirs(settings.SNAPSHOT_DIR, exist_ok=True)
 app.mount("/snapshots", StaticFiles(directory=settings.SNAPSHOT_DIR), name="snapshots")
 
+# ── Rate Limiting ─────────────────────────────────────────────
+from app.routes.auth import limiter
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 
 # ── Register Routes ───────────────────────────────────────────
-from app.routes import auth, persons, cameras, events, unknown_faces, analytics, movements, video_analysis
+from app.routes import auth, persons, cameras, events, unknown_faces, analytics, movements, video_analysis, search, retention
 
 app.include_router(auth.router)
 app.include_router(persons.router)
@@ -288,6 +300,8 @@ app.include_router(unknown_faces.router)
 app.include_router(analytics.router)
 app.include_router(movements.router)
 app.include_router(video_analysis.router)
+app.include_router(search.router)
+app.include_router(retention.router)
 
 
 # ── Health Check ──────────────────────────────────────────────

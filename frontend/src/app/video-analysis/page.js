@@ -10,7 +10,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import AppShell from '@/components/AppShell';
-import api from '@/lib/api';
+import api, { API_BASE } from '@/lib/api';
 import {
     VideoUploadIcon,
     UsersIcon,
@@ -67,7 +67,7 @@ function formatFileSize(bytes) {
     return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 
 // ═══════════════════════════════════════════════════════════════
 //  Main Page Component

@@ -8,6 +8,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { usePathname } from 'next/navigation';
 import Sidebar from './Sidebar';
+import ProtectedRoute from './ProtectedRoute';
+import SearchPalette from './SearchPalette';
+import useKeyboardShortcuts from '@/lib/useKeyboardShortcuts';
 import { XIcon } from './Icons';
 
 /**
@@ -26,7 +29,18 @@ function MenuIcon({ size = 24 }) {
 
 export default function AppShell({ children, unknownCount = 0 }) {
     const [sidebarOpen, setSidebarOpen] = useState(false);
+    const [searchOpen, setSearchOpen] = useState(false);
     const pathname = usePathname();
+
+    // Global keyboard shortcuts
+    useKeyboardShortcuts();
+
+    // Listen for Ctrl+K / search open event
+    useEffect(() => {
+        const handleOpenSearch = () => setSearchOpen(true);
+        window.addEventListener('sentinel:open-search', handleOpenSearch);
+        return () => window.removeEventListener('sentinel:open-search', handleOpenSearch);
+    }, []);
 
     // Close sidebar on route change (mobile)
     useEffect(() => {
@@ -55,45 +69,49 @@ export default function AppShell({ children, unknownCount = 0 }) {
     const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
     return (
-        <div className="app-layout">
-            {/* Mobile top bar */}
-            <header className="mobile-header" id="mobile-header">
-                <button
-                    className="mobile-menu-btn"
-                    onClick={() => setSidebarOpen(true)}
-                    aria-label="Open menu"
-                    id="mobile-menu-btn"
-                >
-                    <MenuIcon size={22} />
-                </button>
-                <span className="mobile-header-title">SentinelAI</span>
-            </header>
+        <ProtectedRoute>
+            <div className="app-layout">
+                {/* Mobile top bar */}
+                <header className="mobile-header" id="mobile-header">
+                    <button
+                        className="mobile-menu-btn"
+                        onClick={() => setSidebarOpen(true)}
+                        aria-label="Open menu"
+                        id="mobile-menu-btn"
+                    >
+                        <MenuIcon size={22} />
+                    </button>
+                    <span className="mobile-header-title">SentinelAI</span>
+                </header>
 
-            {/* Sidebar overlay (mobile only) */}
-            {sidebarOpen && (
-                <div
-                    className="sidebar-overlay"
-                    onClick={closeSidebar}
-                    aria-hidden="true"
-                />
-            )}
+                {/* Sidebar overlay (mobile only) */}
+                {sidebarOpen && (
+                    <div
+                        className="sidebar-overlay"
+                        onClick={closeSidebar}
+                        aria-hidden="true"
+                    />
+                )}
 
-            {/* Sidebar with close button */}
-            <div className={`sidebar-wrapper ${sidebarOpen ? 'open' : ''}`}>
-                <button
-                    className="sidebar-close-btn"
-                    onClick={closeSidebar}
-                    aria-label="Close menu"
-                >
-                    <XIcon size={20} />
-                </button>
-                <Sidebar unknownCount={unknownCount} />
+                {/* Sidebar with close button */}
+                <div className={`sidebar-wrapper ${sidebarOpen ? 'open' : ''}`}>
+                    <button
+                        className="sidebar-close-btn"
+                        onClick={closeSidebar}
+                        aria-label="Close menu"
+                    >
+                        <XIcon size={20} />
+                    </button>
+                    <Sidebar unknownCount={unknownCount} />
+                </div>
+
+                <main className="main-content">
+                    {children}
+                </main>
+
+                {/* Search Palette (Ctrl+K) */}
+                <SearchPalette isOpen={searchOpen} onClose={() => setSearchOpen(false)} />
             </div>
-
-            {/* Main content */}
-            <main className="main-content">
-                {children}
-            </main>
-        </div>
+        </ProtectedRoute>
     );
 }

@@ -13,6 +13,7 @@ import ActivityFeed from '@/components/ActivityFeed';
 import OccupancyRing from '@/components/OccupancyRing';
 import HourlyChart from '@/components/HourlyChart';
 import api from '@/lib/api';
+import CameraHealth from '@/components/CameraHealth';
 import {
   UsersIcon,
   EntryIcon,
@@ -270,6 +271,9 @@ export default function DashboardPage() {
               Capacity: 100 people
             </div>
           </div>
+
+          {/* Camera Health */}
+          <CameraHealth />
 
           {/* Active Persons */}
           <div className="card">

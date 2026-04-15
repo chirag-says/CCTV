@@ -70,3 +70,70 @@ async def generate_report(
         report_type=report_type,
         date=date,
     )
+
+
+@router.get("/export")
+async def export_analytics(
+    format: str = Query("csv", description="Export format: csv or json"),
+    type: str = Query("events", description="Data type: events, movements, summary"),
+    start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
+    end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
+    limit: int = Query(1000, ge=1, le=10000),
+    current_user: dict = Depends(get_current_user),
+):
+    """Export analytics data as CSV or JSON file download."""
+    import csv
+    import io
+    from datetime import datetime
+    from fastapi.responses import StreamingResponse
+
+    # Get the data
+    data = AnalyticsService.get_movement_logs(
+        start_date=start_date,
+        end_date=end_date,
+        limit=limit,
+        offset=0,
+    )
+
+    events = data.get("events", data.get("movements", []))
+    if not isinstance(events, list):
+        events = []
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    if format == "csv":
+        output = io.StringIO()
+        if events:
+            # Get all unique keys from events
+            all_keys = set()
+            for event in events:
+                if isinstance(event, dict):
+                    all_keys.update(event.keys())
+            fieldnames = sorted(all_keys)
+
+            writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
+            writer.writeheader()
+            for event in events:
+                if isinstance(event, dict):
+                    writer.writerow(event)
+
+        output.seek(0)
+        return StreamingResponse(
+            iter([output.getvalue()]),
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=sentinel_{type}_{timestamp}.csv"
+            },
+        )
+    else:
+        # JSON format
+        import json
+        json_data = json.dumps({"exported_at": timestamp, "count": len(events), "data": events}, indent=2, default=str)
+        return StreamingResponse(
+            iter([json_data]),
+            media_type="application/json",
+            headers={
+                "Content-Disposition": f"attachment; filename=sentinel_{type}_{timestamp}.json"
+            },
+        )
+

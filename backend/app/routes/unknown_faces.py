@@ -70,6 +70,41 @@ async def list_unknown_faces(
         db.close()
 
 
+@router.get("/suggestions")
+async def get_enrollment_suggestions(
+    min_occurrences: int = Query(3, ge=1, description="Minimum times seen to suggest"),
+    limit: int = Query(10, ge=1, le=50),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Get frequently-seen unknown faces as enrollment suggestions.
+    Returns faces seen >= min_occurrences times that are still pending.
+    """
+    db = SessionLocal()
+    try:
+        faces = (
+            db.query(UnknownFaceDB)
+            .filter(
+                UnknownFaceDB.status == "pending",
+                UnknownFaceDB.occurrence >= min_occurrences,
+            )
+            .order_by(UnknownFaceDB.occurrence.desc())
+            .limit(limit)
+            .all()
+        )
+
+        return {
+            "suggestions": [
+                {**_unknown_to_dict(f), "is_suggested": True}
+                for f in faces
+            ],
+            "count": len(faces),
+        }
+    finally:
+        db.close()
+
+
+
 @router.get("/{unknown_id}")
 async def get_unknown_face(
     unknown_id: str,

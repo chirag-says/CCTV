@@ -4,9 +4,9 @@
  * Login Page — Admin authentication.
  */
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import api from '@/lib/api';
+import { useAuth } from '@/lib/AuthContext';
 import { ShieldIcon } from '@/components/Icons';
 
 export default function LoginPage() {
@@ -15,6 +15,14 @@ export default function LoginPage() {
     const [error, setError] = useState('');
     const [loading, setLoading] = useState(false);
     const router = useRouter();
+    const { login, isAuthenticated, isLoading } = useAuth();
+
+    // Redirect if already authenticated
+    useEffect(() => {
+        if (!isLoading && isAuthenticated) {
+            router.push('/');
+        }
+    }, [isLoading, isAuthenticated, router]);
 
     async function handleSubmit(e) {
         e.preventDefault();
@@ -22,7 +30,7 @@ export default function LoginPage() {
         setLoading(true);
 
         try {
-            await api.login(email, password);
+            await login(email, password);
             router.push('/');
         } catch (err) {
             setError(err.message || 'Login failed. Please check your credentials.');
@@ -100,18 +108,20 @@ export default function LoginPage() {
                     </button>
                 </form>
 
-                <div style={{
-                    marginTop: '24px',
-                    fontSize: '0.75rem',
-                    color: 'var(--text-muted)',
-                    padding: '12px',
-                    background: 'var(--bg-tertiary)',
-                    borderRadius: 'var(--radius-sm)',
-                }}>
-                    <strong>Demo Credentials:</strong><br />
-                    Email: admin@cctv.local<br />
-                    Password: admin123
-                </div>
+                {process.env.NODE_ENV === 'development' && (
+                    <div style={{
+                        marginTop: '24px',
+                        fontSize: '0.75rem',
+                        color: 'var(--text-muted)',
+                        padding: '12px',
+                        background: 'var(--bg-tertiary)',
+                        borderRadius: 'var(--radius-sm)',
+                    }}>
+                        <strong>Dev Credentials:</strong><br />
+                        Email: admin@cctv.local<br />
+                        Password: admin123
+                    </div>
+                )}
             </div>
         </div>
     );

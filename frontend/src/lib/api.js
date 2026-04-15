@@ -2,7 +2,7 @@
  * API client for the CCTV backend.
  */
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 class ApiClient {
   constructor() {
@@ -374,6 +374,12 @@ class ApiClient {
       console.log('Analysis progress WebSocket disconnected');
     };
     return ws;
+  }
+
+  // ── Search ──────────────────────────────────────────────
+  async search(query, type = 'all', limit = 20) {
+    const params = new URLSearchParams({ q: query, type, limit: String(limit) });
+    return this.request(`/api/search?${params}`);
   }
 }
 

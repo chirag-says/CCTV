@@ -5,9 +5,10 @@
  * All data fetched from backend API — no mock/dummy data.
  */
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import AppShell from '@/components/AppShell';
-import api from '@/lib/api';
+import api, { API_BASE } from '@/lib/api';
+import { useLightbox } from '@/components/Lightbox';
 import { EntryIcon, ExitIcon, DetectionIcon, UnknownFaceIcon, EventLogIcon, SecurityIcon, CrowdIcon, LoiterIcon, HazardIcon, VehicleIcon, PlateIcon } from '@/components/Icons';
 
 export default function EventsPage() {
@@ -16,6 +17,8 @@ export default function EventsPage() {
     const [typeFilter, setTypeFilter] = useState('');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [expandedId, setExpandedId] = useState(null);
+    const { openLightbox, LightboxComponent } = useLightbox();
 
     useEffect(() => {
         loadEvents();
@@ -114,11 +117,16 @@ export default function EventsPage() {
                                     <th>Person</th>
                                     <th>Camera</th>
                                     <th>Confidence</th>
+                                    <th style={{ width: '50px' }}>Snap</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {events.map((event) => (
-                                    <tr key={event.id}>
+                                    <React.Fragment key={event.id}>
+                                    <tr
+                                        style={{ cursor: 'pointer' }}
+                                        onClick={() => setExpandedId(expandedId === event.id ? null : event.id)}
+                                    >
                                         <td>
                                             <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: '0.813rem' }}>
                                                 {formatDate(event.created_at)}
@@ -183,13 +191,83 @@ export default function EventsPage() {
                                                 <span style={{ color: 'var(--text-muted)' }}>—</span>
                                             )}
                                         </td>
+                                        <td>
+                                            {event.snapshot_path ? (
+                                                <img
+                                                    src={`${API_BASE}${event.snapshot_path}`}
+                                                    alt="snap"
+                                                    style={{
+                                                        width: 36, height: 36,
+                                                        borderRadius: '6px',
+                                                        objectFit: 'cover',
+                                                        cursor: 'pointer',
+                                                        border: '1px solid var(--border-color)',
+                                                        transition: 'transform 0.15s',
+                                                    }}
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        openLightbox(`${API_BASE}${event.snapshot_path}`, `${event.event_type} - ${event.person_name || 'Unknown'}`);
+                                                    }}
+                                                    onMouseEnter={(e) => e.target.style.transform = 'scale(1.15)'}
+                                                    onMouseLeave={(e) => e.target.style.transform = 'scale(1)'}
+                                                />
+                                            ) : (
+                                                <span style={{ color: 'var(--text-muted)', fontSize: '0.75rem' }}>—</span>
+                                            )}
+                                        </td>
                                     </tr>
+                                    {/* Expandable detail row */}
+                                    {expandedId === event.id && (
+                                        <tr>
+                                            <td colSpan={6} style={{ padding: '16px 20px', background: 'var(--bg-tertiary)' }}>
+                                                <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
+                                                    {event.snapshot_path && (
+                                                        <img
+                                                            src={`${API_BASE}${event.snapshot_path}`}
+                                                            alt="Event snapshot"
+                                                            style={{
+                                                                width: 160, height: 120,
+                                                                borderRadius: '10px',
+                                                                objectFit: 'cover',
+                                                                cursor: 'pointer',
+                                                                border: '1px solid var(--border-color)',
+                                                            }}
+                                                            onClick={() => openLightbox(`${API_BASE}${event.snapshot_path}`, event.person_name || 'Event')}
+                                                        />
+                                                    )}
+                                                    <div style={{ flex: 1, minWidth: '200px' }}>
+                                                        <div style={{ fontSize: '0.8125rem', fontWeight: 600, marginBottom: '8px', color: 'var(--text-primary)' }}>
+                                                            Event Details
+                                                        </div>
+                                                        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 16px', fontSize: '0.75rem' }}>
+                                                            <span style={{ color: 'var(--text-muted)' }}>ID</span>
+                                                            <span style={{ fontFamily: "'JetBrains Mono', monospace", color: 'var(--text-secondary)' }}>{event.id?.slice(0, 12)}...</span>
+                                                            <span style={{ color: 'var(--text-muted)' }}>Type</span>
+                                                            <span>{event.event_type}</span>
+                                                            <span style={{ color: 'var(--text-muted)' }}>Person</span>
+                                                            <span>{event.person_name || 'Unknown'}</span>
+                                                            <span style={{ color: 'var(--text-muted)' }}>Camera</span>
+                                                            <span>{event.camera_name || event.camera_id}</span>
+                                                            <span style={{ color: 'var(--text-muted)' }}>Time</span>
+                                                            <span>{formatDate(event.created_at)}</span>
+                                                            {event.confidence > 0 && (<>
+                                                                <span style={{ color: 'var(--text-muted)' }}>Confidence</span>
+                                                                <span>{(event.confidence * 100).toFixed(1)}%</span>
+                                                            </>)}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )}
+                                    </React.Fragment>
                                 ))}
                             </tbody>
                         </table>
                     </div>
                 )}
             </div>
+            {LightboxComponent}
         </AppShell>
     );
 }

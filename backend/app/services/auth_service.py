@@ -107,3 +107,23 @@ class AuthService:
             raise Exception("Failed to create admin user")
         finally:
             db.close()
+
+    @staticmethod
+    def refresh_token(current_user: dict) -> Dict[str, Any]:
+        """
+        Issue a new JWT token for an already-authenticated user.
+        This implements sliding token expiry.
+        """
+        token = create_access_token({
+            "sub": current_user.get("id", current_user.get("sub", "")),
+            "email": current_user.get("email", ""),
+            "role": current_user.get("role", "operator"),
+            "name": current_user.get("name", ""),
+        })
+
+        return {
+            "access_token": token,
+            "token_type": "bearer",
+            "expires_in": settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60,
+        }
+

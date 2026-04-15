@@ -7,10 +7,9 @@
 
 import { useState, useEffect } from 'react';
 import AppShell from '@/components/AppShell';
-import api from '@/lib/api';
-import { PlusIcon, EditIcon, ImageIcon, UserIcon, XIcon } from '@/components/Icons';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+import api, { API_BASE } from '@/lib/api';
+import PersonTimeline from '@/components/PersonTimeline';
+import { PlusIcon, EditIcon, ImageIcon, UserIcon, XIcon, ClockIcon } from '@/components/Icons';
 
 export default function PersonsPage() {
     const [persons, setPersons] = useState([]);
@@ -22,6 +21,7 @@ export default function PersonsPage() {
     const [showModal, setShowModal] = useState(false);
     const [editPerson, setEditPerson] = useState(null);
     const [formData, setFormData] = useState({ name: '', role: 'visitor', department: '', email: '', phone: '' });
+    const [timelinePerson, setTimelinePerson] = useState(null);
 
     useEffect(() => {
         loadPersons();
@@ -216,7 +216,14 @@ export default function PersonsPage() {
                                                     onClick={() => openEditModal(person)}
                                                     style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
                                                 >
-                                                    <EditIcon size={14} /> Edit
+                                                <EditIcon size={14} /> Edit
+                                                </button>
+                                                <button
+                                                    className="btn btn-secondary btn-sm"
+                                                    onClick={() => setTimelinePerson(person)}
+                                                    style={{ display: 'flex', alignItems: 'center', gap: '4px' }}
+                                                >
+                                                    <ClockIcon size={14} /> History
                                                 </button>
                                                 <button className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                                     <ImageIcon size={14} /> Add Face
@@ -308,6 +315,20 @@ export default function PersonsPage() {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {/* Person History Timeline Panel */}
+            {timelinePerson && (
+                <>
+                    <div
+                        style={{
+                            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.4)',
+                            zIndex: 8999, animation: 'fadeIn 0.2s ease',
+                        }}
+                        onClick={() => setTimelinePerson(null)}
+                    />
+                    <PersonTimeline person={timelinePerson} onClose={() => setTimelinePerson(null)} />
+                </>
             )}
         </AppShell>
     );
