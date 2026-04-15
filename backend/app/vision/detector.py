@@ -1,110 +1,238 @@
 """
-Face Detection Module.
+Face Detection Module — SCRFD via InsightFace.
 
-Handles face detection from video frames using face_recognition library.
-Supports HOG (CPU-optimized) and CNN (GPU-optimized) models.
+Detects faces using the SCRFD model from insightface, which provides:
+- High-accuracy face bounding boxes
+- 5-point facial landmarks (for alignment before ArcFace embedding)
+- GPU acceleration via ONNX Runtime
+
+Replaces the old dlib/face_recognition-based detector.
 """
 
 import cv2
 import numpy as np
-import face_recognition
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict, Any
 from app.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Lazy-loaded insightface app (shared across instances for VRAM efficiency)
+_insightface_app = None
+_insightface_lock = None
+
+
+def _get_insightface_app():
+    """
+    Lazy-load the insightface FaceAnalysis app.
+
+    The app bundles both SCRFD (detection) and ArcFace (recognition),
+    but we only use the detection model here. The recognition model
+    is used separately in recognizer.py.
+
+    We keep a module-level singleton to avoid loading the model
+    multiple times (each load consumes GPU VRAM).
+    """
+    global _insightface_app, _insightface_lock
+    import threading
+
+    if _insightface_lock is None:
+        _insightface_lock = threading.Lock()
+
+    with _insightface_lock:
+        if _insightface_app is not None:
+            return _insightface_app
+
+        try:
+            import insightface
+            from insightface.app import FaceAnalysis
+
+            model_name = settings.INSIGHTFACE_MODEL_NAME
+            det_size = settings.INSIGHTFACE_DET_SIZE
+
+            logger.info(f"Loading insightface model: {model_name} (det_size={det_size})")
+
+            app = FaceAnalysis(
+                name=model_name,
+            )
+            app.prepare(
+                ctx_id=0,  # GPU 0
+                det_size=(det_size, det_size),
+                det_thresh=settings.INSIGHTFACE_DET_THRESH,
+            )
+
+            _insightface_app = app
+            logger.info(
+                f"InsightFace loaded successfully: {model_name}, "
+                f"det_size={det_size}, thresh={settings.INSIGHTFACE_DET_THRESH}"
+            )
+            return _insightface_app
+
+        except Exception as e:
+            logger.error(f"Failed to load insightface: {e}", exc_info=True)
+            raise RuntimeError(f"InsightFace initialization failed: {e}")
+
 
 class FaceDetector:
     """
-    Detects faces in video frames.
-    
+    Detects faces in video frames using SCRFD (via insightface).
+
     Features:
-    - Configurable detection model (HOG/CNN)
-    - Frame downscaling for performance
+    - GPU-accelerated face detection (ONNX Runtime + CUDA)
+    - 5-point facial landmark output (for face alignment)
     - Bounding box extraction
     - Face quality assessment
+    - Backward-compatible (top, right, bottom, left) output format
     """
 
     def __init__(
         self,
-        model: str = None,
-        scale_factor: float = None,
         min_face_size: int = 20,
+        scale_factor: float = None,
+        **kwargs,  # Accept extra kwargs for backward compat
     ):
-        self.model = model or settings.DETECTION_MODEL
-        self.scale_factor = scale_factor or settings.DETECTION_SCALE
         self.min_face_size = min_face_size
+        self.scale_factor = scale_factor or settings.DETECTION_SCALE
         self._frame_count = 0
-        
-        logger.info(f"FaceDetector initialized: model={self.model}, scale={self.scale_factor}")
+        self._app = None  # Lazy-loaded
+
+        logger.info(
+            f"FaceDetector initialized (SCRFD): "
+            f"model={settings.INSIGHTFACE_MODEL_NAME}, "
+            f"min_face={min_face_size}"
+        )
+
+    def _get_app(self):
+        """Get the shared insightface app (lazy-loaded on first use)."""
+        if self._app is None:
+            self._app = _get_insightface_app()
+        return self._app
 
     def detect_faces(
         self, frame: np.ndarray
     ) -> Tuple[List[Tuple[int, int, int, int]], np.ndarray]:
         """
         Detect faces in a frame.
-        
+
         Args:
             frame: BGR image from OpenCV (numpy array)
-            
+
         Returns:
             Tuple of (face_locations, rgb_frame)
             face_locations: List of (top, right, bottom, left) tuples
-            rgb_frame: The RGB-converted, possibly scaled frame
+                            (backward-compatible format)
+            rgb_frame: The RGB-converted frame
         """
-        # Convert BGR to RGB (face_recognition uses RGB)
+        # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Scale down for faster detection
+        # Scale down for performance if needed
         if self.scale_factor < 1.0:
             small_frame = cv2.resize(
                 rgb_frame, (0, 0),
                 fx=self.scale_factor,
-                fy=self.scale_factor
+                fy=self.scale_factor,
             )
         else:
             small_frame = rgb_frame
 
-        # Detect face locations
-        upsample = 1
-        face_locations_raw = face_recognition.face_locations(
-            small_frame, model=self.model, number_of_times_to_upsample=upsample
-        )
+        # Run SCRFD detection
+        app = self._get_app()
+        faces = app.get(small_frame)
 
-        # Scale locations back to original size
-        if self.scale_factor < 1.0 and face_locations_raw:
-            inv_scale = 1.0 / self.scale_factor
-            face_locations_raw = [
-                (
-                    int(top * inv_scale),
-                    int(right * inv_scale),
-                    int(bottom * inv_scale),
-                    int(left * inv_scale),
-                )
-                for top, right, bottom, left in face_locations_raw
-            ]
+        # Extract bounding boxes and scale back
+        face_locations = []
+        for face in faces:
+            bbox = face.bbox.astype(int)  # [x1, y1, x2, y2]
+            x1, y1, x2, y2 = bbox
 
-        # Filter out too-small faces
-        # Format: (top, right, bottom, left)
-        # Height = bottom - top, Width = right - left
-        face_locations = [
-            loc for loc in face_locations_raw
-            if (loc[2] - loc[0]) >= self.min_face_size
-            and (loc[1] - loc[3]) >= self.min_face_size
-        ]
+            # Scale back to original frame size
+            if self.scale_factor < 1.0:
+                inv_scale = 1.0 / self.scale_factor
+                x1 = int(x1 * inv_scale)
+                y1 = int(y1 * inv_scale)
+                x2 = int(x2 * inv_scale)
+                y2 = int(y2 * inv_scale)
+
+            # Filter out too-small faces
+            face_w = x2 - x1
+            face_h = y2 - y1
+            if face_w < self.min_face_size or face_h < self.min_face_size:
+                continue
+
+            # Convert to (top, right, bottom, left) format for backward compat
+            face_locations.append((y1, x2, y2, x1))
 
         self._frame_count += 1
-        
-        # Debug logging (uncomment for debugging)
-        # if self._frame_count % 100 == 0:
-        #     logger.debug(
-        #         f"Detector stats: frame={self._frame_count}, "
-        #         f"raw={len(face_locations_raw) if 'face_locations_raw' in dir() else 0}, "
-        #         f"final={len(face_locations)}"
-        #     )
-
         return face_locations, rgb_frame
+
+    def detect_faces_with_embeddings(
+        self, frame: np.ndarray
+    ) -> Tuple[List[Tuple[int, int, int, int]], List, np.ndarray]:
+        """
+        Detect faces AND extract ArcFace embeddings in a SINGLE pass.
+
+        This is the most efficient method — runs insightface once on the
+        full-resolution frame, returning both bounding boxes and 512-d
+        embeddings. No separate crop-and-re-detect needed.
+
+        Args:
+            frame: BGR image from OpenCV (numpy array)
+
+        Returns:
+            Tuple of (face_locations, embeddings, rgb_frame)
+            face_locations: List of (top, right, bottom, left)
+            embeddings: List of 512-d numpy arrays (or None per face)
+            rgb_frame: The RGB-converted frame
+        """
+        # Convert BGR to RGB
+        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+
+        # Run on FULL resolution for better embedding quality
+        app = self._get_app()
+        faces = app.get(rgb_frame)
+
+        face_locations = []
+        embeddings = []
+        for face in faces:
+            bbox = face.bbox.astype(int)
+            x1, y1, x2, y2 = bbox
+
+            # Filter too-small faces
+            face_w = x2 - x1
+            face_h = y2 - y1
+            if face_w < self.min_face_size or face_h < self.min_face_size:
+                continue
+
+            # Convert to (top, right, bottom, left)
+            face_locations.append((y1, x2, y2, x1))
+
+            # Extract embedding (already computed by app.get)
+            if hasattr(face, 'embedding') and face.embedding is not None:
+                embeddings.append(face.embedding)
+            else:
+                embeddings.append(None)
+
+        self._frame_count += 1
+        return face_locations, embeddings, rgb_frame
+
+    def detect_faces_raw(
+        self, frame_rgb: np.ndarray
+    ) -> list:
+        """
+        Detect faces and return raw insightface Face objects.
+        These contain bbox, landmarks, and embedding if the recognition
+        model is loaded.
+
+        Args:
+            frame_rgb: RGB image (numpy array)
+
+        Returns:
+            List of insightface Face objects
+        """
+        app = self._get_app()
+        faces = app.get(frame_rgb)
+        return faces
 
     def extract_face_crop(
         self,
@@ -114,12 +242,12 @@ class FaceDetector:
     ) -> np.ndarray:
         """
         Extract a cropped face from a frame with padding.
-        
+
         Args:
             frame: Original frame (BGR)
             location: (top, right, bottom, left) bounding box
             padding: Extra pixels around the face
-            
+
         Returns:
             Cropped face image (BGR)
         """
@@ -139,7 +267,7 @@ class FaceDetector:
     ) -> float:
         """
         Assess face image quality (0.0 to 1.0).
-        
+
         Considers:
         - Face size (larger = better)
         - Blur level (sharper = better)
@@ -173,7 +301,7 @@ class FaceDetector:
     ) -> Tuple[List[Tuple[int, int, int, int]], np.ndarray]:
         """
         Detect faces in a pre-cropped region (e.g. from YOLO person bbox).
-        Runs at full resolution with extra upsampling for maximum sensitivity.
+        Runs at full resolution for maximum sensitivity.
 
         Args:
             crop: BGR image crop (numpy array)
@@ -186,16 +314,21 @@ class FaceDetector:
 
         rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
 
-        # Run at full resolution (crop is already zoomed in, so 1 upsample is sufficient)
-        face_locations = face_recognition.face_locations(
-            rgb_crop, model=self.model, number_of_times_to_upsample=1
-        )
+        # Run detection on the crop
+        app = self._get_app()
+        faces = app.get(rgb_crop)
 
-        # Filter out impossibly small faces
-        face_locations = [
-            loc for loc in face_locations
-            if (loc[2] - loc[0]) >= 15 and (loc[1] - loc[3]) >= 15
-        ]
+        face_locations = []
+        for face in faces:
+            bbox = face.bbox.astype(int)
+            x1, y1, x2, y2 = bbox
+
+            # Filter impossibly small faces
+            if (y2 - y1) < 15 or (x2 - x1) < 15:
+                continue
+
+            # Convert to (top, right, bottom, left)
+            face_locations.append((y1, x2, y2, x1))
 
         return face_locations, rgb_crop
 
@@ -227,6 +360,17 @@ class FaceDetector:
         head_bottom = min(h, head_bottom)
 
         return head_top, head_right, head_bottom, head_left
+
+    @staticmethod
+    def location_to_xyxy(location: Tuple[int, int, int, int]) -> Tuple[int, int, int, int]:
+        """Convert (top, right, bottom, left) to (x1, y1, x2, y2)."""
+        top, right, bottom, left = location
+        return left, top, right, bottom
+
+    @staticmethod
+    def xyxy_to_location(x1: int, y1: int, x2: int, y2: int) -> Tuple[int, int, int, int]:
+        """Convert (x1, y1, x2, y2) to (top, right, bottom, left)."""
+        return y1, x2, y2, x1
 
     @property
     def frames_processed(self) -> int:

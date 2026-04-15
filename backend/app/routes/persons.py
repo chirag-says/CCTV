@@ -4,7 +4,6 @@ Persons Management API Routes.
 
 import cv2
 import numpy as np
-import face_recognition
 import tempfile
 import os
 from fastapi import APIRouter, Depends, Query, UploadFile, File, HTTPException
@@ -86,7 +85,7 @@ async def upload_face_encoding(
 ):
     """
     Upload a face image for a person.
-    Generates face encoding and stores it.
+    Generates ArcFace embedding (512-d) using SCRFD detection + insightface.
     """
     # Validate person exists
     PersonService.get_person(person_id)
@@ -103,33 +102,41 @@ async def upload_face_encoding(
     if image is None:
         raise ValidationException("Failed to decode image")
 
-    # Convert to RGB for face_recognition
+    # Convert to RGB for insightface
     rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
 
-    # Detect faces
-    face_locations = face_recognition.face_locations(rgb_image)
+    # Use insightface (SCRFD + ArcFace) for detection and embedding
+    from app.vision.detector import _get_insightface_app
 
-    if not face_locations:
+    app = _get_insightface_app()
+    faces = app.get(rgb_image)
+
+    if not faces:
         raise ValidationException("No face detected in the uploaded image")
 
-    if len(face_locations) > 1:
+    if len(faces) > 1:
         raise ValidationException(
-            f"Multiple faces ({len(face_locations)}) detected. "
+            f"Multiple faces ({len(faces)}) detected. "
             "Please upload an image with exactly one face."
         )
 
-    # Generate encoding
-    encodings = face_recognition.face_encodings(rgb_image, face_locations, num_jitters=3)
+    face = faces[0]
 
-    if not encodings:
-        raise ValidationException("Failed to generate face encoding")
+    # Extract ArcFace embedding (512-d)
+    if face.embedding is None:
+        raise ValidationException("Failed to generate face embedding")
 
-    encoding = encodings[0]
+    encoding = face.embedding  # 512-d numpy array
+
+    # Extract face location for quality assessment
+    bbox = face.bbox.astype(int)
+    x1, y1, x2, y2 = bbox
+    face_location = (y1, x2, y2, x1)  # Convert to (top, right, bottom, left)
 
     # Assess quality
     from app.vision.detector import FaceDetector
     detector = FaceDetector()
-    quality = detector.assess_face_quality(image, face_locations[0])
+    quality = detector.assess_face_quality(image, face_location)
 
     # Store encoding
     result = PersonService.add_face_encoding(
@@ -148,10 +155,10 @@ async def upload_face_encoding(
         "encoding": result,
         "quality": quality,
         "face_location": {
-            "top": face_locations[0][0],
-            "right": face_locations[0][1],
-            "bottom": face_locations[0][2],
-            "left": face_locations[0][3],
+            "top": face_location[0],
+            "right": face_location[1],
+            "bottom": face_location[2],
+            "left": face_location[3],
         },
     }
 

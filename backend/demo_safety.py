@@ -133,14 +133,15 @@ print(f"\nDemo thresholds (reduced for testing):")
 for k, v in DEMO_CONFIG.items():
     print(f"  {k}: {v}")
 
-# ── Face detection (using face_recognition) ───────────────────────────────────
+# -- Face detection (using SCRFD via insightface) --------
 try:
-    import face_recognition
+    from app.vision.detector import FaceDetector
+    _demo_detector = FaceDetector()
     FACE_DETECTION_AVAILABLE = True
-    print("✅ Face detection available (face_recognition)")
-except ImportError:
+    print("OK  Face detection available (SCRFD via insightface)")
+except Exception as e:
     FACE_DETECTION_AVAILABLE = False
-    print("⚠  face_recognition not available — using Haar cascade fallback")
+    print(f"!!  SCRFD not available ({e}) -- using Haar cascade fallback")
     face_cascade = cv2.CascadeClassifier(
         cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
     )
@@ -149,11 +150,7 @@ except ImportError:
 def detect_faces(frame):
     """Detect faces and return list of (top, right, bottom, left) + centroids."""
     if FACE_DETECTION_AVAILABLE:
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        small = cv2.resize(rgb, (0, 0), fx=0.5, fy=0.5)
-        locations = face_recognition.face_locations(small, model="hog")
-        # Scale back up
-        locations = [(t*2, r*2, b*2, l*2) for t, r, b, l in locations]
+        locations, _ = _demo_detector.detect_faces(frame)
     else:
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         faces = face_cascade.detectMultiScale(gray, 1.3, 5, minSize=(30, 30))

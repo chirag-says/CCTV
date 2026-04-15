@@ -10,7 +10,9 @@ import AppShell from '@/components/AppShell';
 import StatCard from '@/components/StatCard';
 import HourlyChart from '@/components/HourlyChart';
 import OccupancyRing from '@/components/OccupancyRing';
-import api from '@/lib/api';
+import ActivityHeatmap from '@/components/ActivityHeatmap';
+import api, { API_BASE } from '@/lib/api';
+import { useToast } from '@/lib/ToastContext';
 import { EntryIcon, ExitIcon, UserIcon, ClockIcon, AlertIcon } from '@/components/Icons';
 
 export default function AnalyticsPage() {
@@ -19,6 +21,8 @@ export default function AnalyticsPage() {
     const [reportType, setReportType] = useState('daily');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
+    const [exporting, setExporting] = useState(false);
+    const { showToast } = useToast();
 
     useEffect(() => {
         loadAnalytics();
@@ -58,6 +62,39 @@ export default function AnalyticsPage() {
                                 {t.charAt(0).toUpperCase() + t.slice(1)}
                             </button>
                         ))}
+                        <div style={{ display: 'flex', gap: '6px', marginLeft: '8px', borderLeft: '1px solid var(--border-color)', paddingLeft: '8px' }}>
+                            {['csv', 'json'].map(fmt => (
+                                <button
+                                    key={fmt}
+                                    className="btn btn-sm btn-secondary"
+                                    disabled={exporting}
+                                    onClick={async () => {
+                                        setExporting(true);
+                                        try {
+                                            const token = api.getToken();
+                                            const url = `${API_BASE}/api/analytics/export?format=${fmt}&type=events&limit=5000`;
+                                            const resp = await fetch(url, {
+                                                headers: token ? { Authorization: `Bearer ${token}` } : {},
+                                            });
+                                            if (!resp.ok) throw new Error('Export failed');
+                                            const blob = await resp.blob();
+                                            const a = document.createElement('a');
+                                            a.href = URL.createObjectURL(blob);
+                                            a.download = `sentinel_analytics.${fmt}`;
+                                            a.click();
+                                            URL.revokeObjectURL(a.href);
+                                            showToast({ type: 'success', message: `Exported as ${fmt.toUpperCase()}` });
+                                        } catch (e) {
+                                            showToast({ type: 'error', message: e.message || 'Export failed' });
+                                        } finally {
+                                            setExporting(false);
+                                        }
+                                    }}
+                                >
+                                    {exporting ? '...' : `⬇ ${fmt.toUpperCase()}`}
+                                </button>
+                            ))}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -129,6 +166,11 @@ export default function AnalyticsPage() {
                                 </div>
                             )}
                         </div>
+                    </div>
+
+                    {/* Activity Heatmap */}
+                    <div style={{ marginTop: '20px' }}>
+                        <ActivityHeatmap />
                     </div>
                 </>
             )}

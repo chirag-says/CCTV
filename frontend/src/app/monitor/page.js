@@ -7,7 +7,7 @@
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import AppShell from '@/components/AppShell';
-import api from '@/lib/api';
+import api, { API_BASE } from '@/lib/api';
 import {
     GridIcon,
     SquareIcon,
@@ -22,12 +22,17 @@ import {
     LiveIcon,
 } from '@/components/Icons';
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 
 export default function MonitorPage() {
     const [cameras, setCameras] = useState([]);
     const [selectedCamera, setSelectedCamera] = useState(null);
-    const [layout, setLayout] = useState('single');
+    const [layout, setLayout] = useState(() => {
+        if (typeof window !== 'undefined') {
+            return localStorage.getItem('sentinel-monitor-layout') || 'single';
+        }
+        return 'single';
+    });
     /**
      * presenceLog: Array of presence entries, each representing a person's
      * visit to the camera view. One entry per person per visit.
@@ -225,23 +230,25 @@ export default function MonitorPage() {
                         <h1>Live Monitor</h1>
                         <p>{onlineCameras.length} of {cameras.length} cameras online</p>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px' }}>
-                        <button
-                            className={`btn btn-sm ${layout === 'grid' ? 'btn-primary' : 'btn-secondary'}`}
-                            onClick={() => setLayout('grid')}
-                            id="layout-grid"
-                            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-                        >
-                            <GridIcon size={14} /> Grid
-                        </button>
-                        <button
-                            className={`btn btn-sm ${layout === 'single' ? 'btn-primary' : 'btn-secondary'}`}
-                            onClick={() => setLayout('single')}
-                            id="layout-single"
-                            style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
-                        >
-                            <SquareIcon size={14} /> Single
-                        </button>
+                    <div style={{ display: 'flex', gap: '6px' }}>
+                        {[
+                            { key: 'single', label: '1×1', icon: <SquareIcon size={14} /> },
+                            { key: '2x2', label: '2×2', icon: <GridIcon size={14} /> },
+                            { key: '3x3', label: '3×3', icon: <GridIcon size={12} /> },
+                        ].map(opt => (
+                            <button
+                                key={opt.key}
+                                className={`btn btn-sm ${layout === opt.key ? 'btn-primary' : 'btn-secondary'}`}
+                                onClick={() => {
+                                    setLayout(opt.key);
+                                    localStorage.setItem('sentinel-monitor-layout', opt.key);
+                                }}
+                                id={`layout-${opt.key}`}
+                                style={{ display: 'flex', alignItems: 'center', gap: '5px', minWidth: 'auto' }}
+                            >
+                                {opt.icon} {opt.label}
+                            </button>
+                        ))}
                     </div>
                 </div>
             </div>
@@ -258,19 +265,39 @@ export default function MonitorPage() {
                         <div className="empty-state-text">Add a camera from the Cameras page to start monitoring.</div>
                     </div>
                 </div>
-            ) : layout === 'grid' ? (
+            ) : layout === '2x2' ? (
                 <div style={{
                     display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-                    gap: '16px',
+                    gridTemplateColumns: 'repeat(2, 1fr)',
+                    gap: '14px',
                 }}>
-                    {cameras.map((camera) => (
+                    {cameras.slice(0, 4).map((camera) => (
                         <CameraFeedCard
                             key={camera.id}
                             camera={camera}
                             onClick={() => {
                                 setSelectedCamera(camera);
                                 setLayout('single');
+                                localStorage.setItem('sentinel-monitor-layout', 'single');
+                            }}
+                        />
+                    ))}
+                </div>
+            ) : layout === '3x3' ? (
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(3, 1fr)',
+                    gap: '12px',
+                }}>
+                    {cameras.slice(0, 9).map((camera) => (
+                        <CameraFeedCard
+                            key={camera.id}
+                            camera={camera}
+                            compact
+                            onClick={() => {
+                                setSelectedCamera(camera);
+                                setLayout('single');
+                                localStorage.setItem('sentinel-monitor-layout', 'single');
                             }}
                         />
                     ))}
@@ -505,7 +532,7 @@ export default function MonitorPage() {
     );
 }
 
-function CameraFeedCard({ camera, large = false, onClick }) {
+function CameraFeedCard({ camera, large = false, compact = false, onClick }) {
     const imgRef = useRef(null);
     const [streamStatus, setStreamStatus] = useState('connecting');
 
@@ -659,16 +686,25 @@ function CameraFeedCard({ camera, large = false, onClick }) {
                     </div>
                 )}
             </div>
-            <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                <div>
-                    <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{camera.name}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{camera.location}</div>
+            {compact ? (
+                <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>{camera.name}</div>
+                    <span className={`badge ${camera.status}`} style={{ fontSize: '0.625rem', padding: '2px 6px' }}>
+                        {camera.status}
+                    </span>
                 </div>
-                <span className={`badge ${camera.status}`}>
-                    {camera.status === 'online' && <span className="badge-dot"></span>}
-                    {camera.status}
-                </span>
-            </div>
+            ) : (
+                <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{camera.name}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{camera.location}</div>
+                    </div>
+                    <span className={`badge ${camera.status}`}>
+                        {camera.status === 'online' && <span className="badge-dot"></span>}
+                        {camera.status}
+                    </span>
+                </div>
+            )}
         </div>
     );
 }

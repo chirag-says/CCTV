@@ -7,22 +7,33 @@
 
 import { useState, useEffect } from 'react';
 import AppShell from '@/components/AppShell';
-import api from '@/lib/api';
+import api, { API_BASE } from '@/lib/api';
+import { useToast } from '@/lib/ToastContext';
 import { UserIcon, CameraIcon, CheckIcon, XIcon, CheckCircleIcon, UnknownFaceIcon } from '@/components/Icons';
-
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export default function UnknownFacesPage() {
     const [unknowns, setUnknowns] = useState([]);
+    const [suggestions, setSuggestions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [showEnrollModal, setShowEnrollModal] = useState(false);
     const [selectedUnknown, setSelectedUnknown] = useState(null);
     const [enrollData, setEnrollData] = useState({ name: '', role: 'visitor', department: '', phone: '', email: '' });
-
+    const { showToast } = useToast();
+    
     useEffect(() => {
         loadUnknowns();
+        loadSuggestions();
     }, []);
+
+    async function loadSuggestions() {
+        try {
+            const result = await api.request('/api/unknown-faces/suggestions?min_occurrences=3');
+            setSuggestions(result.suggestions || []);
+        } catch {
+            // Silently fail — suggestions are a bonus feature
+        }
+    }
 
     async function loadUnknowns() {
         setLoading(true);
@@ -50,7 +61,7 @@ export default function UnknownFacesPage() {
             setShowEnrollModal(false);
             setUnknowns(unknowns.filter(u => u.id !== selectedUnknown.id));
         } catch (e) {
-            alert(e.message);
+            showToast({ type: 'error', message: e.message });
         }
     }
 
@@ -60,7 +71,7 @@ export default function UnknownFacesPage() {
             await api.dismissUnknownFace(unknownId);
             setUnknowns(unknowns.filter(u => u.id !== unknownId));
         } catch (e) {
-            alert(e.message);
+            showToast({ type: 'error', message: e.message });
         }
     }
 
@@ -114,6 +125,67 @@ export default function UnknownFacesPage() {
                         </div>
                     </div>
 
+                    {/* Enrollment Suggestions */}
+                    {suggestions.length > 0 && (
+                        <div className="card" style={{
+                            marginBottom: '20px',
+                            borderLeft: '4px solid var(--warning)',
+                            background: 'var(--bg-card)',
+                        }}>
+                            <div className="card-header" style={{ paddingBottom: '8px' }}>
+                                <div>
+                                    <h3 className="card-title" style={{ color: 'var(--warning)' }}>
+                                        ⭐ Frequently Seen — Consider Enrolling
+                                    </h3>
+                                    <div className="card-subtitle">
+                                        These faces have been seen {'>'}3 times. They may be regulars.
+                                    </div>
+                                </div>
+                            </div>
+                            <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', padding: '0 0 4px' }}>
+                                {suggestions.map(s => {
+                                    const imgUrl = s.context_url || s.snapshot_url;
+                                    return (
+                                        <div key={s.id} style={{
+                                            display: 'flex',
+                                            alignItems: 'center',
+                                            gap: '10px',
+                                            padding: '8px 12px',
+                                            background: 'var(--bg-tertiary)',
+                                            borderRadius: '10px',
+                                            border: '1px solid rgba(245, 158, 11, 0.15)',
+                                        }}>
+                                            {imgUrl ? (
+                                                <img src={`${API_BASE}${imgUrl}`} alt="Unknown" style={{
+                                                    width: 36, height: 36, borderRadius: '8px', objectFit: 'cover',
+                                                }} />
+                                            ) : (
+                                                <div style={{
+                                                    width: 36, height: 36, borderRadius: '8px',
+                                                    background: 'var(--bg-secondary)',
+                                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                }}>
+                                                    <UnknownFaceIcon size={16} />
+                                                </div>
+                                            )}
+                                            <div>
+                                                <div style={{ fontSize: '0.75rem', fontWeight: 600 }}>Seen {s.occurrence}x</div>
+                                                <div style={{ fontSize: '0.625rem', color: 'var(--text-muted)' }}>ID: {s.id.slice(0, 8)}</div>
+                                            </div>
+                                            <button
+                                                className="btn btn-sm btn-primary"
+                                                style={{ marginLeft: '4px', minWidth: 'auto', padding: '4px 10px', fontSize: '0.6875rem' }}
+                                                onClick={() => openEnrollModal(s)}
+                                            >
+                                                Enroll
+                                            </button>
+                                        </div>
+                                    );
+                                })}
+                            </div>
+                        </div>
+                    )}
+
                     {/* Unknown Faces Grid */}
                     {unknowns.length > 0 ? (
                         <div className="unknown-faces-grid">
@@ -152,8 +224,8 @@ export default function UnknownFacesPage() {
                                         <div className="unknown-face-info">
                                             <div className="unknown-face-meta">
                                                 <span style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><CameraIcon size={14} /> {unknown.camera_name || unknown.camera_id}</span>
-                                                <span className="badge pending">
-                                                    {unknown.occurrence}× seen
+                                                <span className="badge pending" style={{ whiteSpace: 'nowrap' }}>
+                                                    {unknown.occurrence}x seen
                                                 </span>
                                             </div>
                                             <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
