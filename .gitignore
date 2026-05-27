@@ -22,9 +22,12 @@ ENV/
 # ===========================
 # Standard pretrained models (auto-downloaded by ultralytics)
 yolov8*.pt
+yolov11*.pt
 
-# Custom trained models are tracked via Git LFS (see .gitattributes)
-# Do NOT add *.pt here — license_plate_detector.pt needs to be in the repo
+# Large custom model files (use Git LFS or download scripts for these)
+*.pt
+# Exception: small production models can be re-added with git add -f
+# e.g. git add -f backend/models/license_plate_detector.pt
 
 # Other model formats (if generated)
 *.pth
@@ -33,6 +36,22 @@ yolov8*.pt
 *.h5
 *.pb
 *.savedmodel/
+
+# Training runs & outputs (never commit these)
+backend/training/
+training/
+runs/
+wandb/
+
+# ===========================
+# Video Files (too large for GitHub)
+# ===========================
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.wmv
+*.flv
 
 # ===========================
 # Datasets & Training Data
