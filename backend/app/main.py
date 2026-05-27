@@ -68,7 +68,18 @@ def handle_pipeline_event(event: dict):
     Bridges sync pipeline → async WebSocket.
     Also persists events to PostgreSQL.
     """
-    logger.info(f"📡 Event: {event.get('event_type', 'unknown')} — {event.get('person_name', 'N/A')}")
+    global _main_loop
+    event_type = event.get('event_type', 'unknown')
+    logger.info(f"📡 Event: {event_type} — {event.get('person_name', 'N/A')}")
+
+    # vehicle_count events are high-frequency status updates — broadcast only, don't persist
+    if event_type == "vehicle_count":
+        if _main_loop:
+            try:
+                asyncio.run_coroutine_threadsafe(_broadcast_event(event), _main_loop)
+            except Exception:
+                pass
+        return
 
     # Persist to PostgreSQL
     try:
@@ -77,11 +88,29 @@ def handle_pipeline_event(event: dict):
 
         db = SessionLocal()
         try:
+            camera_id = event.get("camera_id", "")
+
+            # Browser cameras don't have a DB record — create one on-the-fly
+            if camera_id.startswith("bc_"):
+                from app.db.models import Camera
+                existing = db.query(Camera).filter(Camera.id == camera_id).first()
+                if not existing:
+                    cam = Camera(
+                        id=camera_id,
+                        name="Remote Camera",
+                        location="Browser",
+                        stream_url=f"browser:{camera_id}",
+                        camera_type="browser",
+                        is_active=True,
+                    )
+                    db.add(cam)
+                    db.flush()
+
             # Create detection event
             db_event = DetectionEvent(
                 id=str(uuid4()),
                 person_id=event.get("person_id"),
-                camera_id=event.get("camera_id", ""),
+                camera_id=camera_id,
                 event_type=event.get("event_type", "detection"),
                 subtype=event.get("subtype"),
                 confidence=event.get("confidence", 0.0),
@@ -134,7 +163,6 @@ def handle_pipeline_event(event: dict):
         logger.error(f"Failed to persist event: {e}")
 
     # Broadcast via WebSocket (fire-and-forget async)
-    global _main_loop
     if _main_loop:
         try:
             asyncio.run_coroutine_threadsafe(_broadcast_event(event), _main_loop)
@@ -146,6 +174,10 @@ def handle_unknown_face(data: dict):
     """
     Called when an unknown face (or body-only person) is detected.
     Persists to unknown_faces table in PostgreSQL and broadcasts event.
+
+    DB-level dedup: compares incoming face encoding against all existing
+    pending unknown faces. If a similar face exists (cosine distance < threshold),
+    increments occurrence count instead of creating a duplicate.
     """
     detection_type = data.get("detection_type", "face")
     logger.info(
@@ -154,6 +186,7 @@ def handle_unknown_face(data: dict):
 
     try:
         import pickle
+        import numpy as np
         from uuid import uuid4
         from datetime import datetime, timezone
 
@@ -161,35 +194,111 @@ def handle_unknown_face(data: dict):
         try:
             # Handle encoding: may be None for body-only detections
             encoding_bytes = None
+            encoding_array = None
             if data.get("encoding") is not None:
-                encoding_bytes = pickle.dumps(data["encoding"])
+                encoding_array = data["encoding"]
+                encoding_bytes = pickle.dumps(encoding_array)
 
             ts = datetime.fromisoformat(data["timestamp"]) if data.get("timestamp") else datetime.now(timezone.utc)
+            camera_id = data.get("camera_id", "")
 
-            unknown = UnknownFace(
-                id=data.get("unknown_id", str(uuid4())),
-                camera_id=data.get("camera_id", ""),
-                snapshot_url=data.get("snapshot_path", ""),
-                full_frame=data.get("full_frame_path", ""),
-                face_encoding=encoding_bytes,
-                occurrence=1,
-                first_seen=ts,
-                last_seen=ts,
-                status="pending",
-                created_at=datetime.now(timezone.utc),
-            )
-            db.add(unknown)
-            db.commit()
+            # Browser cameras don't have a DB record — create one on-the-fly
+            if camera_id.startswith("bc_"):
+                from app.db.models import Camera
+                existing = db.query(Camera).filter(Camera.id == camera_id).first()
+                if not existing:
+                    cam = Camera(
+                        id=camera_id,
+                        name="Remote Camera",
+                        location="Browser",
+                        stream_url=f"browser:{camera_id}",
+                        camera_type="browser",
+                        is_active=True,
+                    )
+                    db.add(cam)
+                    db.flush()
+
+            # ── DB-level dedup: check existing pending unknowns ──
+            matched_existing = None
+            if encoding_array is not None:
+                # Normalize the incoming encoding
+                norm_q = np.linalg.norm(encoding_array)
+                if norm_q > 0:
+                    enc_normalized = encoding_array / norm_q
+
+                    # Query all pending unknown faces that have encodings
+                    pending_faces = (
+                        db.query(UnknownFace)
+                        .filter(
+                            UnknownFace.status == "pending",
+                            UnknownFace.face_encoding.isnot(None),
+                        )
+                        .all()
+                    )
+
+                    best_match = None
+                    best_distance = float("inf")
+                    dedup_threshold = settings.UNKNOWN_SIMILARITY_THRESHOLD
+
+                    for face in pending_faces:
+                        try:
+                            stored_enc = pickle.loads(face.face_encoding)
+                            norm_s = np.linalg.norm(stored_enc)
+                            if norm_s > 0:
+                                stored_normalized = stored_enc / norm_s
+                                similarity = float(np.dot(enc_normalized, stored_normalized))
+                                distance = 1.0 - similarity
+                                if distance < best_distance:
+                                    best_distance = distance
+                                    best_match = face
+                        except Exception:
+                            continue
+
+                    if best_match is not None and best_distance < dedup_threshold:
+                        matched_existing = best_match
+                        logger.info(
+                            f"🔄 Unknown face matched existing DB entry "
+                            f"{best_match.id[:12]}... (distance={best_distance:.4f}, "
+                            f"occ={best_match.occurrence} → {best_match.occurrence + 1})"
+                        )
+
+            if matched_existing:
+                # Update existing entry — increment occurrence, update last_seen
+                matched_existing.occurrence += 1
+                matched_existing.last_seen = ts
+                db.commit()
+                logger.info(
+                    f"✅ Updated unknown face {matched_existing.id[:12]}... "
+                    f"occurrence={matched_existing.occurrence}"
+                )
+            else:
+                # Create new unknown face entry
+                unknown = UnknownFace(
+                    id=data.get("unknown_id", str(uuid4())),
+                    camera_id=camera_id,
+                    snapshot_url=data.get("snapshot_path", ""),
+                    full_frame=data.get("full_frame_path", ""),
+                    face_encoding=encoding_bytes,
+                    occurrence=1,
+                    first_seen=ts,
+                    last_seen=ts,
+                    status="pending",
+                    created_at=datetime.now(timezone.utc),
+                )
+                db.add(unknown)
+                db.commit()
+                logger.info(f"✅ New unknown face persisted: {unknown.id[:12]}...")
+
         except Exception as e:
             db.rollback()
-            logger.error(f"Failed to persist unknown face: {e}")
+            logger.error(f"Failed to persist unknown face: {e}", exc_info=True)
         finally:
             db.close()
 
     except Exception as e:
         logger.error(f"Failed to persist unknown face: {e}")
 
-    # Broadcast
+    # Broadcast only for genuinely new unknowns (not deduped updates)
     handle_pipeline_event({
         "event_type": "unknown",
         "camera_id": data.get("camera_id", ""),
@@ -291,6 +400,9 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── Register Routes ───────────────────────────────────────────
 from app.routes import auth, persons, cameras, events, unknown_faces, analytics, movements, video_analysis, search, retention
+from app.routes import browser_camera
+from app.routes import share_camera_page
+from app.routes import reid as reid_route
 
 app.include_router(auth.router)
 app.include_router(persons.router)
@@ -302,6 +414,9 @@ app.include_router(movements.router)
 app.include_router(video_analysis.router)
 app.include_router(search.router)
 app.include_router(retention.router)
+app.include_router(browser_camera.router)
+app.include_router(share_camera_page.router)
+app.include_router(reid_route.router)
 
 
 # ── Health Check ──────────────────────────────────────────────

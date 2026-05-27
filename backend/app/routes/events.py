@@ -94,7 +94,20 @@ async def live_events(websocket: WebSocket):
     """
     WebSocket endpoint for live detection events.
     Broadcasts entry/exit/detection/unknown events in real-time.
+    
+    Accepts optional JWT token via query parameter for authentication:
+      ws://host/api/events/live?token=<jwt>
     """
+    # Optional: validate JWT token from query param
+    token = websocket.query_params.get("token")
+    if token:
+        try:
+            from app.core.security import verify_token
+            verify_token(token)
+        except Exception:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+
     await ws_manager.connect_events(websocket)
     try:
         while True:

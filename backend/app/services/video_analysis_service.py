@@ -257,6 +257,7 @@ class VideoAnalysisJob:
                         proximity_px=settings.TRAFFIC_PROXIMITY_PX,
                         alert_cooldown_sec=settings.TRAFFIC_ALERT_COOLDOWN_SEC,
                         on_alert=lambda a: self._handle_alert("traffic", a),
+                        on_vehicle_count=self._handle_vehicle_count,
                     )
             except Exception as e:
                 logger.warning(f"Traffic monitor not available: {e}")
@@ -327,21 +328,30 @@ class VideoAnalysisJob:
                     except Exception:
                         pass
 
-                # ── ANPR ───────────────────────────────────────
+                # ── Traffic Monitor (must run BEFORE ANPR to provide pre-detected vehicles) ──
+                predetected_vehicles = None
+                if traffic_monitor:
+                    try:
+                        traffic_monitor.submit_frame(clean_frame, camera_id)
+                        # Grab cached vehicle detections for ANPR to reuse
+                        with traffic_monitor._detections_lock:
+                            vehicles = traffic_monitor._last_detections.get("vehicles", [])
+                            if vehicles:
+                                predetected_vehicles = list(vehicles)
+                    except Exception:
+                        pass
+
+                # ── ANPR (uses pre-detected vehicles from TrafficMonitor) ──
                 if plate_recognizer:
                     try:
-                        submitted = plate_recognizer.submit_frame(clean_frame, camera_id)
+                        submitted = plate_recognizer.submit_frame(
+                            clean_frame, camera_id,
+                            predetected_vehicles=predetected_vehicles,
+                        )
                         if submitted and frame_count % 100 == 0:
                             logger.debug(f"ANPR frame submitted at frame {frame_count}")
                     except Exception as e:
                         logger.warning(f"ANPR submit error at frame {frame_count}: {e}")
-
-                # ── Traffic Monitor ────────────────────────────
-                if traffic_monitor:
-                    try:
-                        traffic_monitor.submit_frame(clean_frame, camera_id)
-                    except Exception:
-                        pass
 
                 # ── Face Detection ─────────────────────────────
                 try:
@@ -465,6 +475,12 @@ class VideoAnalysisJob:
 
                 # Save key frames at intervals (every ~5 seconds of video)
                 if frame_count % int(fps * 5) == 0:
+                    # Draw generic bounding boxes on the frame before saving so user sees them!
+                    if traffic_monitor:
+                        try:
+                            frame = traffic_monitor.draw_detections(frame)
+                        except Exception:
+                            pass
                     self._save_key_frame(frame, frame_count, video_timestamp)
 
             # ── Finalize ──────────────────────────────────────────
@@ -492,6 +508,11 @@ class VideoAnalysisJob:
             if traffic_monitor:
                 try:
                     traffic_monitor.shutdown()
+                    logger.info(
+                        f"Traffic monitor finished: "
+                        f"{traffic_monitor._total_inferences} inferences, "
+                        f"last_vehicles={traffic_monitor._last_vehicle_count}"
+                    )
                 except Exception:
                     pass
             if attribute_recognizer:
@@ -519,7 +540,10 @@ class VideoAnalysisJob:
             # Build final results
             self.result.detected_persons = list(self._person_tracker.values())
             self.result.unknown_persons = list(self._unknown_tracker.values())
-            self.result.detected_vehicles = list(self._plate_tracker.values())
+            self.result.detected_vehicles = [
+                {k: v for k, v in veh.items() if not k.startswith("_")}
+                for veh in self._plate_tracker.values()
+            ]
 
             # Sort timeline by frame number
             self.result.events_timeline.sort(key=lambda e: e.get("frame", 0))
@@ -581,6 +605,124 @@ class VideoAnalysisJob:
                 "frame": self._current_frame,  # Track which frame this was
             })
 
+    def _handle_vehicle_count(self, count_data: dict):
+        """Track individual vehicles detected by TrafficMonitor (custom YOLO model).
+        Now includes vehicle type, color, entry time, exit time per vehicle.
+        
+        Uses IoU (bounding box overlap) + centroid distance for robust deduplication.
+        A vehicle is matched if:
+          - Same type AND (IoU > 0.2 OR centroid distance < 250px)
+          - OR same type+color AND centroid distance < 350px
+        This prevents the same bike from being counted 20+ times.
+        """
+        timestamp = count_data.get("timestamp", datetime.now(timezone.utc).isoformat())
+        video_time = self._current_frame  # Frame number for timeline
+
+        for detail in count_data.get("vehicle_details", []):
+            vtype = detail.get("type", "vehicle")
+            color = detail.get("color", "Unknown")
+            bbox = detail.get("bbox", {})
+            conf = detail.get("confidence", 0.0)
+
+            # Current detection bbox
+            x1 = bbox.get("x1", 0)
+            y1 = bbox.get("y1", 0)
+            x2 = bbox.get("x2", 0)
+            y2 = bbox.get("y2", 0)
+            cx = (x1 + x2) // 2
+            cy = (y1 + y2) // 2
+
+            # Find a matching existing vehicle by IoU + proximity
+            matched_id = None
+            best_score = 0.0
+
+            for v_id, v_info in self._plate_tracker.items():
+                if not v_id.startswith("gen_"):
+                    continue  # Only match against generic (non-ANPR) vehicles
+                prev_type = v_info.get("vehicle_type", "")
+                if prev_type != vtype:
+                    continue  # Must be same vehicle type
+
+                prev_cx = v_info.get("_cx", 0)
+                prev_cy = v_info.get("_cy", 0)
+                prev_bbox = v_info.get("_bbox", {})
+
+                # Method 1: IoU (bounding box overlap) — most reliable
+                iou = self._compute_bbox_iou(
+                    {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                    prev_bbox
+                ) if prev_bbox else 0.0
+
+                # Method 2: Centroid distance
+                dist = ((cx - prev_cx)**2 + (cy - prev_cy)**2) ** 0.5
+
+                # Scoring: IoU is strong evidence, distance is weaker
+                score = 0.0
+                if iou > 0.15:
+                    score = 2.0 + iou  # IoU match is strong
+                elif dist < 250:
+                    score = 1.0 + (250 - dist) / 250  # Distance match is weaker
+                elif dist < 350 and color != "Unknown" and v_info.get("color") == color:
+                    score = 0.5 + (350 - dist) / 350  # Same color extends range
+
+                if score > best_score:
+                    best_score = score
+                    matched_id = v_id
+
+            if matched_id:
+                # Update existing vehicle
+                self._plate_tracker[matched_id]["total_readings"] += 1
+                self._plate_tracker[matched_id]["last_seen"] = timestamp
+                self._plate_tracker[matched_id]["last_seen_frame"] = video_time
+                self._plate_tracker[matched_id]["_cx"] = cx
+                self._plate_tracker[matched_id]["_cy"] = cy
+                self._plate_tracker[matched_id]["_bbox"] = {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+                # Update confidence if better
+                if conf > self._plate_tracker[matched_id].get("confidence", 0):
+                    self._plate_tracker[matched_id]["confidence"] = round(conf, 3)
+                    self._plate_tracker[matched_id]["vehicle_confidence"] = round(conf, 3)
+                # Update color if we get a named (non-Unknown) detection
+                if color != "Unknown":
+                    self._plate_tracker[matched_id]["color"] = color
+            else:
+                # New vehicle — genuinely not seen before
+                vehicle_num = sum(1 for k in self._plate_tracker if k.startswith("gen_")) + 1
+                v_id = f"gen_{vtype}_{vehicle_num}_{cx}_{cy}"
+                self._plate_tracker[v_id] = {
+                    "plate": "\u2014",
+                    "vehicle_type": vtype,
+                    "color": color,
+                    "confidence": round(conf, 3),
+                    "vehicle_confidence": round(conf, 3),
+                    "first_seen": timestamp,
+                    "last_seen": timestamp,
+                    "first_seen_frame": video_time,
+                    "last_seen_frame": video_time,
+                    "total_readings": 1,
+                    "all_readings": [],
+                    "_cx": cx,
+                    "_cy": cy,
+                    "_bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                }
+
+    @staticmethod
+    def _compute_bbox_iou(a: dict, b: dict) -> float:
+        """Compute IoU between two bounding boxes (both as {x1, y1, x2, y2} dicts)."""
+        ix1 = max(a.get("x1", 0), b.get("x1", 0))
+        iy1 = max(a.get("y1", 0), b.get("y1", 0))
+        ix2 = min(a.get("x2", 0), b.get("x2", 0))
+        iy2 = min(a.get("y2", 0), b.get("y2", 0))
+
+        inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
+        if inter == 0:
+            return 0.0
+
+        area_a = max(0, a.get("x2", 0) - a.get("x1", 0)) * max(0, a.get("y2", 0) - a.get("y1", 0))
+        area_b = max(0, b.get("x2", 0) - b.get("x1", 0)) * max(0, b.get("y2", 0) - b.get("y1", 0))
+        union = area_a + area_b - inter
+        return inter / union if union > 0 else 0.0
+
+
     def _track_unknown_face(
         self, encoding, recognizer, detector, frame, location,
         frame_count, video_timestamp, tracker, camera_id, centroid
@@ -595,7 +737,7 @@ class VideoAnalysisJob:
         """
         import numpy as np
 
-        UNKNOWN_MATCH_TOLERANCE = 0.55
+        UNKNOWN_MATCH_TOLERANCE = 0.75
         matched_id = None
 
         # Compare against previously seen unknowns
@@ -876,7 +1018,7 @@ class VideoAnalysisJob:
 
         Instead of 30+ raw 'vehicle_entry' events per plate, produce exactly
         2 events per unique vehicle: 'Vehicle Entered' and 'Vehicle Left',
-        with video timestamps in mm:ss format.
+        with video timestamps in mm:ss format. Now includes color info.
         """
         if not self._plate_tracker:
             return
@@ -891,29 +1033,42 @@ class VideoAnalysisJob:
             return f"{m}:{s:02d}"
 
         for plate, info in self._plate_tracker.items():
-            # Find earliest and latest frame numbers for this vehicle
-            readings_for_plate = [
-                r for r in self._raw_plate_readings
-                if self._plates_similar(r["plate"], plate)
-            ]
+            color = info.get("color", "Unknown")
+            vtype = info.get("vehicle_type", "vehicle")
 
-            if not readings_for_plate:
-                continue
+            # Check if this is a generic vehicle (from TrafficMonitor) with frame data
+            if plate.startswith("gen_"):
+                first_frame = info.get("first_seen_frame", 0)
+                last_frame = info.get("last_seen_frame", 0)
+                plate_text = info.get("plate", "\u2014")
+            else:
+                # ANPR vehicle — find frames from raw plate readings
+                readings_for_plate = [
+                    r for r in self._raw_plate_readings
+                    if self._plates_similar(r["plate"], plate)
+                ]
 
-            frames = [r.get("frame", 0) for r in readings_for_plate]
-            first_frame = min(frames)
-            last_frame = max(frames)
+                if not readings_for_plate:
+                    continue
+
+                frames = [r.get("frame", 0) for r in readings_for_plate]
+                first_frame = min(frames)
+                last_frame = max(frames)
+                plate_text = plate
+
+            color_str = f" ({color})" if color and color != "Unknown" else ""
 
             # Vehicle Entered event
             self.result.events_timeline.append({
                 "event_type": "vehicle_entered",
                 "frame": first_frame,
                 "video_time": frame_to_video_time(first_frame),
-                "description": f"{info['vehicle_type'].title()} entered — Plate: {plate}",
+                "description": f"{color_str.strip()} {vtype.title()} entered \u2014 Plate: {plate_text}".strip(),
                 "metadata": {
-                    "plate": plate,
-                    "vehicle_type": info["vehicle_type"],
-                    "confidence": info["confidence"],
+                    "plate": plate_text,
+                    "vehicle_type": vtype,
+                    "color": color,
+                    "confidence": info.get("confidence", 0),
                 },
             })
 
@@ -923,10 +1078,11 @@ class VideoAnalysisJob:
                     "event_type": "vehicle_left",
                     "frame": last_frame,
                     "video_time": frame_to_video_time(last_frame),
-                    "description": f"{info['vehicle_type'].title()} left — Plate: {plate}",
+                    "description": f"{color_str.strip()} {vtype.title()} left \u2014 Plate: {plate_text}".strip(),
                     "metadata": {
-                        "plate": plate,
-                        "vehicle_type": info["vehicle_type"],
+                        "plate": plate_text,
+                        "vehicle_type": vtype,
+                        "color": color,
                     },
                 })
 

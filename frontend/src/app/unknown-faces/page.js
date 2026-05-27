@@ -327,6 +327,29 @@ export default function UnknownFacesPage() {
                             />
                         </div>
 
+                        <div className="input-group">
+                            <label className="input-label">Email</label>
+                            <input
+                                className="input"
+                                type="email"
+                                value={enrollData.email}
+                                onChange={(e) => setEnrollData({ ...enrollData, email: e.target.value })}
+                                placeholder="person@company.com"
+                                id="enroll-email"
+                            />
+                        </div>
+
+                        <div className="input-group">
+                            <label className="input-label">Phone</label>
+                            <input
+                                className="input"
+                                value={enrollData.phone}
+                                onChange={(e) => setEnrollData({ ...enrollData, phone: e.target.value })}
+                                placeholder="+91-XXXXXXXXXX"
+                                id="enroll-phone"
+                            />
+                        </div>
+
                         <div className="modal-actions">
                             <button className="btn btn-secondary" onClick={() => setShowEnrollModal(false)}>Cancel</button>
                             <button

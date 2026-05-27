@@ -323,17 +323,46 @@ class ByteTracker:
                 self._removed_stracks.append(track)
 
         # ── Step 6: Create new tracks from unmatched detections ─
+        # Try to carry identity from recently lost/removed tracks to prevent
+        # the same person getting a fresh track (and triggering duplicate detection)
         for det_idx in unmatched_dets:
             score = high_scores[det_idx]
             if score >= self.track_thresh:
+                det_bbox = high_bboxes[det_idx].copy()
+
+                # Check if this detection overlaps with a recently removed/lost
+                # track that had an identity — carry it over
+                carried_person_id = None
+                carried_person_name = None
+                best_iou = 0.3  # Minimum IoU to consider a match
+
+                for old_track in (self._lost_stracks + self._removed_stracks[-100:]):
+                    if old_track.person_id and (self._frame_id - old_track.frame_id) <= self.track_buffer:
+                        iou_val = _iou_batch(
+                            old_track.bbox.reshape(1, 4),
+                            det_bbox.reshape(1, 4),
+                        )[0, 0]
+                        if iou_val > best_iou:
+                            best_iou = iou_val
+                            carried_person_id = old_track.person_id
+                            carried_person_name = old_track.person_name
+
                 new_track = STrack(
                     track_id=self._next_id,
-                    bbox=high_bboxes[det_idx].copy(),
+                    bbox=det_bbox,
                     score=score,
+                    person_id=carried_person_id,
+                    person_name=carried_person_name,
                 )
                 new_track.activate(self._frame_id, self._next_id)
                 self._next_id += 1
                 new_tracked.append(new_track)
+
+                if carried_person_id:
+                    logger.debug(
+                        f"ByteTrack: carried identity {carried_person_name} "
+                        f"to new track {new_track.track_id} (IoU={best_iou:.2f})"
+                    )
 
         # Update state
         self._tracked_stracks = new_tracked

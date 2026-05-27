@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     DB_ECHO: bool = False  # Set True to log all SQL queries
 
     # ── JWT Auth ──────────────────────────────────────────────
-    JWT_SECRET_KEY: str = "change-this-secret-key-in-production"
+    JWT_SECRET_KEY: str = ""  # MUST be set via .env — no insecure default
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
 
@@ -29,19 +29,19 @@ class Settings(BaseSettings):
     INSIGHTFACE_DET_THRESH: float = 0.5  # Face detection confidence threshold
 
     # Face Recognition (ArcFace via insightface)
-    FACE_MATCH_TOLERANCE: float = 0.6  # Cosine distance threshold (lower = stricter)
+    FACE_MATCH_TOLERANCE: float = 0.75  # Cosine distance threshold (lower = stricter, 0.75 handles angle variations)
     FACE_EMBEDDING_DIM: int = 512  # ArcFace embedding dimension
 
     # ByteTrack Multi-Object Tracking
     BYTETRACK_TRACK_THRESH: float = 0.5  # High-confidence detection threshold
-    BYTETRACK_TRACK_BUFFER: int = 30  # Frames to keep lost tracks alive
+    BYTETRACK_TRACK_BUFFER: int = 90  # Frames to keep lost tracks alive (~3s at 30fps, prevents track fragmentation)
     BYTETRACK_MATCH_THRESH: float = 0.8  # IoU threshold for matching
 
     FRAME_SKIP: int = 3
     DETECTION_SCALE: float = 0.5
-    EXIT_THRESHOLD_SECONDS: int = 15  # 15 seconds — responsive for live monitoring
+    EXIT_THRESHOLD_SECONDS: int = 30  # 30 seconds — avoids premature exits from brief occlusions
     ENTRY_THRESHOLD_SECONDS: int = 3
-    UNKNOWN_SIMILARITY_THRESHOLD: float = 0.6  # Cosine distance for unknown dedup
+    UNKNOWN_SIMILARITY_THRESHOLD: float = 0.70  # Cosine distance for unknown dedup (lower = merges more aggressively, reduces duplicates)
 
     # ── Camera ────────────────────────────────────────────────
     DEFAULT_CAMERA_SOURCE: str = "0"
@@ -84,26 +84,50 @@ class Settings(BaseSettings):
     # "traffic" = Traffic mode (ANPR + vehicle-person safety)
     PIPELINE_MODE: str = "hybrid"
 
+    # ── RF-DETR (Real-Time Detection Transformer) ─────────────
+    RFDETR_MODEL_SIZE: str = "large"          # "nano", "base", or "large"
+    RFDETR_CONFIDENCE_THRESHOLD: float = 0.40
+    RFDETR_DEVICE: str = "auto"               # "auto", "cuda", or "cpu"
+
     # ── Traffic Mode: ANPR (License Plate Recognition) ────────
     ENABLE_ANPR: bool = True
-    ANPR_MODEL_PATH: str = "./models/license_plate_detector.pt"
+    ANPR_MODEL_PATH: str = "./models/license-plate-finetune-v1l.pt"
     ANPR_FRAME_INTERVAL: int = 5         # Process every 5th frame
     ANPR_PLATE_COOLDOWN_SEC: float = 60.0
     ANPR_OCR_LANGUAGES: str = "en"       # Comma-separated EasyOCR languages
 
     # ── Traffic Mode: Vehicle-Person Safety Monitor ───────────
     ENABLE_TRAFFIC_MONITOR: bool = True
-    TRAFFIC_MODEL_PATH: str = "yolov8n.pt"
+    TRAFFIC_MODEL_PATH: str = "./models/gate_vehicles_v2.pt"
     TRAFFIC_FRAME_INTERVAL: int = 5      # Process every 5th frame
     TRAFFIC_PROXIMITY_PX: int = 50       # Pixel proximity for danger alert
     TRAFFIC_ALERT_COOLDOWN_SEC: float = 15.0
 
+    # ── Roboflow Indian Vehicles Detection API ────────────────
+    ROBOFLOW_API_KEY: str = ""  # MUST be set via .env
+    ROBOFLOW_MODEL_ID: str = "indian-vehicles-dataset/2"
+    ROBOFLOW_API_URL: str = "https://serverless.roboflow.com"
+    ROBOFLOW_CONFIDENCE_THRESHOLD: float = 0.50
+    ENABLE_ROBOFLOW_DETECTION: bool = True  # Use Roboflow as primary vehicle detector
+
+    # ── Roboflow Person Detection API ─────────────────────────
+    ROBOFLOW_PERSON_MODEL_ID: str = "people-detection-o4rdr/10"
+    ROBOFLOW_PERSON_CONFIDENCE: float = 0.50
+    ENABLE_ROBOFLOW_PERSON: bool = True  # Use Roboflow person model for person detection
+
     # ── Video Analysis ────────────────────────────────────────
     VIDEO_UPLOAD_DIR: str = "./uploads/videos"
-    MAX_VIDEO_SIZE_MB: int = 500
+    MAX_VIDEO_SIZE_MB: int = 2000
     ALLOWED_VIDEO_EXTENSIONS: str = "mp4,avi,mkv,mov,wmv,flv,webm"
     VIDEO_ANALYSIS_FRAME_SKIP: int = 5   # Process every 5th frame for speed
     VIDEO_ANALYSIS_MAX_CONCURRENT: int = 2
+
+    # ── Person Re-Identification (ReID) ───────────────────────
+    ENABLE_REID: bool = True
+    REID_MATCH_THRESHOLD: float = 0.65    # Cosine similarity (0-1, higher = stricter)
+    REID_GALLERY_MAX_SIZE: int = 500      # Max tracked persons before LRU eviction
+    REID_SIGHTING_COOLDOWN: float = 5.0   # Min seconds between sightings per person/camera
+    REID_FRAME_INTERVAL: int = 10         # Extract ReID features every N frames (performance)
 
     @property
     def cors_origins_list(self) -> List[str]:

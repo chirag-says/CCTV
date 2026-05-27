@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 # Lazy-loaded insightface app (shared across instances for VRAM efficiency)
 _insightface_app = None
 _insightface_lock = None
+_insightface_failed = False
 
 
 def _get_insightface_app():
@@ -33,7 +34,7 @@ def _get_insightface_app():
     We keep a module-level singleton to avoid loading the model
     multiple times (each load consumes GPU VRAM).
     """
-    global _insightface_app, _insightface_lock
+    global _insightface_app, _insightface_lock, _insightface_failed
     import threading
 
     if _insightface_lock is None:
@@ -42,6 +43,9 @@ def _get_insightface_app():
     with _insightface_lock:
         if _insightface_app is not None:
             return _insightface_app
+
+        if _insightface_failed:
+            return None
 
         try:
             import insightface
@@ -70,7 +74,8 @@ def _get_insightface_app():
 
         except Exception as e:
             logger.error(f"Failed to load insightface: {e}", exc_info=True)
-            raise RuntimeError(f"InsightFace initialization failed: {e}")
+            _insightface_failed = True
+            return None
 
 
 class FaceDetector:
@@ -87,7 +92,7 @@ class FaceDetector:
 
     def __init__(
         self,
-        min_face_size: int = 20,
+        min_face_size: int = 15,
         scale_factor: float = None,
         **kwargs,  # Accept extra kwargs for backward compat
     ):
@@ -138,6 +143,10 @@ class FaceDetector:
 
         # Run SCRFD detection
         app = self._get_app()
+        if app is None:
+            self._frame_count += 1
+            return [], rgb_frame
+
         faces = app.get(small_frame)
 
         # Extract bounding boxes and scale back
@@ -190,6 +199,10 @@ class FaceDetector:
 
         # Run on FULL resolution for better embedding quality
         app = self._get_app()
+        if app is None:
+            self._frame_count += 1
+            return [], [], rgb_frame
+
         faces = app.get(rgb_frame)
 
         face_locations = []
@@ -231,6 +244,8 @@ class FaceDetector:
             List of insightface Face objects
         """
         app = self._get_app()
+        if app is None:
+            return []
         faces = app.get(frame_rgb)
         return faces
 
@@ -316,6 +331,9 @@ class FaceDetector:
 
         # Run detection on the crop
         app = self._get_app()
+        if app is None:
+            return [], rgb_crop
+            
         faces = app.get(rgb_crop)
 
         face_locations = []
@@ -324,7 +342,7 @@ class FaceDetector:
             x1, y1, x2, y2 = bbox
 
             # Filter impossibly small faces
-            if (y2 - y1) < 15 or (x2 - x1) < 15:
+            if (y2 - y1) < 10 or (x2 - x1) < 10:
                 continue
 
             # Convert to (top, right, bottom, left)

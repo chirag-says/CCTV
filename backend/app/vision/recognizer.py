@@ -168,6 +168,11 @@ class FaceRecognizer:
             MatchResult with best match info
         """
         if self._known_encodings is None or len(self._known_faces) == 0:
+            logger.warning(
+                "⚠️ Face recognition attempted but NO known encodings loaded! "
+                "All faces will be marked as UNKNOWN. "
+                "Ensure load_encodings() was called after camera startup."
+            )
             return MatchResult(
                 matched=False,
                 encoding=face_encoding,
@@ -192,10 +197,22 @@ class FaceRecognizer:
             # Find best match (lowest distance)
             best_idx = np.argmin(distances)
             best_distance = distances[best_idx]
+            best_face = self._known_faces[best_idx]
+
+            logger.debug(
+                f"Face recognition: best_distance={best_distance:.4f}, "
+                f"tolerance={self.tolerance}, "
+                f"best_match={best_face.person_name}, "
+                f"matched={best_distance <= self.tolerance}, "
+                f"known_faces={len(self._known_faces)}"
+            )
 
             if best_distance <= self.tolerance:
-                best_face = self._known_faces[best_idx]
                 confidence = float(similarities[best_idx])  # Use similarity as confidence
+                logger.info(
+                    f"✅ MATCHED: {best_face.person_name} "
+                    f"(distance={best_distance:.4f}, confidence={confidence:.3f})"
+                )
                 return MatchResult(
                     matched=True,
                     person_id=best_face.person_id,
@@ -206,6 +223,12 @@ class FaceRecognizer:
                 )
             else:
                 best_similarity = float(similarities[best_idx])
+                logger.info(
+                    f"❌ NO MATCH: closest={best_face.person_name} "
+                    f"(distance={best_distance:.4f}, tolerance={self.tolerance}, "
+                    f"similarity={best_similarity:.3f}) — "
+                    f"need distance <= {self.tolerance} to match"
+                )
                 return MatchResult(
                     matched=False,
                     confidence=round(max(0.0, best_similarity), 3),

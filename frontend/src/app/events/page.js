@@ -31,7 +31,15 @@ export default function EventsPage() {
             const params = {};
             if (typeFilter) params.event_type = typeFilter;
             const result = await api.getEvents(params);
-            setEvents(result.data || []);
+            // Normalize backend response fields to frontend expectations
+            const normalized = (result.data || []).map(e => ({
+                ...e,
+                // Backend returns snapshot_url, frontend expects snapshot_path too
+                snapshot_path: e.snapshot_url || e.snapshot_path || null,
+                // Backend doesn't include person_name at top level; extract from metadata or person relationship
+                person_name: e.person_name || e.metadata?.person_name || null,
+            }));
+            setEvents(normalized);
             setTotal(result.total || 0);
         } catch (e) {
             setError('Could not load events. Make sure the backend is running.');
@@ -192,9 +200,9 @@ export default function EventsPage() {
                                             )}
                                         </td>
                                         <td>
-                                            {event.snapshot_path ? (
+                                            {(event.snapshot_path || event.snapshot_url) ? (
                                                 <img
-                                                    src={`${API_BASE}${event.snapshot_path}`}
+                                                    src={`${API_BASE}${event.snapshot_path || event.snapshot_url}`}
                                                     alt="snap"
                                                     style={{
                                                         width: 36, height: 36,
@@ -206,7 +214,7 @@ export default function EventsPage() {
                                                     }}
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        openLightbox(`${API_BASE}${event.snapshot_path}`, `${event.event_type} - ${event.person_name || 'Unknown'}`);
+                                                        openLightbox(`${API_BASE}${event.snapshot_path || event.snapshot_url}`, `${event.event_type} - ${event.person_name || 'Unknown'}`);
                                                     }}
                                                     onMouseEnter={(e) => e.target.style.transform = 'scale(1.15)'}
                                                     onMouseLeave={(e) => e.target.style.transform = 'scale(1)'}
@@ -221,9 +229,9 @@ export default function EventsPage() {
                                         <tr>
                                             <td colSpan={6} style={{ padding: '16px 20px', background: 'var(--bg-tertiary)' }}>
                                                 <div style={{ display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
-                                                    {event.snapshot_path && (
+                                                    {(event.snapshot_path || event.snapshot_url) && (
                                                         <img
-                                                            src={`${API_BASE}${event.snapshot_path}`}
+                                                            src={`${API_BASE}${event.snapshot_path || event.snapshot_url}`}
                                                             alt="Event snapshot"
                                                             style={{
                                                                 width: 160, height: 120,
@@ -232,7 +240,7 @@ export default function EventsPage() {
                                                                 cursor: 'pointer',
                                                                 border: '1px solid var(--border-color)',
                                                             }}
-                                                            onClick={() => openLightbox(`${API_BASE}${event.snapshot_path}`, event.person_name || 'Event')}
+                                                            onClick={() => openLightbox(`${API_BASE}${event.snapshot_path || event.snapshot_url}`, event.person_name || 'Event')}
                                                         />
                                                     )}
                                                     <div style={{ flex: 1, minWidth: '200px' }}>

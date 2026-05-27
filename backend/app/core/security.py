@@ -105,3 +105,14 @@ async def require_admin(current_user: dict = Depends(get_current_user)) -> dict:
             detail="Admin access required",
         )
     return current_user
+
+
+def verify_token(token: str) -> Dict[str, Any]:
+    """
+    Verify a JWT token string directly (used by WebSocket handlers
+    where standard HTTP Bearer auth isn't available).
+    
+    Raises JWTError or HTTPException on invalid/expired tokens.
+    Returns the decoded payload on success.
+    """
+    return decode_access_token(token)

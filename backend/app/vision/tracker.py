@@ -66,7 +66,7 @@ class PersonTracker:
         self,
         entry_threshold: int = None,
         exit_threshold: int = None,
-        cooldown_period: int = 10,
+        cooldown_period: int = 60,  # Prevents re-entry detection for 60s after exit
         on_entry: Optional[Callable] = None,
         on_exit: Optional[Callable] = None,
     ):

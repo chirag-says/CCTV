@@ -20,6 +20,7 @@ import {
     SecurityIcon,
     TrafficIcon,
     VideoUploadIcon,
+    ReIDIcon,
 } from './Icons';
 
 function SunIcon({ size = 18 }) {
@@ -69,6 +70,7 @@ const navItems = [
         items: [
             { href: '/security-alerts', icon: SecurityIcon, label: 'Security Alerts', id: 'nav-security', alertBadge: true },
             { href: '/traffic', icon: TrafficIcon, label: 'Traffic Monitor', id: 'nav-traffic' },
+            { href: '/reid', icon: ReIDIcon, label: 'Person ReID', id: 'nav-reid' },
         ],
     },
     {

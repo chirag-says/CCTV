@@ -57,6 +57,7 @@ from app.vision.hazard_detector import HazardDetector
 # Ã¢â€â‚¬Ã¢â€â‚¬ Internal: Traffic & ANPR Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 from app.vision.anpr import PlateRecognizer
 from app.vision.traffic import TrafficMonitor
+from app.vision.reid import get_reid_tracker, ReIDTracker
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Internal: Utilities Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 from app.utils.image_utils import frame_to_jpeg_bytes, save_snapshot
@@ -111,7 +112,7 @@ class VisionPipeline:
         # Maintains track IDs across frames, reducing the need to run
         # expensive ArcFace recognition on every single frame.
         self.byte_tracker = ByteTracker()
-        self._recognition_interval = 5  # Run ArcFace every N frames per track
+        self._recognition_interval = 3  # Run ArcFace every N frames per track (lower = fewer identity flickers)
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ YOLO Person Detector (for body-level person detection) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         # Used in FACE mode to assist face detection when face_recognition
@@ -122,9 +123,9 @@ class VisionPipeline:
         self._yolo_person_lock = threading.Lock()
         self._yolo_body_unknown_cache: Dict[str, dict] = {}  # Dedup for body-only unknowns
         self._last_yolo_assist_check = 0.0  # Throttle: last time we ran YOLO-assist
-        self._yolo_assist_interval = 3.0    # Only run YOLO-assisted every 3 seconds
+        self._yolo_assist_interval = 1.5    # Run YOLO-assisted every 1.5 seconds for better distant detection
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ Safety & Security Modules Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # ── Safety & Security Modules ────────────────────────────────────────────────────────
         # Attribute Recognition (gender + clothing)
         self.attribute_recognizer: Optional[AttributeRecognizer] = None
         if settings.ENABLE_ATTRIBUTE_RECOGNITION:
@@ -164,10 +165,11 @@ class VisionPipeline:
             )
             logger.info(f"[{camera_id}] Hazard Detection enabled")
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ Traffic Mode Modules Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # ── Traffic Mode Modules ─────────────────────────────────────────────────────────────
         self.pipeline_mode = settings.PIPELINE_MODE.lower()
 
         # ANPR (License Plate Recognition)
+        self._is_browser_camera = stream_source.startswith("browser:")
         self.plate_recognizer: Optional[PlateRecognizer] = None
         if self.pipeline_mode in ("traffic", "hybrid") and settings.ENABLE_ANPR:
             languages = [l.strip() for l in settings.ANPR_OCR_LANGUAGES.split(",")]
@@ -189,15 +191,24 @@ class VisionPipeline:
                 proximity_px=settings.TRAFFIC_PROXIMITY_PX,
                 alert_cooldown_sec=settings.TRAFFIC_ALERT_COOLDOWN_SEC,
                 on_alert=self._handle_security_alert,
+                on_vehicle_count=self._handle_vehicle_count,
             )
             logger.info(f"[{camera_id}] Traffic Monitor enabled (proximity={settings.TRAFFIC_PROXIMITY_PX}px)")
+
+        # ── Person Re-Identification (cross-camera tracking) ──────────────────────────────────
+        self.reid_tracker: Optional[ReIDTracker] = None
+        if settings.ENABLE_REID:
+            self.reid_tracker = get_reid_tracker()
+            self._reid_frame_interval = settings.REID_FRAME_INTERVAL
+            self._last_reid_frame = 0
+            logger.info(f"[{camera_id}] ReID enabled (threshold={settings.REID_MATCH_THRESHOLD}, interval={self._reid_frame_interval})")
 
         # Pipeline state
         self._frame_count = 0
         self._last_frame = None  # Last processed frame (for MJPEG streaming)
         self._last_jpeg = None   # Pre-encoded JPEG bytes (ready-to-send, encoded in worker thread)
         self._last_exit_check = time.time()
-        self._exit_check_interval = 2  # Check exits every 2 seconds for faster response
+        self._exit_check_interval = 5  # Check exits every 5 seconds (prevents premature exits)
         self._unknown_cache: Dict[str, dict] = {}  # Temp unknown face dedup
         self._last_safety_check = time.time()
         self._safety_check_interval = 1.0  # Run crowd/loiter checks every 1s
@@ -208,11 +219,22 @@ class VisionPipeline:
         self._last_fps_time = time.time()
         self._fps_frame_count = 0
 
+        # Auto-refresh encodings: detect when recognizer cache is stale
+        self._last_encoding_refresh = 0.0  # Force immediate check on first face detection
+        self._encoding_refresh_interval = 60.0  # Re-check DB every 60 seconds
+        self._encoding_db_count = 0  # Track DB count to detect new additions
+
         logger.info(f"Pipeline created for camera {camera_id}: source={stream_source}, mode={self.pipeline_mode}")
 
     def start(self):
         """Start the video capture."""
         try:
+            if hasattr(self, 'stream_source') and self.stream_source.startswith("browser:"):
+                self._running = True
+                self._capture = None
+                logger.info(f"Camera {self.camera_id} started: {self.stream_source} (Browser)")
+                return
+
             # Try to interpret as integer (webcam index)
             source = int(self.stream_source) if self.stream_source.isdigit() else self.stream_source
             self._capture = cv2.VideoCapture(source)
@@ -260,15 +282,35 @@ class VisionPipeline:
         Returns:
             Annotated frame (with bounding boxes) or None if no frame available
         """
-        if not self._running or not self._capture:
+        if not self._running:
             return None
 
-        ret, frame = self._capture.read()
-        if not ret:
-            logger.warning(f"Camera {self.camera_id}: Failed to read frame")
-            return None
+        if hasattr(self, 'stream_source') and self.stream_source.startswith("browser:"):
+            session_id = self.stream_source.split("browser:")[1]
+            from app.routes.browser_camera import _browser_sessions
+            session = _browser_sessions.get(session_id)
+            if not session or session.last_frame is None:
+                time.sleep(0.1)
+                return None
+            if not hasattr(self, '_last_browser_frame_at'):
+                self._last_browser_frame_at = 0.0
+            if self._last_browser_frame_at == session.last_frame_at:
+                time.sleep(0.01)
+                return None
+            self._last_browser_frame_at = session.last_frame_at
+            frame = session.last_frame.copy()
+        else:
+            if not self._capture:
+                return None
+            ret, frame = self._capture.read()
+            if not ret:
+                logger.warning(f"Camera {self.camera_id}: Failed to read frame")
+                return None
 
         self._frame_count += 1
+
+        # Auto-refresh face encodings from DB if cache is stale/empty
+        self._auto_refresh_encodings()
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ TRAFFIC MODE Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         if self.pipeline_mode == "traffic":
@@ -447,6 +489,38 @@ class VisionPipeline:
     #  Safety & Security Integration
     # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
+    def _auto_refresh_encodings(self):
+        """
+        Auto-refresh face encodings from DB when the recognizer cache is empty
+        or when new encodings have been added to the database.
+
+        This handles the case where:
+        - seed_teachers.py runs in a separate process after camera starts
+        - New persons are enrolled via the Unknown Faces page from another client
+        - The server restarts but the camera reconnects before encodings are cached
+        """
+        now = time.time()
+        if now - self._last_encoding_refresh < self._encoding_refresh_interval:
+            return
+
+        self._last_encoding_refresh = now
+
+        try:
+            from app.services.person_service import PersonService
+            encodings = PersonService.get_all_encodings()
+            db_count = len(encodings)
+
+            if db_count > 0 and db_count != self._encoding_db_count:
+                # DB has encodings that aren't loaded yet (or count changed)
+                self.recognizer.load_encodings(encodings)
+                self._encoding_db_count = db_count
+                logger.info(
+                    f"[{self.camera_id}] Auto-refreshed {db_count} face encodings from DB "
+                    f"(was {self.recognizer.known_count} before refresh)"
+                )
+        except Exception as e:
+            logger.debug(f"[{self.camera_id}] Auto-refresh encodings failed: {e}")
+
     def _run_safety_analytics(self):
         """
         Run crowd and loitering detection at a throttled interval.
@@ -497,6 +571,24 @@ class VisionPipeline:
         )
         if self.on_event:
             self.on_event(event)
+
+    def _handle_vehicle_count(self, count_data: dict):
+        """
+        Callback for TrafficMonitor vehicle count updates.
+        Broadcasts real-time vehicle/person counts to the frontend.
+        """
+        if self.on_event:
+            self.on_event({
+                "event_type": "vehicle_count",
+                "camera_id": self.camera_id,
+                "timestamp": count_data.get("timestamp", ""),
+                "metadata": {
+                    "total_vehicles": count_data.get("total_vehicles", 0),
+                    "total_persons": count_data.get("total_persons", 0),
+                    "vehicle_breakdown": count_data.get("vehicle_breakdown", {}),
+                    "vehicle_details": count_data.get("vehicle_details", []),
+                },
+            })
 
     def _handle_attributes_complete(self, track_id: str, attributes: dict):
         """
@@ -737,18 +829,31 @@ class VisionPipeline:
     # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
 
     def _load_yolo_person_detector(self) -> bool:
-        """Lazy-load a YOLO model for person detection (used in FACE mode)."""
+        """Lazy-load a YOLO model for person detection (used in FACE mode).
+        
+        Reuses the hazard detector's YOLO model if available to avoid
+        loading the same model twice (saves ~6MB GPU per camera).
+        """
         with self._yolo_person_lock:
             if self._yolo_person_loaded:
                 return self._yolo_person_detector is not None
             try:
-                from ultralytics import YOLO
-                import torch
-                device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                model_path = getattr(settings, 'HAZARD_MODEL_PATH', 'yolov8n.pt')
-                self._yolo_person_detector = YOLO(model_path)
-                self._yolo_person_device = device
-                logger.info(f"[{self.camera_id}] YOLO person detector loaded on {device}")
+                # Try to reuse the hazard detector's model first
+                if (self.hazard_detector 
+                    and self.hazard_detector._model_available 
+                    and self.hazard_detector._model_backend == "yolo"
+                    and self.hazard_detector._model is not None):
+                    self._yolo_person_detector = self.hazard_detector._model
+                    self._yolo_person_device = getattr(self.hazard_detector, '_device', 'cpu')
+                    logger.info(f"[{self.camera_id}] YOLO person detector: reusing hazard detector model (shared)")
+                else:
+                    from ultralytics import YOLO
+                    import torch
+                    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+                    model_path = getattr(settings, 'HAZARD_MODEL_PATH', 'yolov8n.pt')
+                    self._yolo_person_detector = YOLO(model_path)
+                    self._yolo_person_device = device
+                    logger.info(f"[{self.camera_id}] YOLO person detector loaded on {device}")
             except Exception as e:
                 logger.warning(f"[{self.camera_id}] YOLO person detector unavailable: {e}")
                 self._yolo_person_detector = None
@@ -968,7 +1073,7 @@ class VisionPipeline:
         centroid = (pcx, pcy)
 
         # Dedup: check if we already have a body-only unknown near this centroid
-        DEDUP_DISTANCE = 100  # pixels
+        DEDUP_DISTANCE = 200  # pixels — generous to prevent duplicates from natural movement
         similar_body_id = None
         now = time.time()
         for uid, udata in self._yolo_body_unknown_cache.items():
@@ -1096,26 +1201,41 @@ class VisionPipeline:
         """
         Process a frame in HYBRID mode.
         Runs BOTH Traffic (ANPR/Safety) and Face Recognition/Tracking.
+        Face detection runs FIRST so we can filter false vehicle detections.
         """
         # Keep a truly clean copy for Face Detection (must be before ANY drawing)
         clean_frame_for_face = frame.copy()
-
-        # 1. Run Traffic Modules (they draw on frame first)
-        frame = self._process_frame_traffic_logic(frame)
-
-        # 2. Run Face Mode Logic
-        # Keep a copy for other uses (snapshots etc) - reusing the one above
         clean_frame = clean_frame_for_face
 
         # Hazard detection (if enabled)
         if self.hazard_detector:
              try:
-                 # Hazard detector manages its own threading/copying
                  self.hazard_detector.submit_frame(clean_frame, self.camera_id)
              except Exception as e:
                  logger.debug(f"Hazard detection error: {e}")
 
-        # Frame skip for Face Rec (heavy)
+        # ── 1. Run Face Detection FIRST (on clean frame) ──
+        face_locations = []
+        embeddings = []
+        rgb_frame = None
+
+        if self._frame_count % settings.FRAME_SKIP == 0:
+            face_locations, embeddings, rgb_frame = self.detector.detect_faces_with_embeddings(clean_frame)
+
+        # ── 2. Pass face locations to traffic module so it can filter overlaps ──
+        if self.traffic_monitor and face_locations:
+            # Convert face locations (top, right, bottom, left) to bbox format
+            face_bboxes = []
+            for top, right, bottom, left in face_locations:
+                face_bboxes.append({"x1": left, "y1": top, "x2": right, "y2": bottom})
+            self.traffic_monitor._known_face_zones = face_bboxes
+        elif self.traffic_monitor:
+            self.traffic_monitor._known_face_zones = []
+
+        # ── 3. Run Traffic Modules (they draw on frame) ──
+        frame = self._process_frame_traffic_logic(frame)
+
+        # ── 4. Face Recognition & Tracking ──
         if self._frame_count % settings.FRAME_SKIP != 0:
             # Draw previously cached boxes so they don't flicker
             for draw_args in self._last_face_draws:
@@ -1126,9 +1246,6 @@ class VisionPipeline:
 
         # Clear cache for this new detection frame
         self._last_face_draws.clear()
-
-        # Face Detection + Embedding (SINGLE pass on CLEAN frame)
-        face_locations, embeddings, rgb_frame = self.detector.detect_faces_with_embeddings(clean_frame)
 
         if not face_locations:
             self._run_safety_analytics()
@@ -1141,6 +1258,12 @@ class VisionPipeline:
         boxes_to_draw = []
 
         # Recognition & Tracking (using embeddings from detection pass)
+        # Track whether we should run ReID this frame
+        run_reid = (
+            self.reid_tracker
+            and self._frame_count - self._last_reid_frame >= self._reid_frame_interval
+        )
+
         for i, (location, encoding) in enumerate(zip(face_locations, embeddings)):
              if encoding is None: continue
              top, right, bottom, left = location
@@ -1162,10 +1285,46 @@ class VisionPipeline:
                      try:
                          self.attribute_recognizer.maybe_extract(result.person_id, clean_frame, location, self._handle_attributes_complete)
                      except Exception: pass
+
+                 # ReID: extract body features for cross-camera tracking
+                 if run_reid:
+                     try:
+                         # Expand face box to approximate body region
+                         face_h = bottom - top
+                         body_top = top
+                         body_bottom = min(frame.shape[0], bottom + face_h * 3)  # Body ≈ 4x face height
+                         body_left = max(0, left - face_h // 2)
+                         body_right = min(frame.shape[1], right + face_h // 2)
+                         body_bbox = (body_left, body_top, body_right, body_bottom)
+                         self.reid_tracker.process_person(
+                             clean_frame, body_bbox, self.camera_id,
+                             face_person_id=result.person_id,
+                             face_person_name=result.person_name,
+                         )
+                     except Exception as e:
+                         logger.debug(f"ReID known person error: {e}")
              else:
                  # Unknown - Draw on the ACCUMULATED frame
                  boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
                  self._handle_unknown_face(clean_frame, rgb_frame, location, encoding, centroid)
+
+                 # ReID: also track unknown persons for cross-camera matching
+                 if run_reid:
+                     try:
+                         face_h = bottom - top
+                         body_top = top
+                         body_bottom = min(frame.shape[0], bottom + face_h * 3)
+                         body_left = max(0, left - face_h // 2)
+                         body_right = min(frame.shape[1], right + face_h // 2)
+                         body_bbox = (body_left, body_top, body_right, body_bottom)
+                         self.reid_tracker.process_person(
+                             clean_frame, body_bbox, self.camera_id,
+                         )
+                     except Exception as e:
+                         logger.debug(f"ReID unknown person error: {e}")
+
+        if run_reid:
+            self._last_reid_frame = self._frame_count
 
         # Cache boxes for frame skip & draw them
         self._last_face_draws = boxes_to_draw
@@ -1180,6 +1339,10 @@ class VisionPipeline:
             self._last_yolo_assist_check = now_assist
             try:
                 yolo_persons = self._get_yolo_person_detections_from_traffic()
+                # Fallback: if traffic backend (e.g. Roboflow) doesn't detect persons,
+                # run direct YOLO person detection for body-level person finding
+                if not yolo_persons:
+                    yolo_persons = self._get_yolo_person_detections(clean_frame)
                 if yolo_persons:
                     missed = self._find_missed_persons(yolo_persons, face_locations)
                     for person_det in missed:
@@ -1199,17 +1362,30 @@ class VisionPipeline:
     def _process_frame_traffic_logic(self, frame: np.ndarray) -> np.ndarray:
         """Helper to run traffic logic and return modified frame."""
         clean_frame = frame.copy()
-        # Traffic Monitor
+        predetected_vehicles = None
+
+        # Traffic Monitor (Roboflow/RF-DETR/YOLO vehicle detection)
         if self.traffic_monitor:
             try:
                 self.traffic_monitor.submit_frame(clean_frame, self.camera_id)
                 frame = self.traffic_monitor.draw_detections(frame)
+
+                # Grab the latest vehicle detections to share with ANPR
+                # This avoids ANPR running a separate YOLO vehicle detection
+                with self.traffic_monitor._detections_lock:
+                    vehicles = self.traffic_monitor._last_detections.get("vehicles", [])
+                    if vehicles:
+                        predetected_vehicles = list(vehicles)
             except Exception as e:
                 logger.debug(f"Traffic monitor error: {e}")
-        # ANPR
+
+        # ANPR (pass pre-detected vehicles if available)
         if self.plate_recognizer:
             try:
-                self.plate_recognizer.submit_frame(clean_frame, self.camera_id)
+                self.plate_recognizer.submit_frame(
+                    clean_frame, self.camera_id,
+                    predetected_vehicles=predetected_vehicles,
+                )
             except Exception as e:
                 logger.debug(f"ANPR error: {e}")
         return frame
@@ -1255,5 +1431,8 @@ class VisionPipeline:
             "pipeline_mode": self.pipeline_mode,
             "anpr": self.pipeline_mode in ("traffic", "hybrid") and settings.ENABLE_ANPR,
             "traffic_monitor": self.pipeline_mode in ("traffic", "hybrid") and settings.ENABLE_TRAFFIC_MONITOR,
+            "reid": settings.ENABLE_REID,
         }
+        if self.reid_tracker:
+            base["reid"] = self.reid_tracker.stats
         return base

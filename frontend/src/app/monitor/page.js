@@ -3,11 +3,13 @@
 /**
  * Live Monitor Page — Real-time camera feeds with detection overlays.
  * Shows detected person names and active persons panel.
+ * Supports browser-side RF-DETR WebGPU object detection overlay.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
 import AppShell from '@/components/AppShell';
 import api, { API_BASE } from '@/lib/api';
+import DetectionOverlay from '@/components/DetectionOverlay';
 import {
     GridIcon,
     SquareIcon,
@@ -27,6 +29,8 @@ import {
 export default function MonitorPage() {
     const [cameras, setCameras] = useState([]);
     const [selectedCamera, setSelectedCamera] = useState(null);
+    const [aiDetectEnabled, setAiDetectEnabled] = useState(false);
+    const [aiStats, setAiStats] = useState(null);
     const [layout, setLayout] = useState(() => {
         if (typeof window !== 'undefined') {
             return localStorage.getItem('sentinel-monitor-layout') || 'single';
@@ -230,7 +234,26 @@ export default function MonitorPage() {
                         <h1>Live Monitor</h1>
                         <p>{onlineCameras.length} of {cameras.length} cameras online</p>
                     </div>
-                    <div style={{ display: 'flex', gap: '6px' }}>
+                    <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                        <button
+                            className={`btn btn-sm ${aiDetectEnabled ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => setAiDetectEnabled(!aiDetectEnabled)}
+                            id="ai-detect-toggle"
+                            title="Toggle browser-side RF-DETR object detection"
+                            style={{
+                                display: 'flex', alignItems: 'center', gap: '5px', minWidth: 'auto',
+                                ...(aiDetectEnabled ? { boxShadow: '0 0 12px rgba(99, 102, 241, 0.4)' } : {}),
+                            }}
+                        >
+                            <DetectionIcon size={14} />
+                            {aiDetectEnabled ? 'AI On' : 'AI Detect'}
+                        </button>
+                        {aiDetectEnabled && aiStats && (
+                            <span style={{ fontSize: '0.625rem', color: 'var(--accent-light)', fontWeight: 600 }}>
+                                {aiStats.inferenceMs}ms • {aiStats.detectionCount} obj
+                            </span>
+                        )}
+                        <div style={{ width: '1px', height: '20px', background: 'var(--border-color)' }} />
                         {[
                             { key: 'single', label: '1×1', icon: <SquareIcon size={14} /> },
                             { key: '2x2', label: '2×2', icon: <GridIcon size={14} /> },
@@ -275,6 +298,8 @@ export default function MonitorPage() {
                         <CameraFeedCard
                             key={camera.id}
                             camera={camera}
+                            aiDetectEnabled={aiDetectEnabled}
+                            onAiStats={setAiStats}
                             onClick={() => {
                                 setSelectedCamera(camera);
                                 setLayout('single');
@@ -294,6 +319,8 @@ export default function MonitorPage() {
                             key={camera.id}
                             camera={camera}
                             compact
+                            aiDetectEnabled={aiDetectEnabled}
+                            onAiStats={setAiStats}
                             onClick={() => {
                                 setSelectedCamera(camera);
                                 setLayout('single');
@@ -309,6 +336,8 @@ export default function MonitorPage() {
                         <CameraFeedCard
                             camera={selectedCamera || cameras[0]}
                             large
+                            aiDetectEnabled={aiDetectEnabled}
+                            onAiStats={setAiStats}
                         />
                     </div>
 
@@ -532,7 +561,7 @@ export default function MonitorPage() {
     );
 }
 
-function CameraFeedCard({ camera, large = false, compact = false, onClick }) {
+function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDetectEnabled = false, onAiStats }) {
     const imgRef = useRef(null);
     const [streamStatus, setStreamStatus] = useState('connecting');
 
@@ -648,6 +677,19 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick }) {
                         <div className="live-indicator">
                             <span className="live-indicator-dot"></span>
                             {streamStatus === 'streaming' ? 'LIVE' : streamStatus === 'connecting' ? 'CONNECTING' : 'RECONNECTING'}
+                            {aiDetectEnabled && streamStatus === 'streaming' && (
+                                <span style={{
+                                    marginLeft: '6px',
+                                    padding: '1px 5px',
+                                    borderRadius: '4px',
+                                    background: 'rgba(99, 102, 241, 0.3)',
+                                    border: '1px solid rgba(99, 102, 241, 0.5)',
+                                    fontSize: '0.563rem',
+                                    fontWeight: 700,
+                                    color: '#a5b4fc',
+                                    letterSpacing: '0.5px',
+                                }}>RF-DETR</span>
+                            )}
                         </div>
 
                         <img
@@ -660,6 +702,15 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick }) {
                                 display: streamStatus === 'streaming' ? 'block' : 'none',
                             }}
                         />
+
+                        {/* RF-DETR WebGPU Detection Overlay */}
+                        {aiDetectEnabled && streamStatus === 'streaming' && (
+                            <DetectionOverlay
+                                videoRef={imgRef}
+                                enabled={aiDetectEnabled}
+                                onStats={onAiStats}
+                            />
+                        )}
 
                         {streamStatus !== 'streaming' && (
                             <div className="live-feed-placeholder">

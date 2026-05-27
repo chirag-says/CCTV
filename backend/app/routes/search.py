@@ -5,6 +5,7 @@ Global Search API Route — searches across persons, events, and vehicles.
 import logging
 from fastapi import APIRouter, Depends, Query
 from typing import Optional
+from sqlalchemy.orm import joinedload
 
 from app.core.security import get_current_user
 from app.db.session import SessionLocal
@@ -59,23 +60,26 @@ async def global_search(
             try:
                 events = (
                     db.query(DetectionEvent)
+                    .outerjoin(Person, DetectionEvent.person_id == Person.id)
                     .filter(
-                        (DetectionEvent.person_name.ilike(f"%{query}%")) |
+                        (Person.name.ilike(f"%{query}%")) |
                         (DetectionEvent.event_type.ilike(f"%{query}%")) |
                         (DetectionEvent.camera_id.ilike(f"%{query}%"))
                     )
-                    .order_by(DetectionEvent.timestamp.desc())
+                    .order_by(DetectionEvent.created_at.desc())
                     .limit(limit)
                     .all()
                 )
                 for e in events:
+                    # Get person name via relationship
+                    person_name = e.person.name if e.person else "Unknown"
                     results.append({
                         "type": "event",
                         "id": e.id,
-                        "title": f"{e.event_type}: {e.person_name or 'Unknown'}",
+                        "title": f"{e.event_type}: {person_name}",
                         "subtitle": f"Camera: {e.camera_id}",
-                        "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-                        "thumbnail_url": e.snapshot_path,
+                        "timestamp": e.created_at.isoformat() if e.created_at else None,
+                        "thumbnail_url": e.snapshot_url,
                     })
             except Exception as e:
                 logger.warning(f"Event search failed: {e}")
@@ -94,9 +98,9 @@ async def global_search(
                         "type": "unknown_face",
                         "id": u.id,
                         "title": f"Unknown Face #{u.id[:8]}",
-                        "subtitle": f"Seen {u.occurrence_count}x • {u.status}",
+                        "subtitle": f"Seen {u.occurrence}x • {u.status}",
                         "timestamp": u.first_seen.isoformat() if u.first_seen else None,
-                        "thumbnail_url": u.snapshot_path,
+                        "thumbnail_url": u.snapshot_url,
                     })
             except Exception as e:
                 logger.warning(f"Unknown face search failed: {e}")
@@ -104,25 +108,27 @@ async def global_search(
         # ── Search Vehicle Plates ───────────────────────────
         if search_type in ("all", "plates"):
             try:
-                # Search events with plate data in metadata
+                # Search events with plate data in metadata_json
                 plate_events = (
                     db.query(DetectionEvent)
+                    .outerjoin(Person, DetectionEvent.person_id == Person.id)
                     .filter(
                         DetectionEvent.event_type == "vehicle_entry",
-                        DetectionEvent.person_name.ilike(f"%{query}%")
+                        Person.name.ilike(f"%{query}%")
                     )
-                    .order_by(DetectionEvent.timestamp.desc())
+                    .order_by(DetectionEvent.created_at.desc())
                     .limit(limit)
                     .all()
                 )
                 for e in plate_events:
+                    person_name = e.person.name if e.person else "Unknown Plate"
                     results.append({
                         "type": "vehicle",
                         "id": e.id,
-                        "title": e.person_name or "Unknown Plate",
+                        "title": person_name,
                         "subtitle": f"Camera: {e.camera_id}",
-                        "timestamp": e.timestamp.isoformat() if e.timestamp else None,
-                        "thumbnail_url": e.snapshot_path,
+                        "timestamp": e.created_at.isoformat() if e.created_at else None,
+                        "thumbnail_url": e.snapshot_url,
                     })
             except Exception as e:
                 logger.warning(f"Plate search failed: {e}")

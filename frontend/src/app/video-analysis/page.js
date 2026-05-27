@@ -6,6 +6,8 @@
  * Processes uploaded video files through the same vision pipeline
  * used for live camera feeds (face recognition, ANPR, hazard detection, etc.)
  * and presents a comprehensive analysis report.
+ *
+ * Also supports browser-side RF-DETR detection on keyframes via WebGPU.
  */
 
 import { useState, useEffect, useRef, useCallback } from 'react';
@@ -42,7 +44,15 @@ const TABS = [
     { id: 'alerts', label: 'Alerts', Icon: AlertIcon },
     { id: 'timeline', label: 'Timeline', Icon: EventLogIcon },
     { id: 'keyframes', label: 'Key Frames', Icon: ImageIcon },
+    { id: 'ai-detect', label: 'AI Detect', Icon: DetectionIcon },
 ];
+
+// Color palette for RF-DETR detection labels
+const DETECT_COLORS = {
+    person: '#22c55e', car: '#3b82f6', truck: '#8b5cf6', bus: '#f59e0b',
+    motorcycle: '#ef4444', bicycle: '#06b6d4', knife: '#dc2626',
+    scissors: '#dc2626', default: '#a855f7',
+};
 
 // ── Utility Functions ───────────────────────────────────────────
 function formatDuration(seconds) {
@@ -87,6 +97,16 @@ export default function VideoAnalysisPage() {
     const [dragOver, setDragOver] = useState(false);
     const [selectedFile, setSelectedFile] = useState(null);
 
+    // AI Detection state (browser-side RF-DETR)
+    const [aiDetections, setAiDetections] = useState({});   // frameIdx -> detections[]
+    const [aiRunning, setAiRunning] = useState(null);       // frameIdx currently running
+    const [aiWorker, setAiWorker] = useState(null);
+    const [aiWorkerReady, setAiWorkerReady] = useState(false);
+    const [aiWorkerStatus, setAiWorkerStatus] = useState('idle');
+    const [aiWorkerProgress, setAiWorkerProgress] = useState(0);
+    const [aiWorkerMessage, setAiWorkerMessage] = useState('');
+    const [aiBatchRunning, setAiBatchRunning] = useState(false);
+
     const fileInputRef = useRef(null);
     const wsRef = useRef(null);
     const pollRef = useRef(null);
@@ -117,8 +137,8 @@ export default function VideoAnalysisPage() {
         if (!ALLOWED_EXTENSIONS.includes(ext)) {
             return `Invalid file type ".${ext}". Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`;
         }
-        if (file.size > 500 * 1024 * 1024) {
-            return 'File too large. Maximum size: 500 MB';
+        if (file.size > 2000 * 1024 * 1024) {
+            return 'File too large. Maximum size: 2 GB';
         }
         return null;
     }
@@ -443,7 +463,7 @@ export default function VideoAnalysisPage() {
                                         fontSize: '0.875rem', color: 'var(--text-muted)',
                                         marginBottom: '24px', lineHeight: 1.6,
                                     }}>
-                                        Supports MP4, AVI, MKV, MOV, WMV, FLV, WebM • Max 500 MB
+                                        Supports MP4, AVI, MKV, MOV, WMV, FLV, WebM • Max 2 GB
                                     </div>
                                     <div style={{
                                         display: 'flex', gap: '20px', justifyContent: 'center',
@@ -915,9 +935,15 @@ export default function VideoAnalysisPage() {
                                                         }}>?</div>
                                                     )}
                                                     <div style={{
-                                                        fontSize: '0.75rem', color: 'var(--text-muted)',
+                                                        fontSize: '0.7rem', color: 'var(--text-muted)', lineHeight: 1.5,
                                                     }}>
-                                                        at {formatVideoTime(person.video_time)}
+                                                        <div>Entry: {formatVideoTime(person.first_seen_time)}</div>
+                                                        <div>Exit: {formatVideoTime(person.last_seen_time)}</div>
+                                                        {person.appearances > 1 && (
+                                                            <div style={{ color: 'var(--text-secondary)', fontSize: '0.65rem' }}>
+                                                                {person.appearances}× seen
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
                                             ))}
@@ -938,51 +964,125 @@ export default function VideoAnalysisPage() {
                                     <VehicleIcon size={18} /> Detected Vehicles ({results.detected_vehicles?.length || 0})
                                 </h3>
                                 {results.detected_vehicles?.length > 0 ? (
-                                    <div style={{
-                                        display: 'grid',
-                                        gridTemplateColumns: 'repeat(auto-fill, minmax(260px, 1fr))',
-                                        gap: '12px',
-                                    }}>
-                                        {results.detected_vehicles.map((vehicle, idx) => (
-                                            <div key={idx} className="animate-in" style={{
-                                                padding: '18px',
-                                                background: 'var(--hover-surface)',
-                                                borderRadius: '10px',
-                                                border: '1px solid var(--border-color)',
-                                                animationDelay: `${idx * 30}ms`,
-                                            }}>
-                                                <div style={{
-                                                    display: 'flex', alignItems: 'center', gap: '12px',
-                                                    marginBottom: '10px',
+                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
+                                        {results.detected_vehicles.map((vehicle, idx) => {
+                                            const colorHex = {
+                                                'Red': '#ef4444', 'Orange': '#f97316', 'Yellow': '#eab308',
+                                                'Green': '#22c55e', 'Blue': '#3b82f6', 'Purple': '#a855f7',
+                                                'Black': '#1e1e2e', 'White': '#e2e8f0', 'Silver': '#94a3b8',
+                                                'Grey': '#64748b', 'Unknown': '#64748b',
+                                            }[vehicle.color] || '#64748b';
+                                            const typeEmoji = {
+                                                'car': '🚗', 'auto': '🛺', 'bike': '🏍️',
+                                                'bus': '🚌', 'truck': '🚛',
+                                            }[vehicle.vehicle_type] || '🚗';
+                                            return (
+                                                <div key={idx} className="animate-in" style={{
+                                                    display: 'grid',
+                                                    gridTemplateColumns: '60px 1fr 1fr 1fr',
+                                                    gap: '16px',
+                                                    alignItems: 'center',
+                                                    padding: '18px 20px',
+                                                    background: 'var(--hover-surface)',
+                                                    borderRadius: '12px',
+                                                    border: '1px solid var(--border-color)',
+                                                    animationDelay: `${idx * 30}ms`,
                                                 }}>
+                                                    {/* Vehicle Type Icon */}
                                                     <div style={{
-                                                        width: '42px', height: '42px', borderRadius: '10px',
-                                                        background: 'rgba(234, 179, 8, 0.1)',
+                                                        width: '50px', height: '50px', borderRadius: '12px',
+                                                        background: 'rgba(99, 102, 241, 0.1)',
                                                         display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                        fontSize: '1.5rem',
                                                     }}>
-                                                        <PlateIcon size={20} style={{ color: 'var(--warning-light)' }} />
+                                                        {typeEmoji}
                                                     </div>
+
+                                                    {/* Vehicle Type + Color */}
                                                     <div>
                                                         <div style={{
-                                                            fontWeight: 700, fontSize: '1.1rem',
-                                                            color: 'var(--warning-light)',
-                                                            letterSpacing: '1px', fontFamily: 'monospace',
-                                                        }}>{vehicle.plate}</div>
+                                                            fontWeight: 600, fontSize: '0.95rem',
+                                                            color: 'var(--text-primary)',
+                                                            textTransform: 'capitalize',
+                                                        }}>
+                                                            {vehicle.vehicle_type || 'Vehicle'}
+                                                        </div>
                                                         <div style={{
-                                                            fontSize: '0.75rem', color: 'var(--text-muted)',
-                                                        }}>{vehicle.vehicle_type}</div>
+                                                            display: 'flex', alignItems: 'center', gap: '6px',
+                                                            marginTop: '4px',
+                                                        }}>
+                                                            <div style={{
+                                                                width: '12px', height: '12px', borderRadius: '50%',
+                                                                background: colorHex,
+                                                                border: '1px solid rgba(255,255,255,0.2)',
+                                                                flexShrink: 0,
+                                                            }} />
+                                                            <span style={{
+                                                                fontSize: '0.75rem', color: 'var(--text-muted)',
+                                                            }}>
+                                                                {vehicle.color || 'Unknown'}
+                                                            </span>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Plate Number */}
+                                                    <div>
+                                                        <div style={{
+                                                            fontSize: '0.688rem', color: 'var(--text-muted)',
+                                                            textTransform: 'uppercase', letterSpacing: '0.5px',
+                                                            marginBottom: '4px',
+                                                        }}>Plate</div>
+                                                        <div style={{
+                                                            fontWeight: 700, fontSize: '1rem',
+                                                            color: vehicle.plate && vehicle.plate !== '\u2014'
+                                                                ? 'var(--warning-light)' : 'var(--text-muted)',
+                                                            letterSpacing: '1px', fontFamily: 'monospace',
+                                                        }}>
+                                                            {vehicle.plate || '\u2014'}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Entry / Exit Times */}
+                                                    <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                                                        <div style={{
+                                                            display: 'flex', alignItems: 'center', gap: '6px',
+                                                            fontSize: '0.75rem',
+                                                        }}>
+                                                            <EntryIcon size={12} style={{ color: 'var(--success)' }} />
+                                                            <span style={{ color: 'var(--text-muted)' }}>Entry:</span>
+                                                            <span style={{ color: 'var(--success)', fontWeight: 500, fontFamily: 'monospace' }}>
+                                                                {vehicle.first_seen
+                                                                    ? new Date(vehicle.first_seen).toLocaleTimeString()
+                                                                    : '\u2014'}
+                                                            </span>
+                                                        </div>
+                                                        <div style={{
+                                                            display: 'flex', alignItems: 'center', gap: '6px',
+                                                            fontSize: '0.75rem',
+                                                        }}>
+                                                            <ExitIcon size={12} style={{ color: 'var(--warning)' }} />
+                                                            <span style={{ color: 'var(--text-muted)' }}>Exit:</span>
+                                                            <span style={{ color: 'var(--warning-light)', fontWeight: 500, fontFamily: 'monospace' }}>
+                                                                {vehicle.last_seen && vehicle.last_seen !== vehicle.first_seen
+                                                                    ? new Date(vehicle.last_seen).toLocaleTimeString()
+                                                                    : '\u2014'}
+                                                            </span>
+                                                        </div>
+                                                        {vehicle.confidence > 0 && (
+                                                            <div style={{
+                                                                fontSize: '0.688rem', color: 'var(--text-muted)',
+                                                                marginTop: '2px',
+                                                            }}>
+                                                                Conf: {((vehicle.confidence || 0) * 100).toFixed(0)}%
+                                                            </div>
+                                                        )}
                                                     </div>
                                                 </div>
-                                                <div style={{
-                                                    fontSize: '0.75rem', color: 'var(--text-muted)',
-                                                }}>
-                                                    Confidence: {((vehicle.confidence || 0) * 100).toFixed(0)}%
-                                                </div>
-                                            </div>
-                                        ))}
+                                            );
+                                        })}
                                     </div>
                                 ) : (
-                                    <EmptyState icon={<VehicleIcon size={40} />} title="No Vehicles Detected" description="No license plates were detected in this video. Make sure Traffic/ANPR mode is enabled." />
+                                    <EmptyState icon={<VehicleIcon size={40} />} title="No Vehicles Detected" description="No vehicles were detected in this video. Make sure Traffic/ANPR mode is enabled." />
                                 )}
                             </div>
                         )}
@@ -1176,10 +1276,312 @@ export default function VideoAnalysisPage() {
                                 )}
                             </div>
                         )}
+
+                        {/* AI DETECTION TAB — Browser-side RF-DETR on keyframes */}
+                        {activeTab === 'ai-detect' && (
+                            <AiDetectTab
+                                results={results}
+                                aiDetections={aiDetections}
+                                setAiDetections={setAiDetections}
+                                aiRunning={aiRunning}
+                                setAiRunning={setAiRunning}
+                                aiBatchRunning={aiBatchRunning}
+                                setAiBatchRunning={setAiBatchRunning}
+                                aiWorker={aiWorker}
+                                setAiWorker={setAiWorker}
+                                aiWorkerReady={aiWorkerReady}
+                                setAiWorkerReady={setAiWorkerReady}
+                                aiWorkerStatus={aiWorkerStatus}
+                                setAiWorkerStatus={setAiWorkerStatus}
+                                aiWorkerProgress={aiWorkerProgress}
+                                setAiWorkerProgress={setAiWorkerProgress}
+                                aiWorkerMessage={aiWorkerMessage}
+                                setAiWorkerMessage={setAiWorkerMessage}
+                            />
+                        )}
                     </div>
                 </>
             )}
         </AppShell>
+    );
+}
+
+
+// ── AI Detection Tab Component ──────────────────────────────────
+function AiDetectTab({
+    results, aiDetections, setAiDetections,
+    aiRunning, setAiRunning,
+    aiBatchRunning, setAiBatchRunning,
+    aiWorker, setAiWorker,
+    aiWorkerReady, setAiWorkerReady,
+    aiWorkerStatus, setAiWorkerStatus,
+    aiWorkerProgress, setAiWorkerProgress,
+    aiWorkerMessage, setAiWorkerMessage,
+}) {
+    const batchQueueRef = useRef([]);
+    const canvasRefs = useRef({});
+    const frames = results?.key_frames || [];
+
+    // Initialize worker on first render
+    useEffect(() => {
+        if (aiWorker) return;
+        const worker = new Worker('/rfdetr-worker.js');
+        worker.onmessage = (e) => {
+            const { type } = e.data;
+            if (type === 'status') {
+                setAiWorkerStatus(e.data.status);
+                if (e.data.progress !== undefined) setAiWorkerProgress(e.data.progress);
+                if (e.data.message) setAiWorkerMessage(e.data.message);
+            }
+            else if (type === 'ready') { setAiWorkerReady(true); setAiWorkerStatus('ready'); setAiWorkerProgress(100); setAiWorkerMessage('Model ready'); }
+            else if (type === 'result') {
+                const { id, detections } = e.data;
+                setAiDetections(prev => ({ ...prev, [id]: detections }));
+                setAiRunning(null);
+                // Process next in batch queue
+                if (batchQueueRef.current.length > 0) {
+                    const next = batchQueueRef.current.shift();
+                    runDetectionOnFrame(next);
+                } else {
+                    setAiBatchRunning(false);
+                }
+            }
+            else if (type === 'error') { setAiWorkerStatus('error'); setAiWorkerMessage(e.data.message || 'Load failed'); setAiRunning(null); setAiBatchRunning(false); }
+        };
+        worker.postMessage({ type: 'load', modelId: 'onnx-community/rfdetr_base-ONNX', device: 'webgpu' });
+        setAiWorker(worker);
+        return () => { worker.terminate(); };
+    }, []);
+
+    // Draw detections on canvas when results change
+    useEffect(() => {
+        for (const [idxStr, dets] of Object.entries(aiDetections)) {
+            const canvas = canvasRefs.current[idxStr];
+            if (!canvas || !dets?.length) continue;
+            const ctx = canvas.getContext('2d');
+            const img = canvas.previousElementSibling;
+            if (!img) continue;
+
+            canvas.width = img.naturalWidth || img.width || 640;
+            canvas.height = img.naturalHeight || img.height || 480;
+
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            for (const det of dets) {
+                const color = DETECT_COLORS[det.label?.toLowerCase()] || DETECT_COLORS.default;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = 3;
+                ctx.strokeRect(det.box.x, det.box.y, det.box.w, det.box.h);
+
+                const text = `${det.label} ${(det.score * 100).toFixed(0)}%`;
+                ctx.font = 'bold 14px Inter, system-ui, sans-serif';
+                const tw = ctx.measureText(text).width + 8;
+                ctx.fillStyle = color;
+                ctx.fillRect(det.box.x, det.box.y - 20, tw, 20);
+                ctx.fillStyle = '#fff';
+                ctx.fillText(text, det.box.x + 4, det.box.y - 5);
+            }
+        }
+    }, [aiDetections]);
+
+    function runDetectionOnFrame(idx) {
+        const frame = frames[idx];
+        if (!frame || !aiWorker || !aiWorkerReady) return;
+
+        setAiRunning(idx);
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+            const ctx = canvas.getContext('2d', { willReadFrequently: true });
+            ctx.drawImage(img, 0, 0);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            aiWorker.postMessage(
+                { type: 'detect', imageData, id: idx, threshold: 0.35 },
+                [imageData.data.buffer],
+            );
+        };
+        img.src = `${API_BASE}${frame.snapshot_url}`;
+    }
+
+    function runBatchDetection() {
+        if (!aiWorkerReady || frames.length === 0) return;
+        setAiBatchRunning(true);
+        batchQueueRef.current = frames.map((_, i) => i).filter(i => !aiDetections[i]);
+        if (batchQueueRef.current.length === 0) { setAiBatchRunning(false); return; }
+        const first = batchQueueRef.current.shift();
+        runDetectionOnFrame(first);
+    }
+
+    const totalDetected = Object.values(aiDetections).reduce((sum, d) => sum + (d?.length || 0), 0);
+
+    return (
+        <div>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '20px' }}>
+                <h3 style={{ marginTop: 0, marginBottom: 0, fontSize: '1rem', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <DetectionIcon size={18} /> AI Detection — RF-DETR WebGPU
+                </h3>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    {aiWorkerReady && totalDetected > 0 && (
+                        <span style={{ fontSize: '0.688rem', color: 'var(--accent-light)', fontWeight: 600 }}>
+                            {totalDetected} objects found in {Object.keys(aiDetections).length} frames
+                        </span>
+                    )}
+                    <button
+                        className={`btn btn-sm ${aiBatchRunning ? 'btn-secondary' : 'btn-primary'}`}
+                        disabled={!aiWorkerReady || aiBatchRunning || frames.length === 0}
+                        onClick={runBatchDetection}
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', minWidth: 'auto' }}
+                    >
+                        <DetectionIcon size={14} />
+                        {aiBatchRunning ? 'Detecting...' : `Detect All Frames (${frames.length})`}
+                    </button>
+                </div>
+            </div>
+
+            {/* Worker status */}
+            {!aiWorkerReady && (
+                <div style={{
+                    padding: '28px 24px', textAlign: 'center',
+                    background: 'var(--hover-surface)', borderRadius: '12px',
+                    border: `1px solid ${aiWorkerStatus === 'error' ? '#ef444450' : 'var(--border-color)'}`, marginBottom: '20px',
+                }}>
+                    {aiWorkerStatus !== 'error' && (
+                        <div style={{
+                            width: '32px', height: '32px', margin: '0 auto 12px',
+                            border: '3px solid rgba(255,255,255,0.1)', borderTopColor: '#818cf8',
+                            borderRadius: '50%', animation: 'spin 1s linear infinite',
+                        }} />
+                    )}
+                    {aiWorkerStatus === 'error' && (
+                        <div style={{ fontSize: '1.5rem', marginBottom: '8px' }}>⚠️</div>
+                    )}
+                    <div style={{ fontWeight: 600, fontSize: '0.875rem', color: aiWorkerStatus === 'error' ? '#ef4444' : 'var(--text-primary)' }}>
+                        {aiWorkerMessage || (
+                            aiWorkerStatus === 'downloading' ? 'Downloading RF-DETR Model...' :
+                            aiWorkerStatus === 'loading' ? 'Initializing model...' :
+                            aiWorkerStatus === 'error' ? 'Failed to load model' : 'Preparing AI engine...'
+                        )}
+                    </div>
+                    {/* Progress bar */}
+                    {aiWorkerStatus !== 'error' && aiWorkerProgress > 0 && (
+                        <div style={{
+                            width: '100%', maxWidth: '320px', height: '6px',
+                            background: 'rgba(255,255,255,0.08)', borderRadius: '3px',
+                            margin: '12px auto 0', overflow: 'hidden',
+                        }}>
+                            <div style={{
+                                width: `${aiWorkerProgress}%`, height: '100%',
+                                background: 'linear-gradient(90deg, #818cf8, #a78bfa)',
+                                borderRadius: '3px',
+                                transition: 'width 0.4s ease',
+                            }} />
+                        </div>
+                    )}
+                    <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '8px' }}>
+                        {aiWorkerStatus === 'error'
+                            ? 'Check browser console for details. Try refreshing the page.'
+                            : aiWorkerProgress > 0
+                                ? `${aiWorkerProgress}% — First load downloads ~350MB (cached afterwards)`
+                                : 'First load downloads ~350MB (cached afterwards)'
+                        }
+                    </div>
+                </div>
+            )}
+
+            {/* Keyframe grid with detection overlays */}
+            {frames.length > 0 ? (
+                <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))',
+                    gap: '16px',
+                }}>
+                    {frames.map((frame, idx) => {
+                        const dets = aiDetections[idx];
+                        const isRunning = aiRunning === idx;
+                        return (
+                            <div key={idx} className="animate-in" style={{
+                                borderRadius: '12px', overflow: 'hidden',
+                                border: `1px solid ${dets ? 'var(--accent)' : 'var(--border-color)'}`,
+                                animationDelay: `${idx * 30}ms`,
+                                transition: 'border-color 0.3s ease',
+                            }}>
+                                <div style={{ position: 'relative', background: '#000' }}>
+                                    <img
+                                        src={`${API_BASE}${frame.snapshot_url}`}
+                                        alt={`Frame ${frame.frame}`}
+                                        style={{ width: '100%', display: 'block' }}
+                                        crossOrigin="anonymous"
+                                    />
+                                    <canvas
+                                        ref={el => { if (el) canvasRefs.current[idx] = el; }}
+                                        style={{
+                                            position: 'absolute', inset: 0,
+                                            width: '100%', height: '100%',
+                                            pointerEvents: 'none',
+                                        }}
+                                    />
+                                    {isRunning && (
+                                        <div style={{
+                                            position: 'absolute', inset: 0,
+                                            background: 'rgba(0,0,0,0.5)', display: 'flex',
+                                            alignItems: 'center', justifyContent: 'center',
+                                        }}>
+                                            <div style={{
+                                                width: '28px', height: '28px',
+                                                border: '3px solid rgba(255,255,255,0.15)',
+                                                borderTopColor: '#818cf8', borderRadius: '50%',
+                                                animation: 'spin 1s linear infinite',
+                                            }} />
+                                        </div>
+                                    )}
+                                </div>
+                                <div style={{
+                                    padding: '10px 14px', background: 'var(--hover-surface)',
+                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                }}>
+                                    <div>
+                                        <div style={{ fontSize: '0.75rem', fontWeight: 600 }}>Frame #{frame.frame}</div>
+                                        <div style={{ fontSize: '0.625rem', color: 'var(--text-muted)' }}>
+                                            {formatVideoTime(frame.video_time)}
+                                            {dets && ` • ${dets.length} object${dets.length !== 1 ? 's' : ''}`}
+                                        </div>
+                                    </div>
+                                    {!dets && (
+                                        <button
+                                            className="btn btn-sm btn-secondary"
+                                            disabled={!aiWorkerReady || isRunning}
+                                            onClick={() => runDetectionOnFrame(idx)}
+                                            style={{ minWidth: 'auto', fontSize: '0.688rem', padding: '4px 10px' }}
+                                        >
+                                            {isRunning ? '...' : 'Detect'}
+                                        </button>
+                                    )}
+                                    {dets && dets.length > 0 && (
+                                        <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap', maxWidth: '50%', justifyContent: 'flex-end' }}>
+                                            {[...new Set(dets.map(d => d.label))].map(label => (
+                                                <span key={label} style={{
+                                                    fontSize: '0.563rem', fontWeight: 700,
+                                                    padding: '2px 6px', borderRadius: '4px',
+                                                    background: (DETECT_COLORS[label?.toLowerCase()] || DETECT_COLORS.default) + '25',
+                                                    color: DETECT_COLORS[label?.toLowerCase()] || DETECT_COLORS.default,
+                                                    border: `1px solid ${(DETECT_COLORS[label?.toLowerCase()] || DETECT_COLORS.default)}40`,
+                                                }}>
+                                                    {dets.filter(d => d.label === label).length}× {label}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </div>
+                        );
+                    })}
+                </div>
+            ) : (
+                <EmptyState icon={<ImageIcon size={40} />} title="No Key Frames" description="Run a video analysis first to generate key frames for AI detection." />
+            )}
+        </div>
     );
 }
 

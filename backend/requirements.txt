@@ -23,6 +23,13 @@ scipy>=1.12.0
 tf-keras>=2.16.0
 easyocr>=1.7.0
 
+# RF-DETR (Real-Time Detection Transformer) — superior object detection
+rfdetr>=1.0.0
+supervision>=0.25.0
+
+# Roboflow Indian Vehicles Detection API
+inference-sdk>=1.0.0
+
 # Database (PostgreSQL)
 sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.9

@@ -21,8 +21,61 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/cameras", tags=["Cameras"])
 
 
+@router.get("/debug/recognition-state")
+async def debug_recognition_state(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Debug endpoint: shows how many face encodings are loaded in each camera's recognizer.
+    Use this to verify that registered faces are actually loaded for recognition.
+    """
+    from app.services.person_service import PersonService
+
+    db_encodings = PersonService.get_all_encodings()
+    pipeline_states = {}
+
+    for camera_id in camera_manager.get_active_camera_ids():
+        worker = camera_manager._workers.get(camera_id)
+        if worker and worker.pipeline:
+            recognizer = worker.pipeline.recognizer
+            pipeline_states[camera_id] = {
+                "known_count": recognizer.known_count,
+                "known_persons": recognizer.known_persons,
+                "tolerance": recognizer.tolerance,
+                "pipeline_mode": worker.pipeline.pipeline_mode,
+            }
+
+    return {
+        "db_encoding_count": len(db_encodings),
+        "db_persons": list(set(e["person_name"] for e in db_encodings)),
+        "cached_encodings": len(camera_manager._cached_encodings) if camera_manager._cached_encodings else 0,
+        "active_pipelines": pipeline_states,
+        "issue_detected": any(
+            p["known_count"] == 0 for p in pipeline_states.values()
+        ) if pipeline_states else None,
+    }
+
+
+@router.post("/refresh-encodings")
+async def refresh_encodings(
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Force reload face encodings from DB into all active camera pipelines.
+    Use this if recognition seems broken after adding new faces.
+    """
+    count = camera_manager.refresh_encodings()
+    return {
+        "message": f"Refreshed {count} encodings into all active pipelines",
+        "encoding_count": count,
+        "active_cameras": len(camera_manager.get_active_camera_ids()),
+    }
+
+
 @router.get("/active-persons")
-async def get_active_persons():
+async def get_active_persons(
+    current_user: dict = Depends(get_current_user),
+):
     """
     Get all currently detected/present persons across all cameras.
     Returns real-time tracking data from all active pipelines.
@@ -50,8 +103,27 @@ async def list_cameras(
     is_active: Optional[bool] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """List all registered cameras with status."""
-    return CameraService.list_cameras(is_active=is_active)
+    """List all registered cameras with status, including active browser cameras."""
+    db_cameras = CameraService.list_cameras(is_active=is_active)
+
+    # Also include active browser camera sessions (skip if already in DB results)
+    existing_ids = {c.get("id") or getattr(c, "id", None) for c in db_cameras}
+    from app.routes.browser_camera import _browser_sessions
+    for sid, session in _browser_sessions.items():
+        if session.is_active and sid not in existing_ids:
+            db_cameras.append({
+                "id": sid,
+                "name": session.label,
+                "location": "Remote (Browser)",
+                "stream_url": f"browser:{sid}",
+                "status": "online",
+                "is_active": True,
+                "type": "browser",
+                "fps": session.status.get("fps", 0),
+                "frame_count": session.frame_count,
+            })
+
+    return db_cameras
 
 
 @router.post("", response_model=CameraResponse)
@@ -153,8 +225,21 @@ async def camera_stream(
     """
     WebSocket endpoint for live camera stream.
     Reads pre-encoded JPEG bytes from the pipeline (encoded in the worker thread).
-    Zero CPU work happens here — just read cached bytes and send.
+    Also supports browser camera sessions directly.
+    
+    Accepts optional JWT token via query parameter for authentication:
+      ws://host/api/cameras/{id}/stream?token=<jwt>
     """
+    # Optional: validate JWT token from query param
+    token = websocket.query_params.get("token")
+    if token:
+        try:
+            from app.core.security import verify_token
+            verify_token(token)
+        except Exception:
+            await websocket.close(code=4001, reason="Invalid token")
+            return
+    
     await websocket.accept()
     logger.info(f"Stream WebSocket connected for camera: {camera_id}")
 
@@ -162,13 +247,22 @@ async def camera_stream(
 
     try:
         while True:
-            worker = camera_manager._workers.get(camera_id)
-            if not worker or not worker.pipeline:
-                await asyncio.sleep(0.1)
-                continue
+            jpeg_bytes = None
 
-            # Read pre-encoded JPEG from pipeline (encoded in worker thread)
-            jpeg_bytes = worker.pipeline._last_jpeg
+            # Priority 1: AI-processed frame from pipeline (has bounding boxes)
+            worker = camera_manager._workers.get(camera_id)
+            if worker and worker.pipeline and worker.pipeline._last_jpeg:
+                jpeg_bytes = worker.pipeline._last_jpeg
+            else:
+                # Priority 2: Raw frame from browser camera session
+                from app.routes.browser_camera import _browser_sessions
+                browser_session = _browser_sessions.get(camera_id)
+                if browser_session and browser_session.is_active:
+                    jpeg_bytes = browser_session.last_jpeg
+                else:
+                    await asyncio.sleep(0.1)
+                    continue
+
             if jpeg_bytes is None:
                 await asyncio.sleep(0.05)
                 continue
@@ -182,8 +276,8 @@ async def camera_stream(
                 except Exception:
                     break
             
-            # ~30fps push rate (33ms) — minimal latency since no encoding happens here
-            await asyncio.sleep(0.033)
+            # Fast polling for low-latency relay
+            await asyncio.sleep(0.01)
 
     except WebSocketDisconnect:
         logger.info(f"Stream WebSocket disconnected for camera: {camera_id}")
@@ -194,3 +288,4 @@ async def camera_stream(
             await websocket.close()
         except Exception:
             pass
+

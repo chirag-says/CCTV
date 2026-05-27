@@ -1,6 +1,10 @@
 """
 In-memory store for mock/dev mode (no Supabase).
 
+⚠️  DEPRECATED — This module is no longer used. The system now uses
+PostgreSQL via SQLAlchemy (see app.db.models and app.db.session).
+No active code imports this module. Retained for reference only.
+
 Stores detection events and unknown faces in memory
 so the frontend can display them without a database.
 """

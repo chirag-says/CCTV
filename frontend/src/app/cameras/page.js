@@ -8,7 +8,7 @@
 import { useState, useEffect } from 'react';
 import AppShell from '@/components/AppShell';
 import api from '@/lib/api';
-import { PlusIcon, SettingsIcon, XIcon, VideoCameraIcon, VideoCameraOffIcon } from '@/components/Icons';
+import { PlusIcon, SettingsIcon, XIcon, VideoCameraIcon, VideoCameraOffIcon, TrashIcon } from '@/components/Icons';
 
 export default function CamerasPage() {
     const [cameras, setCameras] = useState([]);
@@ -17,6 +17,8 @@ export default function CamerasPage() {
     const [showModal, setShowModal] = useState(false);
     const [formData, setFormData] = useState({ name: '', location: '', stream_url: '', camera_type: 'webcam' });
     const [startingWebcam, setStartingWebcam] = useState(false);
+    const [deleteConfirm, setDeleteConfirm] = useState(null); // camera object to delete
+    const [deleting, setDeleting] = useState(false);
 
     useEffect(() => { loadCameras(); }, []);
 
@@ -71,6 +73,23 @@ export default function CamerasPage() {
         }
     }
 
+    async function handleDelete(cam) {
+        setDeleting(true);
+        try {
+            // Stop first if running
+            if (cam.status === 'online') {
+                try { await api.stopCamera(cam.id); } catch (_) {}
+            }
+            await api.deleteCamera(cam.id);
+            setDeleteConfirm(null);
+            loadCameras();
+        } catch (e) {
+            alert('Failed to delete camera: ' + e.message);
+        } finally {
+            setDeleting(false);
+        }
+    }
+
     return (
         <AppShell>
             <div className="page-header">
@@ -96,6 +115,16 @@ export default function CamerasPage() {
                         </button>
                     )}
                     <button className="btn btn-primary" onClick={() => setShowModal(true)} id="add-camera-btn"><PlusIcon size={16} /> Add Camera</button>
+                    <a
+                        href="/share-camera"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn btn-secondary"
+                        style={{ display: 'flex', alignItems: 'center', gap: '6px', textDecoration: 'none' }}
+                        title="Open on a remote phone to use its camera"
+                    >
+                        📱 Remote Camera
+                    </a>
                 </div>
             </div>
 
@@ -152,6 +181,18 @@ export default function CamerasPage() {
                                     {cam.status === 'online' ? <><VideoCameraOffIcon size={14} /> Stop</> : <><VideoCameraIcon size={14} /> Start</>}
                                 </button>
                                 <button className="btn btn-secondary btn-sm" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}><SettingsIcon size={14} /> Config</button>
+                                <button
+                                    className="btn btn-sm"
+                                    onClick={() => setDeleteConfirm(cam)}
+                                    title="Remove camera"
+                                    style={{
+                                        display: 'flex', alignItems: 'center', gap: '4px',
+                                        background: 'rgba(239,68,68,0.1)', color: '#ef4444',
+                                        border: '1px solid rgba(239,68,68,0.2)',
+                                    }}
+                                >
+                                    <TrashIcon size={14} />
+                                </button>
                             </div>
                         </div>
                     ))}
@@ -176,6 +217,44 @@ export default function CamerasPage() {
                         <div className="modal-actions">
                             <button className="btn btn-secondary" onClick={() => setShowModal(false)}>Cancel</button>
                             <button className="btn btn-primary" onClick={handleAdd} disabled={!formData.name}>Add Camera</button>
+                        </div>
+                    </div>
+                </div>
+            )}
+
+            {/* Delete Confirmation Modal */}
+            {deleteConfirm && (
+                <div className="modal-overlay" onClick={() => !deleting && setDeleteConfirm(null)}>
+                    <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: '420px' }}>
+                        <div className="modal-header">
+                            <h3 className="modal-title" style={{ color: '#ef4444', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <TrashIcon size={18} /> Remove Camera
+                            </h3>
+                            <button className="modal-close" onClick={() => !deleting && setDeleteConfirm(null)}><XIcon size={18} /></button>
+                        </div>
+                        <div style={{ padding: '0 24px 8px', fontSize: '0.875rem', color: 'var(--text-secondary)', lineHeight: 1.6 }}>
+                            Are you sure you want to remove <strong style={{ color: 'var(--text-primary)' }}>{deleteConfirm.name}</strong>?
+                            {deleteConfirm.status === 'online' && (
+                                <div style={{
+                                    marginTop: '8px', padding: '8px 12px', borderRadius: '8px',
+                                    background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.2)',
+                                    fontSize: '0.75rem', color: '#f59e0b',
+                                }}>
+                                    This camera is currently online. It will be stopped before removal.
+                                </div>
+                            )}
+                        </div>
+                        <div className="modal-actions">
+                            <button className="btn btn-secondary" onClick={() => setDeleteConfirm(null)} disabled={deleting}>Cancel</button>
+                            <button
+                                className="btn btn-danger"
+                                onClick={() => handleDelete(deleteConfirm)}
+                                disabled={deleting}
+                                style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
+                            >
+                                <TrashIcon size={14} />
+                                {deleting ? 'Removing...' : 'Remove Camera'}
+                            </button>
                         </div>
                     </div>
                 </div>

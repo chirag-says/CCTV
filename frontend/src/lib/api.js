@@ -2,7 +2,8 @@
  * API client for the CCTV backend.
  */
 
-export const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// If in browser, use relative paths to trigger Next.js rewrites. In SSR, default to localhost:8000
+export const API_BASE = process.env.NEXT_PUBLIC_API_URL || (typeof window !== 'undefined' ? window.location.origin : 'http://localhost:8000');
 
 class ApiClient {
   constructor() {
@@ -153,6 +154,10 @@ class ApiClient {
 
   async stopCamera(id) {
     return this.request(`/api/cameras/${id}/stop`, { method: 'POST' });
+  }
+
+  async deleteCamera(id) {
+    return this.request(`/api/cameras/${id}`, { method: 'DELETE' });
   }
 
   async getActivePersons() {

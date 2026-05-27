@@ -1,18 +1,18 @@
 """
-Hazard Detector — YOLOv8-based threat/object detection.
+Hazard Detector — RF-DETR-based threat/object detection.
 
-Detects hazardous objects (knives, guns, backpacks/abandoned objects) using
-Ultralytics YOLOv8 (nano model for speed). Designed to run on a separate
-thread or at reduced frame rates to avoid impacting the main video pipeline.
+Uses RF-DETR (Real-Time Detection Transformer) for superior object detection
+accuracy compared to YOLOv8. RF-DETR achieves 62+ mAP on COCO vs ~50 mAP
+for YOLOv8, resulting in significantly fewer false positives and missed detections.
+
+Falls back to YOLOv8 if RF-DETR is not available.
 
 COCO class IDs of interest:
-  - 24: backpack
-  - 25: umbrella (optional)
-  - 26: handbag
   - 43: knife
-  - Not in COCO: gun, fire  — we add them for future custom models
+  - 76: scissors
+  - Not in COCO: gun, fire  — for future custom models
 
-This module gracefully handles the case where ultralytics isn't installed.
+This module gracefully handles missing dependencies.
 """
 
 import cv2
@@ -27,7 +27,7 @@ from datetime import datetime, timezone
 logger = logging.getLogger(__name__)
 
 # ── COCO class mapping for threat-relevant objects ────────────────────────────
-# Full COCO has 80 classes. We only flag actual weapons/dangers:
+# RF-DETR uses standard COCO classes. We only flag actual weapons/dangers:
 THREAT_CLASSES: Dict[int, str] = {
     # Weapons / sharp objects
     43: "knife",
@@ -60,14 +60,16 @@ DEFAULT_CONFIDENCE = 0.50
 
 class HazardDetector:
     """
-    YOLOv8-based hazard/threat object detector.
+    RF-DETR-based hazard/threat object detector.
 
     Features:
+    - Uses RF-DETR (DINOv2 backbone) for state-of-the-art detection accuracy
+    - Falls back to YOLOv8 if rfdetr is not installed
     - Lazy model loading (only loads when first detection is requested)
     - Runs inference on a ThreadPoolExecutor to avoid blocking video pipeline
     - Frame throttling (only processes every Nth frame)
     - Deduplication / cooldown to prevent alert spam
-    - Graceful degradation if ultralytics isn't installed
+    - Graceful degradation if dependencies aren't installed
 
     Usage:
         detector = HazardDetector(on_alert=my_callback)
@@ -81,26 +83,31 @@ class HazardDetector:
         alert_cooldown_sec: float = 30.0,
         on_alert: Optional[Callable] = None,
         max_workers: int = 1,
+        rfdetr_model_size: str = "large",
     ):
         """
         Args:
-            model_path: Path to YOLO model weights (downloaded automatically)
+            model_path: Path to YOLO model weights (fallback)
             frame_interval: Only process every Nth frame
             alert_cooldown_sec: Minimum seconds between alerts for same object class
             on_alert: Callback(alert_dict) when a threat is detected
             max_workers: Thread pool size (1 is usually enough)
+            rfdetr_model_size: RF-DETR model size — "nano", "base", or "large"
         """
         self.model_path = model_path
         self.frame_interval = frame_interval
         self.alert_cooldown_sec = alert_cooldown_sec
         self.on_alert = on_alert
+        self.rfdetr_model_size = rfdetr_model_size
 
         self._model = None
         self._model_loaded = False
         self._model_available = False
+        self._model_backend = None  # "rfdetr" or "yolo"
         self._model_lock = threading.Lock()
 
         self._frame_counter = 0
+        self._counter_lock = threading.Lock()
         self._executor = ThreadPoolExecutor(
             max_workers=max_workers,
             thread_name_prefix="hazard-det",
@@ -116,35 +123,78 @@ class HazardDetector:
         self._last_inference_ms = 0.0
 
         logger.info(
-            f"HazardDetector initialized: model={model_path}, "
-            f"interval={frame_interval}, cooldown={alert_cooldown_sec}s"
+            f"HazardDetector initialized: rfdetr_size={rfdetr_model_size}, "
+            f"yolo_fallback={model_path}, interval={frame_interval}, "
+            f"cooldown={alert_cooldown_sec}s"
         )
 
     def _load_model(self) -> bool:
-        """Lazy-load YOLOv8 model. Thread-safe."""
+        """Lazy-load RF-DETR model (with YOLO fallback). Thread-safe."""
         with self._model_lock:
             if self._model_loaded:
                 return self._model_available
 
+            # ── Try RF-DETR first (superior accuracy) ────────────────────
+            try:
+                from rfdetr import RFDETRBase, RFDETRLarge
+                try:
+                    from rfdetr import RFDETRNano
+                except ImportError:
+                    RFDETRNano = RFDETRBase  # Fallback if nano not available
+
+                model_map = {
+                    "nano": RFDETRNano,
+                    "base": RFDETRBase,
+                    "large": RFDETRLarge,
+                }
+
+                model_cls = model_map.get(self.rfdetr_model_size, RFDETRLarge)
+                logger.info(
+                    f"Loading RF-DETR ({self.rfdetr_model_size}) for hazard detection..."
+                )
+
+                self._model = model_cls()
+                self._model_available = True
+                self._model_backend = "rfdetr"
+                self._model_loaded = True
+
+                logger.info(
+                    f"✅ RF-DETR ({self.rfdetr_model_size}) loaded for hazard detection — "
+                    f"62+ mAP accuracy, DINOv2 backbone"
+                )
+                return True
+
+            except ImportError:
+                logger.info(
+                    "rfdetr not installed — falling back to YOLOv8. "
+                    "Install with: pip install rfdetr"
+                )
+            except Exception as e:
+                logger.warning(f"RF-DETR load failed: {e}, falling back to YOLOv8")
+
+            # ── Fallback to YOLOv8 ───────────────────────────────────────
             try:
                 import torch
                 from ultralytics import YOLO
+
                 self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                logger.info(f"Loading YOLOv8 model: {self.model_path} on {self._device}")
+                logger.info(
+                    f"Loading YOLOv8 fallback: {self.model_path} on {self._device}"
+                )
                 self._model = YOLO(self.model_path)
                 self._model_available = True
-                logger.info(f"YOLOv8 model loaded successfully on {self._device}")
+                self._model_backend = "yolo"
+                logger.info(f"YOLOv8 fallback loaded on {self._device}")
+
             except ImportError:
-                self._device = 'cpu'
                 self._model_available = False
                 logger.warning(
-                    "ultralytics not installed — hazard detection disabled. "
-                    "Install with: pip install ultralytics"
+                    "Neither rfdetr nor ultralytics installed — "
+                    "hazard detection disabled."
                 )
             except Exception as e:
-                self._device = 'cpu'
                 self._model_available = False
-                logger.error(f"Failed to load YOLOv8 model: {e}")
+                logger.error(f"Failed to load any detection model: {e}")
             finally:
                 self._model_loaded = True
 
@@ -167,10 +217,10 @@ class HazardDetector:
         Returns:
             True if frame was submitted for processing, False if skipped
         """
-        self._frame_counter += 1
-
-        if self._frame_counter % self.frame_interval != 0:
-            return False
+        with self._counter_lock:
+            self._frame_counter += 1
+            if self._frame_counter % self.frame_interval != 0:
+                return False
 
         # Copy frame since it will be processed asynchronously
         frame_copy = frame.copy()
@@ -178,10 +228,123 @@ class HazardDetector:
         return True
 
     def _detect(self, frame: np.ndarray, camera_id: str):
-        """Run YOLO inference on a frame (runs in thread pool)."""
+        """Run detection on a frame (runs in thread pool)."""
         if not self._load_model():
             return
 
+        if self._model_backend == "rfdetr":
+            self._detect_rfdetr(frame, camera_id)
+        else:
+            self._detect_yolo(frame, camera_id)
+
+    def _detect_rfdetr(self, frame: np.ndarray, camera_id: str):
+        """Run RF-DETR inference on a frame."""
+        try:
+            import supervision as sv
+            from PIL import Image
+
+            start_time = time.monotonic()
+
+            # RF-DETR expects RGB PIL image or numpy array
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            pil_image = Image.fromarray(frame_rgb)
+
+            # Run RF-DETR inference
+            detections = self._model.predict(
+                pil_image,
+                threshold=0.35,
+            )
+
+            inference_ms = (time.monotonic() - start_time) * 1000
+            self._last_inference_ms = inference_ms
+            self._total_inferences += 1
+
+            if detections is None or len(detections) == 0:
+                return
+
+            now = time.time()
+
+            # RF-DETR returns sv.Detections with xyxy, confidence, class_id
+            for i in range(len(detections)):
+                cls_id = int(detections.class_id[i])
+                confidence = float(detections.confidence[i])
+
+                # Check if this class is one we care about
+                class_name = None
+
+                if cls_id in THREAT_CLASSES:
+                    class_name = THREAT_CLASSES[cls_id]
+                else:
+                    # Check by name for custom models
+                    try:
+                        if hasattr(detections, 'data') and 'class_name' in detections.data:
+                            raw_name = detections.data['class_name'][i].lower()
+                            if raw_name in CUSTOM_THREAT_CLASSES:
+                                class_name = CUSTOM_THREAT_CLASSES[raw_name]
+                    except Exception:
+                        pass
+
+                if class_name is None:
+                    continue
+
+                # Check class-specific confidence threshold
+                min_conf = CLASS_CONFIDENCE_THRESHOLDS.get(
+                    class_name, DEFAULT_CONFIDENCE
+                )
+                if confidence < min_conf:
+                    continue
+
+                # Check cooldown
+                cooldown_key = (camera_id, class_name)
+                with self._cooldown_lock:
+                    last_alert = self._alert_cooldowns.get(cooldown_key, 0)
+                    if now - last_alert < self.alert_cooldown_sec:
+                        continue
+                    self._alert_cooldowns[cooldown_key] = now
+
+                # Extract bounding box
+                x1, y1, x2, y2 = detections.xyxy[i].tolist()
+
+                detection = {
+                    "class": class_name,
+                    "confidence": round(confidence, 3),
+                    "bbox": {
+                        "x1": int(x1), "y1": int(y1),
+                        "x2": int(x2), "y2": int(y2),
+                    },
+                }
+                self._total_detections += 1
+
+                # Emit alert
+                alert = {
+                    "event_type": "security_alert",
+                    "subtype": "hazard",
+                    "camera_id": camera_id,
+                    "threat_class": class_name,
+                    "confidence": round(confidence, 3),
+                    "bounding_box": detection["bbox"],
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "inference_time_ms": round(inference_ms, 1),
+                    "metadata": {
+                        "model": f"rfdetr-{self.rfdetr_model_size}",
+                        "coco_class_id": cls_id,
+                        "backend": "rfdetr",
+                    },
+                }
+
+                logger.warning(
+                    f"🚨 HAZARD ALERT [RF-DETR]: {class_name} detected "
+                    f"(conf={confidence:.2f}) on camera {camera_id}"
+                )
+
+                if self.on_alert:
+                    self.on_alert(alert)
+
+        except Exception as e:
+            logger.error(f"RF-DETR hazard detection failed: {e}", exc_info=True)
+
+    def _detect_yolo(self, frame: np.ndarray, camera_id: str):
+        """Run YOLO inference on a frame (fallback path)."""
         try:
             start_time = time.monotonic()
 
@@ -271,11 +434,12 @@ class HazardDetector:
                         "metadata": {
                             "model": self.model_path,
                             "coco_class_id": cls_id,
+                            "backend": "yolo",
                         },
                     }
 
                     logger.warning(
-                        f"🚨 HAZARD ALERT: {class_name} detected "
+                        f"🚨 HAZARD ALERT [YOLO]: {class_name} detected "
                         f"(conf={confidence:.2f}) on camera {camera_id}"
                     )
 
@@ -283,7 +447,7 @@ class HazardDetector:
                         self.on_alert(alert)
 
         except Exception as e:
-            logger.error(f"Hazard detection failed: {e}", exc_info=True)
+            logger.error(f"YOLO hazard detection failed: {e}", exc_info=True)
 
     def draw_detections(
         self,
@@ -336,6 +500,7 @@ class HazardDetector:
     def stats(self) -> dict:
         return {
             "model_loaded": self._model_available,
+            "model_backend": self._model_backend or "none",
             "total_inferences": self._total_inferences,
             "total_detections": self._total_detections,
             "last_inference_ms": round(self._last_inference_ms, 1),

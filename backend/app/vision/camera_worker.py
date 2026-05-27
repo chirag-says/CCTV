@@ -120,6 +120,7 @@ class CameraManager:
         self._event_callback: Optional[Callable] = None
         self._unknown_callback: Optional[Callable] = None
         self._frame_callback: Optional[Callable] = None
+        self._cached_encodings: Optional[list] = None  # Cached for new cameras
 
     def set_callbacks(
         self,
@@ -154,6 +155,31 @@ class CameraManager:
             )
             worker.start()
             self._workers[camera_id] = worker
+
+            # Load cached face encodings into the new pipeline immediately
+            # This is critical: without this, the recognizer starts with an
+            # empty cache and every face is detected as "UNKNOWN".
+            if self._cached_encodings:
+                worker.pipeline.recognizer.load_encodings(self._cached_encodings)
+                logger.info(
+                    f"Auto-loaded {len(self._cached_encodings)} encodings "
+                    f"into new camera {camera_id}"
+                )
+            else:
+                # No cached encodings — try loading from DB now
+                try:
+                    from app.services.person_service import PersonService
+                    encodings = PersonService.get_all_encodings()
+                    if encodings:
+                        self._cached_encodings = encodings
+                        worker.pipeline.recognizer.load_encodings(encodings)
+                        logger.info(
+                            f"Loaded {len(encodings)} encodings from DB "
+                            f"into new camera {camera_id}"
+                        )
+                except Exception as enc_err:
+                    logger.warning(f"Could not load encodings for camera {camera_id}: {enc_err}")
+
             return True
         except Exception as e:
             logger.error(f"Failed to start camera {camera_id}: {e}")
@@ -174,14 +200,32 @@ class CameraManager:
             self.stop_camera(camera_id)
 
     def load_encodings_all(self, encodings_data: list):
-        """Load face encodings into all active pipeline recognizers."""
+        """Load face encodings into all active pipeline recognizers and cache for future cameras."""
+        # Cache encodings so newly started cameras automatically get them
+        self._cached_encodings = encodings_data
+
         for worker in self._workers.values():
             worker.pipeline.recognizer.load_encodings(encodings_data)
 
         logger.info(
             f"Loaded {len(encodings_data)} encodings into "
-            f"{len(self._workers)} active pipelines"
+            f"{len(self._workers)} active pipelines (cached for future cameras)"
         )
+
+    def refresh_encodings(self):
+        """
+        Reload face encodings from the database and distribute to all active pipelines.
+        Call this after adding/removing face encodings to ensure all cameras are in sync.
+        """
+        try:
+            from app.services.person_service import PersonService
+            encodings = PersonService.get_all_encodings()
+            self.load_encodings_all(encodings)
+            logger.info(f"Refreshed {len(encodings)} encodings from database")
+            return len(encodings)
+        except Exception as e:
+            logger.error(f"Failed to refresh encodings: {e}")
+            return -1
 
     def get_camera_status(self, camera_id: str) -> Optional[dict]:
         """Get status for a specific camera."""

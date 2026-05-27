@@ -27,7 +27,7 @@ async def get_retention_status(
 
         oldest_event = (
             db.query(DetectionEvent)
-            .order_by(DetectionEvent.timestamp.asc())
+            .order_by(DetectionEvent.created_at.asc())
             .first()
         )
         oldest_unknown = (
@@ -39,10 +39,10 @@ async def get_retention_status(
         # Size estimates
         now = datetime.now(timezone.utc)
         events_30d = db.query(DetectionEvent).filter(
-            DetectionEvent.timestamp >= now - timedelta(days=30)
+            DetectionEvent.created_at >= now - timedelta(days=30)
         ).count()
         events_90d = db.query(DetectionEvent).filter(
-            DetectionEvent.timestamp >= now - timedelta(days=90)
+            DetectionEvent.created_at >= now - timedelta(days=90)
         ).count()
 
         return {
@@ -50,7 +50,7 @@ async def get_retention_status(
                 "total": event_count,
                 "last_30_days": events_30d,
                 "last_90_days": events_90d,
-                "oldest": oldest_event.timestamp.isoformat() if oldest_event and oldest_event.timestamp else None,
+                "oldest": oldest_event.created_at.isoformat() if oldest_event and oldest_event.created_at else None,
             },
             "unknown_faces": {
                 "total": unknown_count,
@@ -79,7 +79,7 @@ async def run_cleanup(
         # Count events to delete
         event_cutoff = now - timedelta(days=events_older_than_days)
         events_to_delete = db.query(DetectionEvent).filter(
-            DetectionEvent.timestamp < event_cutoff
+            DetectionEvent.created_at < event_cutoff
         ).count()
 
         # Count dismissed faces to delete
@@ -103,7 +103,7 @@ async def run_cleanup(
 
         # Actually delete
         deleted_events = db.query(DetectionEvent).filter(
-            DetectionEvent.timestamp < event_cutoff
+            DetectionEvent.created_at < event_cutoff
         ).delete()
 
         deleted_faces = db.query(UnknownFace).filter(
