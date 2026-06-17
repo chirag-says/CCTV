@@ -394,7 +394,7 @@ class PlateRecognizer:
         plate_cooldown_sec: float = 60.0,
         on_plate: Optional[Callable] = None,
         languages: List[str] = None,
-        max_workers: int = 1,
+        max_workers: int = 2,
     ):
         """
         Args:
@@ -414,7 +414,9 @@ class PlateRecognizer:
         # Models
         self._vehicle_model = None    # COCO model for vehicle detection
         self._plate_model = None      # Custom model for plate detection
-        self._ocr = None
+        self._ocr = None              # EasyOCR (secondary)
+        self._paddle_ocr = None       # PaddleOCR (primary — Phase 2)
+        self._paddle_ocr_available = False
         self._esrgan = None           # Real-ESRGAN for plate super-resolution
         self._esrgan_available = False
         self._trocr_model = None       # TrOCR transformer for plate text reading
@@ -444,6 +446,10 @@ class PlateRecognizer:
             max_workers=max_workers,
             thread_name_prefix="anpr",
         )
+
+        # Phase 1: Heavy models disabled from realtime pipeline
+        # ESRGAN/TrOCR/Qwen are available for offline verification only
+        self._disable_heavy_models = True
 
         # Cooldown tracking: plate_text → last_alert_timestamp
         self._plate_cooldowns: Dict[str, float] = {}
@@ -532,76 +538,85 @@ class PlateRecognizer:
                 import torch
                 import easyocr
                 use_gpu = torch.cuda.is_available()
-                logger.info(f"Loading EasyOCR: languages={self.languages}, gpu={use_gpu}")
+                self._device = 'cuda' if use_gpu else 'cpu'
+
+                # ── Phase 2: Load PaddleOCR as primary OCR engine ──
+                try:
+                    from paddleocr import PaddleOCR
+                    self._paddle_ocr = PaddleOCR(
+                        use_angle_cls=True,
+                        lang='en',
+                        use_gpu=use_gpu,
+                        show_log=False,
+                        det_db_thresh=0.3,
+                        det_db_box_thresh=0.5,
+                        rec_batch_num=6,
+                        max_text_length=15,
+                    )
+                    self._paddle_ocr_available = True
+                    logger.info("✅ PaddleOCR loaded as PRIMARY OCR engine (Phase 2)")
+                except Exception as e:
+                    self._paddle_ocr_available = False
+                    logger.warning(f"PaddleOCR load failed, using EasyOCR only: {e}")
+
+                # Load EasyOCR as secondary/fallback
+                logger.info(f"Loading EasyOCR (secondary): languages={self.languages}, gpu={use_gpu}")
                 self._ocr = easyocr.Reader(self.languages, gpu=use_gpu)
                 
-                # Load Real-ESRGAN for 4x super-resolution
-                try:
-                    import sys, types
-                    from torchvision.transforms import functional as F
-                    # Patch for newer torchvision versions
-                    sys.modules['torchvision.transforms.functional_tensor'] = types.ModuleType('torchvision.transforms.functional_tensor')
-                    sys.modules['torchvision.transforms.functional_tensor'].rgb_to_grayscale = F.rgb_to_grayscale
-                    
-                    from realesrgan import RealESRGANer
-                    from basicsr.archs.rrdbnet_arch import RRDBNet
-                    esrgan_model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
-                    self._esrgan = RealESRGANer(
-                        scale=4,
-                        model_path='https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth',
-                        model=esrgan_model,
-                        tile=0,
-                        tile_pad=10,
-                        pre_pad=0,
-                        half=False,
-                        device='cuda' if use_gpu else 'cpu',
-                    )
-                    self._esrgan_available = True
-                    logger.info("Real-ESRGAN loaded successfully for plate upscaling")
-                except Exception as e:
-                    self._esrgan_available = False
-                    logger.warning(f"Failed to load Real-ESRGAN, falling back to cv2.resize: {e}")
-                
-                # Load TrOCR for license plate text recognition
-                try:
-                    from transformers import TrOCRProcessor, VisionEncoderDecoderModel
-                    self._trocr_processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed')
+                # ── Phase 1: Heavy models DISABLED from realtime pipeline ──
+                # ESRGAN (200-500ms/crop, 800MB VRAM) — replaced with cv2 CLAHE+bilateral
+                # TrOCR (500ms/crop, 1GB VRAM) — marginal accuracy gain
+                # Qwen2-VL (2-3s/crop, 4GB VRAM) — destroys realtime
+                # These remain available via _trocr_read() and _qwen_read_plate()
+                # for offline dashboard verification, but are NOT loaded at startup.
+                if not self._disable_heavy_models:
+                    # Load Real-ESRGAN for 4x super-resolution
                     try:
-                        self._trocr_model = VisionEncoderDecoderModel.from_pretrained(
-                            'DunnBC22/trocr-base-printed_license_plates_ocr'
+                        import sys, types
+                        from torchvision.transforms import functional as F
+                        sys.modules['torchvision.transforms.functional_tensor'] = types.ModuleType('torchvision.transforms.functional_tensor')
+                        sys.modules['torchvision.transforms.functional_tensor'].rgb_to_grayscale = F.rgb_to_grayscale
+                        from realesrgan import RealESRGANer
+                        from basicsr.archs.rrdbnet_arch import RRDBNet
+                        esrgan_model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+                        self._esrgan = RealESRGANer(
+                            scale=4,
+                            model_path='https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth',
+                            model=esrgan_model, tile=0, tile_pad=10, pre_pad=0, half=False,
+                            device='cuda' if use_gpu else 'cpu',
                         )
-                        logger.info("License-plate-finetuned TrOCR loaded")
-                    except Exception:
-                        self._trocr_model = VisionEncoderDecoderModel.from_pretrained(
-                            'microsoft/trocr-base-printed'
-                        )
-                        logger.info("Base TrOCR loaded (plate-finetuned unavailable)")
-                    self._trocr_model = self._trocr_model.to(
-                        'cuda' if use_gpu else 'cpu'
-                    ).eval()
-                    self._trocr_available = True
-                    logger.info("TrOCR loaded for plate text recognition")
-                except Exception as e:
+                        self._esrgan_available = True
+                        logger.info("Real-ESRGAN loaded for plate upscaling")
+                    except Exception as e:
+                        self._esrgan_available = False
+                        logger.warning(f"ESRGAN load failed: {e}")
+                    try:
+                        from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+                        self._trocr_processor = TrOCRProcessor.from_pretrained('microsoft/trocr-base-printed')
+                        try:
+                            self._trocr_model = VisionEncoderDecoderModel.from_pretrained('DunnBC22/trocr-base-printed_license_plates_ocr')
+                        except Exception:
+                            self._trocr_model = VisionEncoderDecoderModel.from_pretrained('microsoft/trocr-base-printed')
+                        self._trocr_model = self._trocr_model.to('cuda' if use_gpu else 'cpu').eval()
+                        self._trocr_available = True
+                    except Exception as e:
+                        self._trocr_available = False
+                    try:
+                        from transformers import Qwen2VLForConditionalGeneration, AutoProcessor as QwenAutoProcessor
+                        self._qwen_model = Qwen2VLForConditionalGeneration.from_pretrained(
+                            'Qwen/Qwen2-VL-2B-Instruct', torch_dtype=torch.float16, device_map='auto')
+                        self._qwen_processor = QwenAutoProcessor.from_pretrained('Qwen/Qwen2-VL-2B-Instruct')
+                        self._qwen_available = True
+                    except Exception as e:
+                        self._qwen_available = False
+                else:
+                    self._esrgan_available = False
                     self._trocr_available = False
-                    logger.warning(f"Failed to load TrOCR: {e}")
-
-                # Load Qwen2-VL for VLM-based plate reading (best accuracy)
-                try:
-                    from transformers import Qwen2VLForConditionalGeneration, AutoProcessor as QwenAutoProcessor
-                    logger.info("Loading Qwen2-VL-2B-Instruct for plate OCR...")
-                    self._qwen_model = Qwen2VLForConditionalGeneration.from_pretrained(
-                        'Qwen/Qwen2-VL-2B-Instruct',
-                        torch_dtype=torch.float16,
-                        device_map='auto',
-                    )
-                    self._qwen_processor = QwenAutoProcessor.from_pretrained(
-                        'Qwen/Qwen2-VL-2B-Instruct'
-                    )
-                    self._qwen_available = True
-                    logger.info("Qwen2-VL loaded — VLM plate reading enabled")
-                except Exception as e:
                     self._qwen_available = False
-                    logger.warning(f"Failed to load Qwen2-VL: {e}")
+                    logger.info(
+                        "⚡ Phase 1: ESRGAN/TrOCR/Qwen2-VL DISABLED from realtime "
+                        "(saves ~5.8GB VRAM, ~2-3s latency per plate)"
+                    )
 
                 self._ocr_available = True
                 logger.info(f"EasyOCR loaded successfully (GPU={'enabled' if use_gpu else 'disabled'})")
@@ -860,8 +875,6 @@ class PlateRecognizer:
 
                     for i, vehicle in enumerate(vehicles):
                         vx1, vy1, vx2, vy2 = vehicle['box']
-                        # Check if plate center is inside or near the vehicle box
-                        # Allow some margin (plates can be slightly outside the vehicle bbox)
                         margin = max(vx2 - vx1, vy2 - vy1) * 0.3
                         if (vx1 - margin <= pcx <= vx2 + margin and
                             vy1 - margin <= pcy <= vy2 + margin):
@@ -879,53 +892,25 @@ class PlateRecognizer:
                         vx1, vy1, vx2, vy2 = vehicle['box']
                         plates_emitted.add(vi)
                     else:
-                        # Plate detected but no matching vehicle — still emit
                         vehicle_type = "vehicle"
                         vehicle_conf = plate_det_conf
                         vx1, vy1, vx2, vy2 = px1, py1, px2, py2
 
-                    # Cooldown check
-                    with self._cooldown_lock:
-                        now = time.time()
-                        is_dup = False
-                        expired = [p for p, t in self._plate_cooldowns.items()
-                                   if now - t > self.plate_cooldown_sec]
-                        for p in expired:
-                            del self._plate_cooldowns[p]
-                        for seen_plate, last_time in self._plate_cooldowns.items():
-                            if self._plate_similarity(normalized, seen_plate) >= 0.6:
-                                is_dup = True
-                                break
-                        if is_dup:
-                            continue
-                        self._plate_cooldowns[normalized] = now
-
-                    self._total_plates += 1
-
-                    event = {
-                        "event_type": "vehicle_entry",
-                        "camera_id": camera_id,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "metadata": {
-                            "plate": normalized,
-                            "confidence": round(ocr_confidence, 3),
-                            "vehicle_type": vehicle_type,
-                            "vehicle_confidence": round(vehicle_conf, 3),
-                            "bounding_box": {
-                                "x1": vx1, "y1": vy1,
-                                "x2": vx2, "y2": vy2,
-                            },
-                        },
-                    }
-
-                    logger.info(
-                        f"🚗 PLATE: {normalized} "
-                        f"({vehicle_type}, conf={ocr_confidence:.2f}) "
-                        f"on camera {camera_id} [Strategy A: full-frame]"
+                    # ── Phase 1: Route through consensus voting ──
+                    # Instead of emitting directly, accumulate votes.
+                    # The consensus system will emit once 3+ reads agree.
+                    logger.debug(
+                        f"ANPR: Adding vote '{normalized}' conf={ocr_confidence:.2f} "
+                        f"for {vehicle_type} [Strategy A]"
                     )
-
-                    if self.on_plate:
-                        self.on_plate(event)
+                    self._add_vote(
+                        vehicle_box=(vx1, vy1, vx2, vy2),
+                        plate_text=normalized,
+                        ocr_confidence=ocr_confidence,
+                        vehicle_type=vehicle_type,
+                        vehicle_conf=vehicle_conf,
+                        camera_id=camera_id,
+                    )
 
             # ══════════════════════════════════════════════════════════════
             # Strategy B: Per-vehicle-crop plate detection (FALLBACK)
@@ -981,51 +966,39 @@ class PlateRecognizer:
                     if ocr_confidence < 0.25:
                         continue
 
-                    with self._cooldown_lock:
-                        now = time.time()
-                        is_dup = False
-                        expired = [p for p, t in self._plate_cooldowns.items()
-                                   if now - t > self.plate_cooldown_sec]
-                        for p in expired:
-                            del self._plate_cooldowns[p]
-                        for seen_plate, last_time in self._plate_cooldowns.items():
-                            if self._plate_similarity(normalized, seen_plate) >= 0.6:
-                                is_dup = True
-                                break
-                        if is_dup:
-                            continue
-                        self._plate_cooldowns[normalized] = now
-
-                    self._total_plates += 1
-
-                    event = {
-                        "event_type": "vehicle_entry",
-                        "camera_id": camera_id,
-                        "timestamp": datetime.now(timezone.utc).isoformat(),
-                        "metadata": {
-                            "plate": normalized,
-                            "confidence": round(ocr_confidence, 3),
-                            "vehicle_type": vehicle_type,
-                            "vehicle_confidence": round(vehicle_conf, 3),
-                            "bounding_box": {
-                                "x1": vx1, "y1": vy1,
-                                "x2": vx2, "y2": vy2,
-                            },
-                        },
-                    }
-
-                    logger.info(
-                        f"🚗 PLATE: {normalized} "
-                        f"({vehicle_type}, conf={ocr_confidence:.2f}) "
-                        f"on camera {camera_id} [Strategy B: vehicle-crop]"
+                    # ── Phase 1: Route through consensus voting ──
+                    logger.debug(
+                        f"ANPR: Adding vote '{normalized}' conf={ocr_confidence:.2f} "
+                        f"for {vehicle_type} [Strategy B]"
+                    )
+                    self._add_vote(
+                        vehicle_box=(vx1, vy1, vx2, vy2),
+                        plate_text=normalized,
+                        ocr_confidence=ocr_confidence,
+                        vehicle_type=vehicle_type,
+                        vehicle_conf=vehicle_conf,
+                        camera_id=camera_id,
                     )
 
-                    if self.on_plate:
-                        self.on_plate(event)
+            # ── Flush expired tracks (emit partial consensus for vehicles that left) ──
+            with self._track_lock:
+                now_flush = time.time()
+                expired_tracks = [
+                    tid for tid, s in self._tracked_vehicles.items()
+                    if now_flush - s['last_seen'] > self._track_max_age_sec
+                ]
+                for tid in expired_tracks:
+                    self._emit_consensus(tid)
+                    del self._tracked_vehicles[tid]
 
             inference_ms = (time.monotonic() - start_time) * 1000
             self._last_inference_ms = inference_ms
             self._total_inferences += 1
+
+            if inference_ms > 500:
+                logger.warning(f"ANPR: Slow inference {inference_ms:.0f}ms on camera {camera_id}")
+            else:
+                logger.debug(f"ANPR: Inference {inference_ms:.0f}ms on camera {camera_id}")
 
         except Exception as e:
             logger.error(f"ANPR processing failed: {e}", exc_info=True)
@@ -1513,11 +1486,165 @@ class PlateRecognizer:
 
         return best_text, best_confidence
 
+    # ── Phase 2: Preprocessing Pipeline (replaces ESRGAN) ──────────────────
+
+    def _preprocess_plate(self, image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        Fast plate preprocessing pipeline. Replaces ESRGAN (~5ms vs ~300ms).
+        Returns: (color_image, gray_enhanced) both suitable for OCR.
+        """
+        h, w = image.shape[:2]
+
+        # 1. Upscale small crops to target width via bicubic (fast)
+        target_w = 300
+        if w < target_w:
+            scale = target_w / w
+            image = cv2.resize(image, None, fx=scale, fy=scale,
+                               interpolation=cv2.INTER_CUBIC)
+
+        # 2. Grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+
+        # 3. CLAHE (adaptive contrast)
+        gh, gw = gray.shape[:2]
+        grid_w = max(1, min(8, gw // 8))
+        grid_h = max(1, min(4, gh // 4))
+        clahe = cv2.createCLAHE(clipLimit=2.5, tileGridSize=(grid_w, grid_h))
+        enhanced = clahe.apply(gray)
+
+        # 4. Bilateral filter (denoise, preserve edges)
+        denoised = cv2.bilateralFilter(enhanced, 9, 75, 75)
+
+        # 5. Unsharp masking (sharpen text edges)
+        blurred = cv2.GaussianBlur(denoised, (0, 0), 3)
+        sharpened = cv2.addWeighted(denoised, 1.5, blurred, -0.5, 0)
+
+        # 6. Deskew if needed
+        try:
+            coords = np.column_stack(np.where(sharpened > 0))
+            if len(coords) > 5:
+                angle = cv2.minAreaRect(coords)[-1]
+                if angle < -45:
+                    angle = -(90 + angle)
+                else:
+                    angle = -angle
+                if 2 < abs(angle) < 45:
+                    eh, ew = sharpened.shape[:2]
+                    center = (ew // 2, eh // 2)
+                    M = cv2.getRotationMatrix2D(center, angle, 1.0)
+                    sharpened = cv2.warpAffine(
+                        sharpened, M, (ew, eh),
+                        flags=cv2.INTER_CUBIC,
+                        borderMode=cv2.BORDER_REPLICATE,
+                    )
+                    image = cv2.warpAffine(
+                        image, M, (image.shape[1], image.shape[0]),
+                        flags=cv2.INTER_CUBIC,
+                        borderMode=cv2.BORDER_REPLICATE,
+                    )
+        except Exception:
+            pass
+
+        return image, sharpened
+
+    # ── Phase 2: PaddleOCR Reader ─────────────────────────────────────────
+
+    def _paddle_read(self, image: np.ndarray) -> Tuple[Optional[str], float]:
+        """Run PaddleOCR on a plate image. Returns (text, confidence)."""
+        if not self._paddle_ocr_available or self._paddle_ocr is None:
+            return None, 0.0
+
+        try:
+            results = self._paddle_ocr.ocr(image, cls=True)
+            if not results or not results[0]:
+                return None, 0.0
+
+            # PaddleOCR returns: [[[bbox, (text, conf)], ...]] 
+            texts = []
+            confs = []
+            for line in results[0]:
+                text = line[1][0]
+                conf = line[1][1]
+                texts.append(text)
+                confs.append(conf)
+
+            # Merge all text fragments
+            merged = ''.join(t.strip() for t in texts)
+            cleaned = re.sub(r'[^A-Z0-9]', '', merged.upper())
+            avg_conf = sum(confs) / len(confs) if confs else 0.0
+
+            if len(cleaned) < 4:
+                return None, 0.0
+
+            # Try Indian plate correction
+            corrected = _fix_indian_plate(cleaned)
+            if corrected:
+                return corrected, avg_conf
+
+            # Return raw cleaned text if long enough
+            if len(cleaned) >= 5:
+                return cleaned, avg_conf
+
+            return None, 0.0
+
+        except Exception as e:
+            logger.debug(f"PaddleOCR read failed: {e}")
+            return None, 0.0
+
+    # ── Phase 2: EasyOCR Reader (secondary) ───────────────────────────────
+
+    def _easy_read(self, image: np.ndarray) -> Tuple[Optional[str], float]:
+        """Run EasyOCR on a plate image. Returns (text, confidence)."""
+        if self._ocr is None:
+            return None, 0.0
+
+        try:
+            results = self._ocr.readtext(image, detail=1)
+            if not results:
+                return None, 0.0
+
+            # Find best plate-like match
+            best_text = None
+            best_conf = 0.0
+
+            for (bbox, text, confidence) in sorted(results, key=lambda r: r[2], reverse=True):
+                cleaned = re.sub(r'[^A-Z0-9]', '', text.strip().upper())
+                corrected = _fix_indian_plate(cleaned)
+                if corrected and confidence > best_conf:
+                    best_text = corrected
+                    best_conf = confidence
+
+            # Try fragment merging if no direct match
+            if not best_text:
+                merged = _merge_ocr_fragments(results)
+                if merged and len(merged) >= 5:
+                    corrected = _fix_indian_plate(merged)
+                    if corrected:
+                        best_text = corrected
+                        best_conf = sum(r[2] for r in results) / len(results)
+                    elif len(merged) >= 5:
+                        best_text = re.sub(r'[^A-Z0-9]', '', merged.upper())
+                        best_conf = sum(r[2] for r in results) / len(results)
+
+            return best_text, best_conf
+
+        except Exception as e:
+            logger.debug(f"EasyOCR read failed: {e}")
+            return None, 0.0
+
+    # ── Phase 2: Dual-Engine OCR with Voting ──────────────────────────────
+
     def _ocr_region(
         self,
         image: np.ndarray,
     ) -> Tuple[Optional[str], float]:
-        """Run EasyOCR on a region and return the best plate-like match."""
+        """
+        Dual-engine OCR: PaddleOCR (primary) + EasyOCR (secondary).
+
+        If both engines agree (>70% char similarity), confidence is boosted.
+        If they disagree, the engine with a valid Indian plate format wins.
+        Falls back to the higher-confidence result.
+        """
         if not self._load_ocr():
             return None, 0.0
 
@@ -1525,129 +1652,71 @@ class PlateRecognizer:
             if image.size == 0 or image.shape[0] < 8 or image.shape[1] < 15:
                 return None, 0.0
 
-            # Step 1: Super-resolution with Real-ESRGAN (AI 4x upscale)
-            h_orig, w_orig = image.shape[:2]
-            if self._esrgan_available and w_orig < 200:
-                try:
-                    sr_image, _ = self._esrgan.enhance(image, outscale=4)
-                    image = sr_image  # Use the super-resolved image for all further processing
-                except Exception as e:
-                    logger.debug(f"ESRGAN enhance failed in OCR, using fallback: {e}")
+            ocr_start = time.monotonic()
 
-            # Step 2: Enhance contrast for better OCR
-            gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
+            # Preprocess (replaces ESRGAN — ~5ms vs ~300ms)
+            color_img, gray_img = self._preprocess_plate(image)
 
-            # Adaptive CLAHE: use smaller grid for tiny crops
-            h, w = gray.shape[:2]
-            grid_w = max(1, min(8, w // 8))
-            grid_h = max(1, min(8, h // 8))
-            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(grid_w, grid_h))
-            enhanced = clahe.apply(gray)
+            # ── Primary: PaddleOCR on color image ──
+            paddle_text, paddle_conf = self._paddle_read(color_img)
 
-            # Resize if still small after ESRGAN
-            h, w = enhanced.shape[:2]
-            if w < 200:
-                scale = 200 / w
-                enhanced = cv2.resize(enhanced, None, fx=scale, fy=scale,
-                                      interpolation=cv2.INTER_CUBIC)
+            # ── Secondary: EasyOCR on enhanced grayscale ──
+            easy_text, easy_conf = self._easy_read(gray_img)
 
-            # Apply sharpening to bring out text edges
-            sharpen_kernel = np.array([[-1, -1, -1],
-                                       [-1,  9, -1],
-                                       [-1, -1, -1]])
-            sharpened = cv2.filter2D(enhanced, -1, sharpen_kernel)
+            ocr_ms = (time.monotonic() - ocr_start) * 1000
 
-            # Try deskewing for angled plates
-            try:
-                coords = np.column_stack(np.where(enhanced > 0))
-                if len(coords) > 5:
-                    angle = cv2.minAreaRect(coords)[-1]
-                    if angle < -45:
-                        angle = -(90 + angle)
-                    else:
-                        angle = -angle
-                    if abs(angle) > 2 and abs(angle) < 45:
-                        eh, ew = enhanced.shape[:2]
-                        center = (ew // 2, eh // 2)
-                        M = cv2.getRotationMatrix2D(center, angle, 1.0)
-                        enhanced = cv2.warpAffine(
-                            enhanced, M, (ew, eh),
-                            flags=cv2.INTER_CUBIC,
-                            borderMode=cv2.BORDER_REPLICATE,
-                        )
-            except Exception:
-                pass
-
-            # Note: Qwen2-VL removed from real-time pipeline for speed.
-            # Available as _qwen_read_plate() for on-demand dashboard verify.
-
-            # Priority 2: Multi-pass EasyOCR
-            results = self._ocr.readtext(enhanced, detail=1)
-
-            if not results:
-                results = self._ocr.readtext(sharpened, detail=1)
-
-            if not results:
-                # Try on the (possibly ESRGAN-enhanced) color image
-                if image.shape[1] < 200:
-                    scale = 200 / image.shape[1]
-                    upscaled_color = cv2.resize(image, None, fx=scale, fy=scale,
-                                                interpolation=cv2.INTER_CUBIC)
-                else:
-                    upscaled_color = image
-                results = self._ocr.readtext(upscaled_color, detail=1)
-
-            if not results:
-                logger.debug("ANPR OCR: EasyOCR returned no results on any pass")
-                return None, 0.0
-
-            # Log what EasyOCR actually read
-            raw_texts = [(text.strip(), round(conf, 3)) for (_, text, conf) in results]
-            logger.debug(f"ANPR OCR raw reads: {raw_texts}")
-
-            # Find the best match that looks like a plate
-            best_text = None
-            best_conf = 0.0
-
-            for (bbox, text, confidence) in sorted(results, key=lambda r: r[2], reverse=True):
-                cleaned = re.sub(r'[^A-Z0-9]', '', text.strip().upper())
-
-                # Try Indian plate correction first
-                corrected = _fix_indian_plate(cleaned)
-                if corrected and confidence > best_conf:
-                    best_text = corrected
-                    best_conf = confidence
-
-            # Try EasyOCR fragment merging
-            if not best_text:
-                merged = _merge_ocr_fragments(results)
-                if merged and len(merged) >= 6:
-                    corrected = _fix_indian_plate(merged)
-                    if corrected:
-                        best_text = corrected
-                        best_conf = sum(r[2] for r in results) / len(results)
-
-            # Fallback: if no Indian-format match, return the raw merged text
-            # Let _normalize_plate decide whether to accept it
-            if not best_text:
-                merged = _merge_ocr_fragments(results)
-                if merged and len(merged) >= 5:
-                    # Return raw text — _normalize_plate will do final filtering
-                    best_text = re.sub(r'[^A-Z0-9]', '', merged.upper())
-                    best_conf = sum(r[2] for r in results) / len(results)
+            # ── Voting logic ──
+            if paddle_text and easy_text:
+                similarity = self._plate_similarity(paddle_text, easy_text)
+                if similarity >= 0.7:
+                    # Both agree → high confidence, use PaddleOCR text
+                    final_conf = max(paddle_conf, easy_conf) * min(1.0, 1.0 + (similarity - 0.7))
                     logger.debug(
-                        f"ANPR OCR: No Indian plate match, returning raw: '{best_text}' "
-                        f"conf={best_conf:.3f}"
+                        f"OCR AGREE: paddle='{paddle_text}' easy='{easy_text}' "
+                        f"sim={similarity:.2f} conf={final_conf:.2f} ({ocr_ms:.0f}ms)"
                     )
+                    return paddle_text, final_conf
+                else:
+                    # Disagree → prefer valid Indian format
+                    p_valid = _fix_indian_plate(paddle_text) is not None
+                    e_valid = _fix_indian_plate(easy_text) is not None
 
-            # TrOCR removed from real-time for speed.
-            # Available via manual verify endpoint.
+                    if p_valid and not e_valid:
+                        logger.debug(
+                            f"OCR DISAGREE: using paddle='{paddle_text}' (valid Indian) "
+                            f"over easy='{easy_text}' ({ocr_ms:.0f}ms)"
+                        )
+                        return paddle_text, paddle_conf
+                    elif e_valid and not p_valid:
+                        logger.debug(
+                            f"OCR DISAGREE: using easy='{easy_text}' (valid Indian) "
+                            f"over paddle='{paddle_text}' ({ocr_ms:.0f}ms)"
+                        )
+                        return easy_text, easy_conf
+                    else:
+                        # Both valid or both invalid → use higher confidence
+                        if paddle_conf >= easy_conf:
+                            return paddle_text, paddle_conf
+                        else:
+                            return easy_text, easy_conf
 
-            if best_text:
-                return best_text, best_conf
+            elif paddle_text:
+                logger.debug(
+                    f"OCR: PaddleOCR only: '{paddle_text}' conf={paddle_conf:.2f} ({ocr_ms:.0f}ms)"
+                )
+                return paddle_text, paddle_conf
+
+            elif easy_text:
+                logger.debug(
+                    f"OCR: EasyOCR only: '{easy_text}' conf={easy_conf:.2f} ({ocr_ms:.0f}ms)"
+                )
+                return easy_text, easy_conf
+
+            logger.debug(f"OCR: Both engines returned nothing ({ocr_ms:.0f}ms)")
 
         except Exception as e:
             logger.debug(f"OCR failed on region: {e}")
+
 
         return None, 0.0
 
@@ -1738,10 +1807,24 @@ class PlateRecognizer:
         }
 
     def shutdown(self):
-        """Shutdown the thread pool."""
+        """Shutdown the thread pool and flush remaining consensus tracks."""
         self._executor.shutdown(wait=True)
+
+        # Flush all remaining tracked vehicles — critical for video analysis
+        # where the video ends and pending tracks must emit their best guess
+        with self._track_lock:
+            remaining = list(self._tracked_vehicles.keys())
+            for tid in remaining:
+                track = self._tracked_vehicles[tid]
+                if not track['emitted'] and len(track['votes']) >= 1:
+                    # For shutdown, accept even single-vote tracks
+                    # (video analysis consolidation handles final dedup)
+                    self._emit_consensus(tid)
+                del self._tracked_vehicles[tid]
+
         logger.info(
             f"PlateRecognizer shut down "
             f"(total inferences: {self._total_inferences}, "
-            f"plates detected: {self._total_plates})"
+            f"plates detected: {self._total_plates}, "
+            f"flushed {len(remaining)} remaining tracks)"
         )

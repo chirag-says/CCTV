@@ -161,6 +161,13 @@ async def delete_camera(
 ):
     """Remove a camera."""
     CameraService.delete_camera(camera_id)
+    
+    # Also clean up from browser sessions if it's a remote camera
+    from app.routes.browser_camera import _browser_sessions
+    if camera_id in _browser_sessions:
+        _browser_sessions[camera_id].is_active = False
+        _browser_sessions.pop(camera_id, None)
+        
     return {"message": f"Camera {camera_id} deleted"}
 
 

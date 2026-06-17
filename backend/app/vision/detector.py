@@ -90,13 +90,18 @@ class FaceDetector:
     - Backward-compatible (top, right, bottom, left) output format
     """
 
+    # Minimum face size to filter out tiny false-positive detections
+    # (vehicles, reflections, distant objects). 60px ensures enough detail
+    # for meaningful face recognition.
+    MIN_FACE_SIZE_DEFAULT = 60
+
     def __init__(
         self,
-        min_face_size: int = 15,
+        min_face_size: int = None,
         scale_factor: float = None,
         **kwargs,  # Accept extra kwargs for backward compat
     ):
-        self.min_face_size = min_face_size
+        self.min_face_size = min_face_size or self.MIN_FACE_SIZE_DEFAULT
         self.scale_factor = scale_factor or settings.DETECTION_SCALE
         self._frame_count = 0
         self._app = None  # Lazy-loaded
@@ -104,7 +109,7 @@ class FaceDetector:
         logger.info(
             f"FaceDetector initialized (SCRFD): "
             f"model={settings.INSIGHTFACE_MODEL_NAME}, "
-            f"min_face={min_face_size}"
+            f"min_face={self.min_face_size}"
         )
 
     def _get_app(self):
@@ -112,6 +117,88 @@ class FaceDetector:
         if self._app is None:
             self._app = _get_insightface_app()
         return self._app
+
+    @staticmethod
+    def _is_valid_face_geometry(face) -> bool:
+        """
+        Validate that the 5-point facial landmarks form a plausible face.
+
+        InsightFace's SCRFD provides 5 landmarks:
+          [0] left eye, [1] right eye, [2] nose tip,
+          [3] left mouth corner, [4] right mouth corner
+
+        Vehicle headlights, reflections, and license plates can trigger
+        false positives but their "landmark" positions are geometrically
+        implausible as faces. This method checks:
+          1. Eyes should be roughly horizontal (not vertically stacked)
+          2. Nose should be between the eyes (horizontally) and below them
+          3. Mouth should be below the nose
+          4. The face should have a reasonable height-to-width ratio
+          5. Detection confidence should be above a secondary threshold
+
+        Returns True if the detection looks like a real face.
+        """
+        # Check detection score (secondary threshold above SCRFD's base)
+        det_score = getattr(face, 'det_score', None)
+        if det_score is not None and det_score < 0.45:
+            return False
+
+        # Get landmarks (5-point)
+        kps = getattr(face, 'kps', None)
+        if kps is None or len(kps) < 5:
+            # No landmarks available — can't validate, allow it through
+            return True
+
+        try:
+            left_eye = kps[0]    # (x, y)
+            right_eye = kps[1]
+            nose = kps[2]
+            left_mouth = kps[3]
+            right_mouth = kps[4]
+
+            # 1. Eye separation: eyes should be spread apart horizontally
+            eye_dx = abs(right_eye[0] - left_eye[0])
+            eye_dy = abs(right_eye[1] - left_eye[1])
+            if eye_dx < 5:
+                # Eyes are nearly vertically stacked — not a face
+                return False
+            # Eyes should be roughly horizontal (allow up to ~40° tilt)
+            if eye_dy > eye_dx * 0.85:
+                return False
+
+            # 2. Nose should be roughly between the eyes horizontally
+            eye_cx = (left_eye[0] + right_eye[0]) / 2
+            nose_offset = abs(nose[0] - eye_cx)
+            if nose_offset > eye_dx * 1.0:
+                # Nose is way outside the eye region — not a face
+                return False
+
+            # 3. Nose should be below or at eye level
+            eye_cy = (left_eye[1] + right_eye[1]) / 2
+            if nose[1] < eye_cy - eye_dx * 0.3:
+                # Nose is significantly above the eyes — not a face
+                return False
+
+            # 4. Mouth should be below the nose
+            mouth_cy = (left_mouth[1] + right_mouth[1]) / 2
+            if mouth_cy < nose[1] - eye_dx * 0.2:
+                # Mouth is above the nose — not a face
+                return False
+
+            # 5. Overall face proportion check
+            # Face height (eyes to mouth) should be reasonable vs width (eye span)
+            face_height = mouth_cy - eye_cy
+            if face_height < 0:
+                return False  # Mouth above eyes
+            if eye_dx > 0 and face_height / eye_dx > 4.0:
+                # Face is extremely tall and narrow — likely not a face
+                return False
+
+            return True
+
+        except (IndexError, TypeError):
+            # If landmark parsing fails, allow the detection through
+            return True
 
     def detect_faces(
         self, frame: np.ndarray
@@ -169,6 +256,11 @@ class FaceDetector:
             if face_w < self.min_face_size or face_h < self.min_face_size:
                 continue
 
+            # Validate face landmark geometry to reject non-face detections
+            # (vehicles, reflections, etc. can trigger false positives)
+            if not self._is_valid_face_geometry(face):
+                continue
+
             # Convert to (top, right, bottom, left) format for backward compat
             face_locations.append((y1, x2, y2, x1))
 
@@ -217,6 +309,10 @@ class FaceDetector:
             if face_w < self.min_face_size or face_h < self.min_face_size:
                 continue
 
+            # Validate face landmark geometry to reject non-face detections
+            if not self._is_valid_face_geometry(face):
+                continue
+
             # Convert to (top, right, bottom, left)
             face_locations.append((y1, x2, y2, x1))
 
@@ -247,7 +343,7 @@ class FaceDetector:
         if app is None:
             return []
         faces = app.get(frame_rgb)
-        return faces
+        return [f for f in faces if self._is_valid_face_geometry(f)]
 
     def extract_face_crop(
         self,
