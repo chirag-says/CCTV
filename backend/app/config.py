@@ -95,6 +95,10 @@ class Settings(BaseSettings):
     ANPR_FRAME_INTERVAL: int = 5         # Process every 5th frame
     ANPR_PLATE_COOLDOWN_SEC: float = 60.0
     ANPR_OCR_LANGUAGES: str = "en"       # Comma-separated EasyOCR languages
+    ANPR_VEHICLE_MODEL: str = "yolov8x.pt"  # COCO model for vehicle detection (yolov8x for RTX 5070)
+    ANPR_VEHICLE_IMGSZ: int = 1280       # Inference size for vehicle/plate detection
+    ANPR_KEYFRAME_MIN_FRAMES: int = 3    # Min frames before OCR trigger per vehicle
+    ANPR_KEYFRAME_MAX_FRAMES: int = 15   # Max frames for OCR accumulation
 
     # ── Traffic Mode: Vehicle-Person Safety Monitor ───────────
     ENABLE_TRAFFIC_MONITOR: bool = True

@@ -489,3 +489,504 @@ class FaceDetector:
     @property
     def frames_processed(self) -> int:
         return self._frame_count
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  Vehicle + Plate Detector — YOLO11-Large with TensorRT support
+# ══════════════════════════════════════════════════════════════════════════════
+
+# Lazy-loaded singleton for VRAM efficiency
+_vehicle_plate_detector = None
+_vehicle_plate_lock = None
+_vehicle_plate_failed = False
+
+# COCO vehicle class IDs (used when running COCO model as fallback)
+COCO_VEHICLE_CLASSES = {2: "car", 3: "motorcycle", 5: "bus", 7: "truck"}
+
+
+def get_vehicle_plate_detector():
+    """Get or create the singleton VehiclePlateDetector instance."""
+    global _vehicle_plate_detector, _vehicle_plate_lock, _vehicle_plate_failed
+    import threading
+
+    if _vehicle_plate_lock is None:
+        _vehicle_plate_lock = threading.Lock()
+
+    with _vehicle_plate_lock:
+        if _vehicle_plate_detector is not None:
+            return _vehicle_plate_detector
+        if _vehicle_plate_failed:
+            return None
+        try:
+            _vehicle_plate_detector = VehiclePlateDetector()
+            return _vehicle_plate_detector
+        except Exception as e:
+            logger.error(f"Failed to create VehiclePlateDetector: {e}", exc_info=True)
+            _vehicle_plate_failed = True
+            return None
+
+
+class VehiclePlateDetector:
+    """
+    Unified vehicle + license plate detector using YOLO11-Large.
+
+    Provides:
+    - Single-pass detection of vehicles AND license plates at 1280px
+    - TensorRT `.engine` export for RTX 5070 optimization
+    - Fallback to COCO YOLOv8 for vehicle-only detection
+    - GPU-optimized inference with configurable batch size
+
+    The model outputs two class groups:
+    - Vehicle classes (car, motorcycle, bus, truck, etc.)
+    - License plate class (single class for plate bounding boxes)
+
+    Hardware target: NVIDIA RTX 5070 (12GB VRAM)
+    """
+
+    def __init__(self):
+        import threading
+
+        self._vehicle_model = None        # COCO model (fallback for vehicles)
+        self._plate_model = None          # Custom plate detector (YOLO11-L)
+        self._unified_model = None        # Unified vehicle+plate model (future)
+
+        self._vehicle_loaded = False
+        self._plate_loaded = False
+        self._vehicle_available = False
+        self._plate_available = False
+
+        self._device = 'cpu'
+        self._lock = threading.Lock()
+        self._load_lock = threading.Lock()
+
+        # Detect GPU
+        try:
+            import torch
+            if torch.cuda.is_available():
+                self._device = 'cuda'
+                gpu_name = torch.cuda.get_device_name(0)
+                vram_mb = torch.cuda.get_device_properties(0).total_mem // (1024 * 1024)
+                logger.info(
+                    f"VehiclePlateDetector: GPU={gpu_name}, "
+                    f"VRAM={vram_mb}MB, device=cuda"
+                )
+            else:
+                logger.info("VehiclePlateDetector: No CUDA GPU, using CPU")
+        except ImportError:
+            logger.info("VehiclePlateDetector: PyTorch not installed, using CPU")
+
+    def load_vehicle_model(self, model_path: str = "yolov8x.pt") -> bool:
+        """
+        Load the COCO vehicle detection model.
+
+        Uses YOLOv8x (largest COCO variant) for robust vehicle detection.
+        With 12GB VRAM on the RTX 5070, this runs comfortably alongside
+        the plate detector.
+
+        Args:
+            model_path: Path to YOLO weights (.pt or .engine)
+
+        Returns:
+            True if model loaded successfully
+        """
+        with self._load_lock:
+            if self._vehicle_loaded:
+                return self._vehicle_available
+            try:
+                from ultralytics import YOLO
+                import os
+
+                # Check for TensorRT engine first
+                engine_path = model_path.replace('.pt', '.engine')
+                if os.path.exists(engine_path):
+                    logger.info(f"Loading TensorRT vehicle model: {engine_path}")
+                    self._vehicle_model = YOLO(engine_path)
+                else:
+                    logger.info(f"Loading vehicle detection model: {model_path}")
+                    self._vehicle_model = YOLO(model_path)
+
+                self._vehicle_available = True
+                logger.info(
+                    f"✅ Vehicle detection model loaded on {self._device}"
+                )
+            except Exception as e:
+                self._vehicle_available = False
+                logger.error(f"Failed to load vehicle model: {e}")
+            finally:
+                self._vehicle_loaded = True
+            return self._vehicle_available
+
+    def load_plate_model(self, model_path: str = None) -> bool:
+        """
+        Load the YOLO11-Large license plate detection model.
+
+        This is the primary plate localizer — replaces the old lightweight
+        models with a deep-parameter network for robust plate detection
+        under CCTV conditions (motion blur, steep angles, environmental noise).
+
+        Args:
+            model_path: Path to YOLO11-L plate weights (.pt or .engine)
+
+        Returns:
+            True if model loaded successfully
+        """
+        with self._load_lock:
+            if self._plate_loaded:
+                return self._plate_available
+            try:
+                from ultralytics import YOLO
+                import os
+
+                if model_path is None:
+                    model_path = settings.ANPR_MODEL_PATH
+
+                if not os.path.exists(model_path):
+                    logger.warning(f"Plate model not found: {model_path}")
+                    self._plate_available = False
+                    self._plate_loaded = True
+                    return False
+
+                # Check for TensorRT engine first
+                engine_path = model_path.replace('.pt', '.engine')
+                if os.path.exists(engine_path):
+                    logger.info(f"Loading TensorRT plate model: {engine_path}")
+                    self._plate_model = YOLO(engine_path)
+                else:
+                    logger.info(f"Loading YOLO11-L plate model: {model_path}")
+                    self._plate_model = YOLO(model_path)
+
+                model_names = getattr(self._plate_model, 'names', {})
+                num_classes = len(model_names) if model_names else 0
+                self._plate_available = True
+                logger.info(
+                    f"✅ Plate detection model loaded: "
+                    f"{num_classes} classes = {list(model_names.values())} "
+                    f"on {self._device}"
+                )
+            except Exception as e:
+                self._plate_available = False
+                logger.error(f"Failed to load plate model: {e}")
+            finally:
+                self._plate_loaded = True
+            return self._plate_available
+
+    def detect_vehicles(
+        self,
+        frame: np.ndarray,
+        conf: float = 0.25,
+        imgsz: int = 1280,
+    ) -> List[dict]:
+        """
+        Detect vehicles in a frame using the COCO model.
+
+        Returns list of dicts with keys:
+        - box: (x1, y1, x2, y2) pixel coordinates
+        - type: vehicle class name (car, motorcycle, bus, truck)
+        - confidence: detection confidence score
+        - class_id: COCO class ID
+
+        Args:
+            frame: BGR image from OpenCV
+            conf: Minimum detection confidence
+            imgsz: Inference image size (higher = better for distant vehicles)
+        """
+        if not self.load_vehicle_model():
+            return []
+
+        try:
+            results = self._vehicle_model(
+                frame,
+                conf=conf,
+                classes=list(COCO_VEHICLE_CLASSES.keys()),
+                imgsz=imgsz,
+                verbose=False,
+                device=self._device,
+            )
+
+            vehicles = []
+            for result in results:
+                if result.boxes is None:
+                    continue
+                for box in result.boxes:
+                    cls_id = int(box.cls[0])
+                    if cls_id not in COCO_VEHICLE_CLASSES:
+                        continue
+                    confidence = float(box.conf[0])
+                    x1, y1, x2, y2 = [int(c) for c in box.xyxy[0].tolist()]
+                    vehicles.append({
+                        'box': (x1, y1, x2, y2),
+                        'type': COCO_VEHICLE_CLASSES[cls_id],
+                        'confidence': confidence,
+                        'class_id': cls_id,
+                    })
+            return vehicles
+
+        except Exception as e:
+            logger.error(f"Vehicle detection failed: {e}")
+            return []
+
+    def detect_plates(
+        self,
+        frame: np.ndarray,
+        conf: float = 0.20,
+        imgsz: int = 1280,
+    ) -> List[dict]:
+        """
+        Detect license plates in a frame using the YOLO11-L plate model.
+
+        Runs on the full frame at high resolution for maximum recall.
+        Returns plate bounding boxes with cropped plate images ready for OCR.
+
+        Args:
+            frame: BGR image from OpenCV
+            conf: Minimum detection confidence
+            imgsz: Inference image size
+
+        Returns:
+            List of dicts with keys: box, confidence, crop, class_id
+        """
+        if not self.load_plate_model():
+            return []
+
+        try:
+            results = self._plate_model(
+                frame,
+                conf=conf,
+                imgsz=imgsz,
+                verbose=False,
+                device=self._device,
+            )
+
+            plates = []
+            fh, fw = frame.shape[:2]
+            for result in results:
+                if result.boxes is None:
+                    continue
+                for box in result.boxes:
+                    px1, py1, px2, py2 = [int(c) for c in box.xyxy[0].tolist()]
+                    pconf = float(box.conf[0])
+                    cls_id = int(box.cls[0])
+                    pw, ph = px2 - px1, py2 - py1
+
+                    # Skip impossibly small plates
+                    if pw < 15 or ph < 8:
+                        continue
+
+                    # Clamp to frame bounds
+                    px1, py1 = max(0, px1), max(0, py1)
+                    px2, py2 = min(fw, px2), min(fh, py2)
+
+                    plate_crop = frame[py1:py2, px1:px2]
+                    if plate_crop.size == 0:
+                        continue
+
+                    plates.append({
+                        'box': (px1, py1, px2, py2),
+                        'confidence': pconf,
+                        'crop': plate_crop,
+                        'class_id': cls_id,
+                    })
+            return plates
+
+        except Exception as e:
+            logger.error(f"Plate detection failed: {e}")
+            return []
+
+    def detect_plates_in_crop(
+        self,
+        vehicle_crop: np.ndarray,
+        conf: float = 0.25,
+    ) -> List[dict]:
+        """
+        Detect plates within a vehicle crop (fallback Strategy B).
+
+        Runs the plate detector on a cropped vehicle region for cases
+        where the full-frame detection missed a plate.
+
+        Args:
+            vehicle_crop: Cropped vehicle image (BGR)
+            conf: Minimum detection confidence
+
+        Returns:
+            List of plate dicts relative to the crop coordinates
+        """
+        if not self.load_plate_model():
+            return []
+
+        h, w = vehicle_crop.shape[:2]
+        if h < 20 or w < 20:
+            return []
+
+        try:
+            results = self._plate_model(
+                vehicle_crop,
+                conf=conf,
+                verbose=False,
+                device=self._device,
+            )
+
+            plates = []
+            for result in results:
+                if result.boxes is None:
+                    continue
+                for box in result.boxes:
+                    px1, py1, px2, py2 = [int(c) for c in box.xyxy[0].tolist()]
+                    pconf = float(box.conf[0])
+                    cls_id = int(box.cls[0])
+                    pw, ph = px2 - px1, py2 - py1
+
+                    if pw < 15 or ph < 8:
+                        continue
+
+                    # Clamp to crop bounds
+                    px1, py1 = max(0, px1), max(0, py1)
+                    px2, py2 = min(w, px2), min(h, py2)
+
+                    # Skip oversized detections (>80% of vehicle)
+                    plate_area = (px2 - px1) * (py2 - py1)
+                    vehicle_area = h * w
+                    if vehicle_area > 0 and plate_area / vehicle_area > 0.80:
+                        continue
+
+                    plate_crop = vehicle_crop[py1:py2, px1:px2]
+                    if plate_crop.size == 0:
+                        continue
+
+                    plates.append({
+                        'box': (px1, py1, px2, py2),
+                        'confidence': pconf,
+                        'crop': plate_crop,
+                        'class_id': cls_id,
+                    })
+            return plates
+
+        except Exception as e:
+            logger.debug(f"Plate detection in crop failed: {e}")
+            return []
+
+    def export_to_tensorrt(
+        self,
+        model_path: str,
+        imgsz: int = 1280,
+        half: bool = True,
+        batch: int = 1,
+    ) -> Optional[str]:
+        """
+        Export a YOLO .pt model to TensorRT .engine format.
+
+        Optimized for the RTX 5070 (12GB VRAM, Ada Lovelace architecture).
+        FP16 (half=True) gives ~2x speedup with minimal accuracy loss.
+
+        Args:
+            model_path: Path to the .pt weights file
+            imgsz: Input image size for the engine
+            half: Use FP16 precision (recommended for RTX 5070)
+            batch: Batch size for inference
+
+        Returns:
+            Path to the exported .engine file, or None on failure
+        """
+        try:
+            from ultralytics import YOLO
+            import os
+
+            if not os.path.exists(model_path):
+                logger.error(f"Model not found for TensorRT export: {model_path}")
+                return None
+
+            logger.info(
+                f"🚀 Starting TensorRT export: {model_path} "
+                f"(imgsz={imgsz}, half={half}, batch={batch})"
+            )
+
+            model = YOLO(model_path)
+            engine_path = model.export(
+                format="engine",
+                imgsz=imgsz,
+                half=half,
+                batch=batch,
+                device=0,
+            )
+
+            logger.info(f"✅ TensorRT export complete: {engine_path}")
+            return str(engine_path)
+
+        except Exception as e:
+            logger.error(f"TensorRT export failed: {e}", exc_info=True)
+            return None
+
+    def associate_plates_to_vehicles(
+        self,
+        vehicles: List[dict],
+        plates: List[dict],
+    ) -> List[dict]:
+        """
+        Associate detected plates with their parent vehicles using
+        spatial proximity and containment.
+
+        Each plate is matched to the nearest vehicle whose bounding box
+        contains or is close to the plate centroid. Unmatched plates are
+        returned as standalone detections.
+
+        Args:
+            vehicles: List of vehicle detection dicts
+            plates: List of plate detection dicts
+
+        Returns:
+            List of association dicts with keys:
+            - vehicle: vehicle dict (or None if standalone plate)
+            - plate: plate dict
+            - plate_crop: the plate image crop
+        """
+        associations = []
+        matched_plate_indices = set()
+
+        for plate_idx, plate in enumerate(plates):
+            px1, py1, px2, py2 = plate['box']
+            pcx = (px1 + px2) / 2
+            pcy = (py1 + py2) / 2
+
+            best_vehicle = None
+            best_dist = float('inf')
+
+            for vehicle in vehicles:
+                vx1, vy1, vx2, vy2 = vehicle['box']
+                # Allow a margin around the vehicle box
+                margin = max(vx2 - vx1, vy2 - vy1) * 0.3
+                if (vx1 - margin <= pcx <= vx2 + margin and
+                        vy1 - margin <= pcy <= vy2 + margin):
+                    vcx = (vx1 + vx2) / 2
+                    vcy = (vy1 + vy2) / 2
+                    dist = ((pcx - vcx) ** 2 + (pcy - vcy) ** 2) ** 0.5
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_vehicle = vehicle
+
+            associations.append({
+                'vehicle': best_vehicle,
+                'plate': plate,
+                'plate_crop': plate['crop'],
+            })
+            matched_plate_indices.add(plate_idx)
+
+        return associations
+
+    @property
+    def is_vehicle_model_available(self) -> bool:
+        return self._vehicle_available
+
+    @property
+    def is_plate_model_available(self) -> bool:
+        return self._plate_available
+
+    @property
+    def device(self) -> str:
+        return self._device
+
+    @property
+    def stats(self) -> dict:
+        return {
+            "vehicle_model_available": self._vehicle_available,
+            "plate_model_available": self._plate_available,
+            "device": self._device,
+        }

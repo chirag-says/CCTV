@@ -122,11 +122,14 @@ class VideoAnalysisJob:
         video_path: str,
         filename: str,
         on_progress: Optional[Callable] = None,
+        enable_anpr: Optional[bool] = None,
     ):
         self.job_id = job_id
         self.video_path = video_path
         self.result = VideoAnalysisResult(job_id, filename)
         self.on_progress = on_progress
+        # None = use server default from settings.ENABLE_ANPR
+        self._enable_anpr = enable_anpr
 
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
@@ -234,7 +237,13 @@ class VideoAnalysisJob:
                 logger.warning(f"Hazard detector not available: {e}")
 
             try:
-                if settings.ENABLE_ANPR:
+                # Resolve ANPR enablement: explicit toggle > server config
+                anpr_enabled = (
+                    self._enable_anpr
+                    if self._enable_anpr is not None
+                    else settings.ENABLE_ANPR
+                )
+                if anpr_enabled:
                     from app.vision.anpr import PlateRecognizer
                     languages = [l.strip() for l in settings.ANPR_OCR_LANGUAGES.split(",")]
                     plate_recognizer = PlateRecognizer(
@@ -244,7 +253,10 @@ class VideoAnalysisJob:
                         on_plate=lambda e: self._handle_vehicle_event(e),
                         languages=languages,
                     )
-                    logger.info("ANPR initialized for video analysis (frame_interval=1, no cooldown)")
+                    logger.info(
+                        "ANPR initialized for video analysis "
+                        "(frame_interval=1, no cooldown, VehicleByteTracker=ON)"
+                    )
             except Exception as e:
                 logger.warning(f"ANPR not available: {e}")
 
@@ -496,6 +508,40 @@ class VideoAnalysisJob:
             logger.info(f"Waiting for async modules to complete...")
             if plate_recognizer:
                 try:
+                    # ── VehicleByteTracker EOF Flush ──
+                    # Force OCR on all lingering vehicle keyframes before shutdown.
+                    # This is critical for offline video analysis where the video
+                    # ends while vehicles are still being tracked in the ByteTrack
+                    # buffer (haven't reached keyframe interval yet).
+                    flush_results = plate_recognizer.force_flush_tracks(
+                        camera_id=camera_id
+                    )
+                    if flush_results:
+                        logger.info(
+                            f"ByteTrack EOF flush: {len(flush_results)} plates "
+                            f"from lingering vehicle tracks"
+                        )
+                        # Inject flush results into raw plate readings
+                        # so _consolidate_plates() captures them
+                        for fr in flush_results:
+                            self._raw_plate_readings.append({
+                                "plate": fr["plate"],
+                                "vehicle_type": fr.get("vehicle_type", "vehicle"),
+                                "confidence": fr.get("confidence", 0),
+                                "vehicle_confidence": fr.get("vehicle_conf", 0),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                                "bounding_box": {
+                                    "x1": fr["bbox"][0] if fr.get("bbox") else 0,
+                                    "y1": fr["bbox"][1] if fr.get("bbox") else 0,
+                                    "x2": fr["bbox"][2] if fr.get("bbox") else 0,
+                                    "y2": fr["bbox"][3] if fr.get("bbox") else 0,
+                                },
+                                "frame": self._current_frame,
+                                "track_id": fr.get("track_id"),
+                                "frame_quality": fr.get("frame_quality", 0),
+                                "source": "bytetrack_eof_flush",
+                            })
+
                     plate_recognizer.shutdown()
                     logger.info(f"ANPR finished: {plate_recognizer._total_plates} plates detected")
                 except Exception as e:
@@ -1243,6 +1289,7 @@ class VideoAnalysisManager:
         video_path: str,
         filename: str,
         on_progress: Optional[Callable] = None,
+        enable_anpr: Optional[bool] = None,
     ) -> str:
         """
         Start a new video analysis job.
@@ -1251,6 +1298,7 @@ class VideoAnalysisManager:
             video_path: Path to the uploaded video file
             filename: Original filename for display
             on_progress: Optional callback(job_id, progress, status)
+            enable_anpr: Explicitly enable/disable ANPR (None = use server default)
 
         Returns:
             job_id: Unique identifier for this analysis
@@ -1275,6 +1323,7 @@ class VideoAnalysisManager:
                 video_path=video_path,
                 filename=filename,
                 on_progress=on_progress,
+                enable_anpr=enable_anpr,
             )
             self._jobs[job_id] = job
             job.start()

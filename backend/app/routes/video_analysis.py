@@ -45,6 +45,7 @@ def _get_allowed_extensions() -> set:
 @router.post("/upload")
 async def upload_video(
     file: UploadFile = File(...),
+    enable_anpr: Optional[bool] = None,
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -52,6 +53,10 @@ async def upload_video(
 
     Accepts video files (mp4, avi, mkv, mov, wmv, flv, webm).
     Returns a job_id to track analysis progress.
+
+    Query params:
+        enable_anpr: Explicitly enable/disable ANPR for this analysis.
+                     Defaults to the server's ENABLE_ANPR config setting.
     """
     # Validate file extension
     if not file.filename:
@@ -110,6 +115,7 @@ async def upload_video(
         analysis_job_id = video_analysis_manager.start_analysis(
             video_path=video_path,
             filename=file.filename,
+            enable_anpr=enable_anpr,
         )
         return {
             "job_id": analysis_job_id,
@@ -117,6 +123,7 @@ async def upload_video(
             "size_mb": round(total_written / 1024 / 1024, 2),
             "status": "processing",
             "message": "Video uploaded successfully. Analysis started.",
+            "anpr_enabled": enable_anpr if enable_anpr is not None else settings.ENABLE_ANPR,
         }
     except RuntimeError as e:
         # Max concurrent analyses reached — clean up file
