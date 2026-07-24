@@ -131,6 +131,39 @@ class ApiClient {
     return this.request(`/api/persons/${id}/history${query ? `?${query}` : ''}`);
   }
 
+  // ── Encoding Management ────────────────────────────────────
+  async getPersonEncodings(personId) {
+    return this.request(`/api/persons/${personId}/encodings/list`);
+  }
+
+  async deletePersonEncoding(personId, encodingId) {
+    return this.request(`/api/persons/${personId}/encodings/${encodingId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // ── Embedding Suggestions ──────────────────────────────────
+  async getPersonSuggestions(personId, status = 'pending') {
+    return this.request(`/api/persons/${personId}/suggestions?status=${status}`);
+  }
+
+  async getPersonSuggestionCount(personId) {
+    return this.request(`/api/persons/${personId}/suggestions/count`);
+  }
+
+  async approveSuggestion(personId, suggestionId, replaceEncodingId = null) {
+    const params = replaceEncodingId ? `?replace_encoding_id=${replaceEncodingId}` : '';
+    return this.request(`/api/persons/${personId}/suggestions/${suggestionId}/approve${params}`, {
+      method: 'POST',
+    });
+  }
+
+  async rejectSuggestion(personId, suggestionId) {
+    return this.request(`/api/persons/${personId}/suggestions/${suggestionId}/reject`, {
+      method: 'POST',
+    });
+  }
+
   // ── Cameras ───────────────────────────────────────────────
   async getCameras(params = {}) {
     const query = new URLSearchParams(params).toString();

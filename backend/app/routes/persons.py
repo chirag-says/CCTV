@@ -209,3 +209,100 @@ async def get_person_history(
     # Validate person exists
     PersonService.get_person(person_id)
     return PersonService.get_person_history(person_id, limit, offset)
+
+
+# ── Encoding Management ─────────────────────────────────────────────
+
+@router.get("/{person_id}/encodings/list")
+async def list_person_encodings(
+    person_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """List all face encodings for a person with metadata and health scores."""
+    from app.services.embedding_suggestions import EmbeddingSuggestionService
+    PersonService.get_person(person_id)
+    return EmbeddingSuggestionService.get_person_encodings(person_id)
+
+
+@router.delete("/{person_id}/encodings/{encoding_id}")
+async def delete_encoding(
+    person_id: str,
+    encoding_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Delete a specific face encoding."""
+    from app.services.embedding_suggestions import EmbeddingSuggestionService
+    try:
+        result = EmbeddingSuggestionService.delete_encoding(person_id, encoding_id)
+        # Reload encodings in active pipelines
+        all_encodings = PersonService.get_all_encodings()
+        camera_manager.load_encodings_all(all_encodings)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+# ── Embedding Suggestions ───────────────────────────────────────────
+
+@router.get("/{person_id}/suggestions")
+async def list_suggestions(
+    person_id: str,
+    status: str = Query("pending", description="Filter by status: pending/approved/rejected"),
+    current_user: dict = Depends(get_current_user),
+):
+    """List suggested face encodings for a person."""
+    from app.services.embedding_suggestions import EmbeddingSuggestionService
+    PersonService.get_person(person_id)
+    return EmbeddingSuggestionService.get_suggestions(person_id, status=status)
+
+
+@router.get("/{person_id}/suggestions/count")
+async def suggestion_count(
+    person_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get count of pending suggestions for a person."""
+    from app.services.embedding_suggestions import EmbeddingSuggestionService
+    return {"count": EmbeddingSuggestionService.get_suggestion_count(person_id)}
+
+
+@router.post("/{person_id}/suggestions/{suggestion_id}/approve")
+async def approve_suggestion(
+    person_id: str,
+    suggestion_id: str,
+    replace_encoding_id: Optional[str] = Query(None, description="ID of encoding to replace (if cap reached)"),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Approve a suggested encoding.
+
+    If the person has reached the encoding cap, returns replacement candidates
+    unless replace_encoding_id is provided.
+    """
+    from app.services.embedding_suggestions import EmbeddingSuggestionService
+    try:
+        result = EmbeddingSuggestionService.approve_suggestion(
+            suggestion_id=suggestion_id,
+            replace_encoding_id=replace_encoding_id,
+        )
+        # Reload encodings in active pipelines if approved
+        if result.get("status") == "approved":
+            all_encodings = PersonService.get_all_encodings()
+            camera_manager.load_encodings_all(all_encodings)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/{person_id}/suggestions/{suggestion_id}/reject")
+async def reject_suggestion(
+    person_id: str,
+    suggestion_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Reject a suggested encoding."""
+    from app.services.embedding_suggestions import EmbeddingSuggestionService
+    try:
+        return EmbeddingSuggestionService.reject_suggestion(suggestion_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))

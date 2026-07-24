@@ -54,6 +54,23 @@ class Settings(BaseSettings):
     # Search Backend: "numpy" (default) or "faiss" (future)
     SEARCH_BACKEND: str = "numpy"
 
+    # Embedding Suggestion System
+    # "Learn coverage, not accumulate images" — maintain a small, diverse,
+    # high-quality representation that maximizes recognition accuracy.
+    MAX_ENCODINGS_PER_PERSON: int = 15         # Hard cap on encodings per person
+    SUGGESTION_MIN_CONFIDENCE: float = 0.85    # Only suggest if match confidence >= this
+    SUGGESTION_DUPLICATE_THRESHOLD: float = 0.15  # Skip if cosine distance < this from any existing
+    SUGGESTION_COOLDOWN_SEC: int = 60          # Max 1 suggestion per person per N seconds
+    SUGGESTION_QUALITY_MARGIN: float = 0.10    # Quality improvement needed to suggest "better quality"
+    SUGGESTION_SHARPNESS_MARGIN: float = 1.3   # Blur score multiplier to qualify as "sharper"
+
+    # Pose Buckets (yaw boundaries in degrees)
+    # Frontal: -15° to +15°  |  Left: 15° to 45°  |  Extreme Left: 45°+
+    # Right: -45° to -15°    |  Extreme Right: < -45°
+    POSE_BUCKET_FRONTAL: float = 15.0    # |yaw| <= this → "frontal"
+    POSE_BUCKET_MODERATE: float = 45.0   # this > |yaw| > FRONTAL → "left"/"right"
+    # |yaw| > MODERATE → "extreme_left"/"extreme_right"
+
     # ByteTrack Multi-Object Tracking
     BYTETRACK_TRACK_THRESH: float = 0.5  # High-confidence detection threshold
     BYTETRACK_TRACK_BUFFER: int = 90  # Frames to keep lost tracks alive (~3s at 30fps, prevents track fragmentation)

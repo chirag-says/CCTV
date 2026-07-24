@@ -75,6 +75,8 @@ class Person(Base):
     # Relationships
     encodings = relationship("FaceEncoding", back_populates="person", lazy="dynamic",
                              cascade="all, delete-orphan")
+    suggested_encodings = relationship("SuggestedEncoding", back_populates="person", lazy="dynamic",
+                                       cascade="all, delete-orphan")
     events = relationship("DetectionEvent", back_populates="person", lazy="dynamic")
     tracking_sessions = relationship("TrackingSession", back_populates="person", lazy="dynamic")
 
@@ -106,6 +108,13 @@ class FaceEncoding(Base):
     # Versioning
     model_version = Column(String(50), default="arcface_r50")  # Embedding model identifier
     version = Column(Integer, default=1)             # Row version for incremental sync
+
+    # Health tracking (for smart replacement decisions)
+    usage_count = Column(Integer, default=0)         # How many times this encoding was a Top-1 candidate
+    success_count = Column(Integer, default=0)       # How many times it contributed to a successful match
+    last_matched = Column(DateTime(timezone=True), nullable=True)  # Last time this encoding was the best match
+    pose_bucket = Column(String(20), nullable=True)  # "frontal" / "left" / "right" / "extreme_left" / "extreme_right"
+    appearance_tags = Column(String(255), nullable=True)  # Comma-separated: "glasses,cap,mask"
 
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
@@ -183,3 +192,36 @@ class EncodingVersion(Base):
     id = Column(Integer, primary_key=True, autoincrement=False, default=1)
     version = Column(Integer, default=0, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=utcnow)
+
+
+# ── Suggested Encodings (admin approval queue) ────────────────────
+class SuggestedEncoding(Base):
+    __tablename__ = "suggested_encodings"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    person_id = Column(String(36), ForeignKey("persons.id", ondelete="CASCADE"), nullable=False, index=True)
+    encoding_data = Column(LargeBinary, nullable=False)  # raw float32 bytes
+    snapshot_url = Column(String(500), nullable=True)     # Face crop image path
+    camera_id = Column(String(36), nullable=True)
+
+    # Quality & pose metrics
+    quality = Column(Float, nullable=True)
+    yaw = Column(Float, nullable=True)
+    pitch = Column(Float, nullable=True)
+    roll = Column(Float, nullable=True)
+    det_score = Column(Float, nullable=True)
+    blur_score = Column(Float, nullable=True)
+    lighting = Column(String(20), nullable=True)
+    pose_bucket = Column(String(20), nullable=True)       # "frontal" / "left" / "right" etc.
+    appearance_tags = Column(String(255), nullable=True)   # "glasses,cap" etc.
+
+    # Match context
+    similarity = Column(Float, nullable=True)             # Cosine similarity to the matched person
+    reason = Column(String(255), nullable=True)           # "New left profile", "Better quality", etc.
+
+    # Status
+    status = Column(String(20), default="pending", index=True)  # pending/approved/rejected
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    # Relationships
+    person = relationship("Person", back_populates="suggested_encodings")

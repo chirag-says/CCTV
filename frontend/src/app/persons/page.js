@@ -6,6 +6,7 @@
  */
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import AppShell from '@/components/AppShell';
 import api, { API_BASE } from '@/lib/api';
 import PersonTimeline from '@/components/PersonTimeline';
@@ -22,6 +23,7 @@ export default function PersonsPage() {
     const [editPerson, setEditPerson] = useState(null);
     const [formData, setFormData] = useState({ name: '', role: 'visitor', department: '', email: '', phone: '' });
     const [timelinePerson, setTimelinePerson] = useState(null);
+    const router = useRouter();
 
     useEffect(() => {
         loadPersons();
@@ -185,7 +187,14 @@ export default function PersonsPage() {
                                                     <div className="avatar">{person.name.charAt(0)}</div>
                                                 )}
                                                 <div>
-                                                    <div style={{ fontWeight: 600, color: 'var(--text-primary)' }}>{person.name}</div>
+                                                    <div
+                                                        style={{ fontWeight: 600, color: 'var(--primary)', cursor: 'pointer', textDecoration: 'none' }}
+                                                        onClick={() => router.push(`/persons/${person.id}`)}
+                                                        onMouseEnter={e => e.target.style.textDecoration = 'underline'}
+                                                        onMouseLeave={e => e.target.style.textDecoration = 'none'}
+                                                    >
+                                                        {person.name}
+                                                    </div>
                                                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{person.email || '—'}</div>
                                                 </div>
                                             </div>

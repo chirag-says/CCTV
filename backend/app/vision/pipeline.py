@@ -213,6 +213,20 @@ class VisionPipeline:
         self._safety_check_interval = 1.0  # Run crowd/loiter checks every 1s
         self._last_face_draws: List[Tuple] = [] # Cache for drawing face boxes on skipped frames
 
+        # ── Threaded Frame Grabber ────────────────────────────────────────────
+        # Solves the OpenCV buffer-lag problem: cv2.VideoCapture buffers frames
+        # internally, and many backends (DSHOW on Windows) ignore BUFFERSIZE=1.
+        # When process_frame() is slower than the camera FPS, read() returns
+        # stale buffered frames, causing the stream to fall behind real-time
+        # and then "jump" forward when the buffer is flushed.
+        # The grabber thread continuously calls read() in a tight loop, always
+        # overwriting _grabbed_frame with the latest frame. process_frame()
+        # then picks up whichever frame is newest — never a stale buffer.
+        self._grabbed_frame = None
+        self._grab_lock = threading.Lock()
+        self._grabber_thread: Optional[threading.Thread] = None
+        self._grabber_stop = threading.Event()
+
         # Performance metrics
         self._fps = 0.0
         self._last_fps_time = time.time()
@@ -224,7 +238,28 @@ class VisionPipeline:
         self._encoding_refresh_interval = 300.0  # Safety-net re-check every 5 minutes
         self._encoding_db_count = 0  # Track DB count to detect new additions
 
+        # Embedding suggestion cooldown: per-person throttle
+        self._suggestion_cooldowns: Dict[str, float] = {}  # person_id → last_suggestion_time
+
         logger.info(f"Pipeline created for camera {camera_id}: source={stream_source}, mode={self.pipeline_mode}")
+
+    def _grabber_loop(self):
+        """
+        Background thread: continuously reads frames from cv2.VideoCapture.
+        Always overwrites _grabbed_frame with the latest frame so that
+        process_frame() never reads a stale buffered frame.
+        """
+        while not self._grabber_stop.is_set():
+            if not self._capture or not self._capture.isOpened():
+                time.sleep(0.01)
+                continue
+            ret, frame = self._capture.read()
+            if ret:
+                with self._grab_lock:
+                    self._grabbed_frame = frame
+            else:
+                # Brief pause on read failure to avoid busy-spin
+                time.sleep(0.005)
 
     def start(self):
         """Start the video capture."""
@@ -246,6 +281,17 @@ class VisionPipeline:
             self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             self._capture.set(cv2.CAP_PROP_FPS, 30)
 
+            # Start the background frame grabber thread.
+            # This thread continuously calls read() in a tight loop,
+            # draining the OpenCV buffer and always keeping the latest frame.
+            self._grabber_stop.clear()
+            self._grabber_thread = threading.Thread(
+                target=self._grabber_loop,
+                name=f"grabber-{self.camera_id}",
+                daemon=True,
+            )
+            self._grabber_thread.start()
+
             self._running = True
             logger.info(f"Camera {self.camera_id} started: {self.stream_source}")
 
@@ -256,9 +302,17 @@ class VisionPipeline:
     def stop(self):
         """Stop the video capture and clean up."""
         self._running = False
+
+        # Stop the grabber thread first (it holds a reference to _capture)
+        self._grabber_stop.set()
+        if self._grabber_thread and self._grabber_thread.is_alive():
+            self._grabber_thread.join(timeout=3)
+            self._grabber_thread = None
+
         if self._capture:
             self._capture.release()
             self._capture = None
+
         # Flush remaining exits
         self.tracker.check_exits()
 
@@ -300,11 +354,12 @@ class VisionPipeline:
             self._last_browser_frame_at = session.last_frame_at
             frame = session.last_frame.copy()
         else:
-            if not self._capture:
-                return None
-            ret, frame = self._capture.read()
-            if not ret:
-                logger.warning(f"Camera {self.camera_id}: Failed to read frame")
+            # Grab the latest frame from the background grabber thread.
+            # This is always the most recent frame — no stale buffer lag.
+            with self._grab_lock:
+                frame = self._grabbed_frame
+                self._grabbed_frame = None  # Mark as consumed
+            if frame is None:
                 return None
 
         self._frame_count += 1
@@ -438,6 +493,15 @@ class VisionPipeline:
                             )
                         except Exception as e:
                             logger.debug(f"Attribute extraction error: {e}")
+
+                    # ── Embedding Suggestion (throttled, diversity-gated) ──
+                    self._maybe_suggest_encoding(
+                        person_id=result.person_id,
+                        encoding=best_embedding,
+                        confidence=result.confidence,
+                        frame=clean_frame,
+                        location=location,
+                    )
                 else:
                     boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
                     self._handle_unknown_face(clean_frame, rgb_frame, location, best_embedding, centroid)
@@ -597,14 +661,113 @@ class VisionPipeline:
         detection events via the metadata JSONB column.
         """
         logger.info(
-            f"Attributes ready for {track_id[:8]}Ã¢â‚¬Â¦: {attributes}"
+            f"Attributes ready for {track_id[:8]}…: {attributes}"
         )
         # The attributes are cached in AttributeRecognizer._results
         # and will be included in future events via get_attributes()
 
-    # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+    def _maybe_suggest_encoding(
+        self,
+        person_id: str,
+        encoding: np.ndarray,
+        confidence: float,
+        frame: np.ndarray,
+        location: tuple,
+    ):
+        """
+        Evaluate whether a confident match should be queued as an embedding suggestion.
+
+        Pipeline:
+        1. Confidence gate (>= 0.85)
+        2. Per-person cooldown (max 1 per 60s)
+        3. Quality gate (must pass FaceQualityGate)
+        4. Diversity check (pose bucket, quality, appearance)
+        5. Save snapshot + create SuggestedEncoding row
+
+        NEVER auto-adds — always queued for admin approval.
+        """
+        # Step 1: Confidence gate
+        if confidence < settings.SUGGESTION_MIN_CONFIDENCE:
+            return
+
+        # Step 2: Per-person cooldown
+        now = time.time()
+        last_time = self._suggestion_cooldowns.get(person_id, 0)
+        if now - last_time < settings.SUGGESTION_COOLDOWN_SEC:
+            return
+
+        try:
+            from app.vision.quality import FaceQualityGate
+            from app.services.embedding_suggestions import (
+                EmbeddingSuggestionService,
+                classify_pose_bucket,
+                detect_appearance_tags,
+            )
+
+            # Step 3: Quality gate
+            gate = FaceQualityGate()
+            face_crop = self.detector.extract_face_crop(frame, location, padding=40)
+            quality_result = gate.assess(
+                face_crop=face_crop,
+                det_score=confidence,
+                landmarks=None,
+            )
+            if not quality_result.passed:
+                return
+
+            metrics = quality_result.metrics
+
+            # Step 4: Diversity check (only creates DB row if passes)
+            result = EmbeddingSuggestionService.evaluate_suggestion(
+                person_id=person_id,
+                new_encoding=encoding,
+                quality=quality_result.quality_score,
+                yaw=metrics.get("yaw", 0.0),
+                pitch=metrics.get("pitch", 0.0),
+                blur_score=metrics.get("blur_score", 0.0),
+                lighting=metrics.get("lighting"),
+            )
+
+            if not result.should_suggest:
+                return
+
+            # Step 5: Save snapshot and create suggestion
+            from app.utils.image_utils import save_snapshot
+
+            _, snapshot_url = save_snapshot(
+                face_crop,
+                f"suggestion_{person_id[:8]}_{int(now)}",
+                subdirectory="suggestions",
+                quality=95,
+            )
+
+            EmbeddingSuggestionService.create_suggestion(
+                person_id=person_id,
+                encoding=encoding,
+                snapshot_url=snapshot_url,
+                camera_id=self.camera_id,
+                quality=quality_result.quality_score,
+                yaw=metrics.get("yaw", 0.0),
+                pitch=metrics.get("pitch", 0.0),
+                roll=metrics.get("roll", 0.0),
+                det_score=confidence,
+                blur_score=metrics.get("blur_score", 0.0),
+                lighting=metrics.get("lighting"),
+                similarity=confidence,
+                reason=result.reason,
+                pose_bucket=result.pose_bucket,
+                appearance_tags=result.appearance_tags,
+            )
+
+            # Update cooldown
+            self._suggestion_cooldowns[person_id] = now
+
+        except Exception as e:
+            logger.debug(f"Embedding suggestion error: {e}")
+
+    # ═════════════════════════════════════════════════════════════════════════════
     #  Original Pipeline Methods (unchanged logic)
-    # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
+    # ═════════════════════════════════════════════════════════════════════════════
 
     def _handle_unknown_face(
         self,
