@@ -85,9 +85,28 @@ class FaceEncoding(Base):
 
     id = Column(String(36), primary_key=True, default=gen_uuid)
     person_id = Column(String(36), ForeignKey("persons.id", ondelete="CASCADE"), nullable=False, index=True)
-    encoding_data = Column(LargeBinary, nullable=False)  # pickled numpy array
+    encoding_data = Column(LargeBinary, nullable=False)  # raw float32 bytes (512 * 4 = 2048 bytes)
     source_image = Column(String(500), nullable=True)
     quality = Column(Float, default=1.0)
+
+    # Pose metadata (from InsightFace 5-point landmarks)
+    yaw = Column(Float, nullable=True)              # Head yaw angle (degrees, -90 to +90)
+    pitch = Column(Float, nullable=True)             # Head pitch angle (degrees)
+    roll = Column(Float, nullable=True)              # Head roll angle (degrees)
+
+    # Quality metadata
+    det_score = Column(Float, nullable=True)         # SCRFD detection confidence
+    blur_score = Column(Float, nullable=True)        # Laplacian variance (higher = sharper)
+
+    # Capture context (invaluable for debugging recognition failures)
+    camera_id = Column(String(36), nullable=True)    # Which camera captured this
+    capture_distance = Column(Float, nullable=True)  # Estimated distance from face size (meters)
+    lighting = Column(String(20), nullable=True)     # "bright" / "dim" / "backlit"
+
+    # Versioning
+    model_version = Column(String(50), default="arcface_r50")  # Embedding model identifier
+    version = Column(Integer, default=1)             # Row version for incremental sync
+
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
     # Relationships
@@ -145,12 +164,22 @@ class UnknownFace(Base):
     camera_id = Column(String(36), ForeignKey("cameras.id", ondelete="CASCADE"), nullable=False, index=True)
     snapshot_url = Column(String(500), nullable=True)
     full_frame = Column(String(500), nullable=True)
-    face_encoding = Column(LargeBinary, nullable=True)  # pickled numpy array for matching
+    face_encoding = Column(LargeBinary, nullable=True)  # raw float32 bytes for matching
     occurrence = Column(Integer, default=1)
     first_seen = Column(DateTime(timezone=True), default=utcnow)
     last_seen = Column(DateTime(timezone=True), default=utcnow)
     status = Column(String(20), default="pending")  # pending/enrolled/dismissed
+    cluster_id = Column(String(36), nullable=True, index=True)  # Groups same unknown person across sightings
     created_at = Column(DateTime(timezone=True), default=utcnow)
 
     # Relationships
     camera = relationship("Camera", back_populates="unknown_faces")
+
+
+# ── Encoding Version (for incremental cache sync) ────────────────
+class EncodingVersion(Base):
+    __tablename__ = "encoding_versions"
+
+    id = Column(Integer, primary_key=True, autoincrement=False, default=1)
+    version = Column(Integer, default=0, nullable=False)
+    updated_at = Column(DateTime(timezone=True), default=utcnow)

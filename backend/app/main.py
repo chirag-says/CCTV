@@ -185,10 +185,10 @@ def handle_unknown_face(data: dict):
     )
 
     try:
-        import pickle
         import numpy as np
         from uuid import uuid4
         from datetime import datetime, timezone
+        from app.vision.recognizer import serialize_encoding, deserialize_encoding
 
         db = SessionLocal()
         try:
@@ -197,7 +197,7 @@ def handle_unknown_face(data: dict):
             encoding_array = None
             if data.get("encoding") is not None:
                 encoding_array = data["encoding"]
-                encoding_bytes = pickle.dumps(encoding_array)
+                encoding_bytes = serialize_encoding(encoding_array)  # raw float32 bytes
 
             ts = datetime.fromisoformat(data["timestamp"]) if data.get("timestamp") else datetime.now(timezone.utc)
             camera_id = data.get("camera_id", "")
@@ -242,7 +242,9 @@ def handle_unknown_face(data: dict):
 
                     for face in pending_faces:
                         try:
-                            stored_enc = pickle.loads(face.face_encoding)
+                            stored_enc = deserialize_encoding(face.face_encoding)
+                            if stored_enc is None:
+                                continue
                             norm_s = np.linalg.norm(stored_enc)
                             if norm_s > 0:
                                 stored_normalized = stored_enc / norm_s

@@ -1,9 +1,3 @@
-"""
-Person Service — CRUD operations for persons and face encodings.
-Now uses SQLAlchemy + PostgreSQL instead of Supabase / MockStore.
-"""
-
-import pickle
 import logging
 from typing import Optional, Dict, Any
 from uuid import uuid4
@@ -14,8 +8,9 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.db.session import SessionLocal
-from app.db.models import Person, FaceEncoding, TrackingSession
+from app.db.models import Person, FaceEncoding, TrackingSession, EncodingVersion
 from app.core.exceptions import NotFoundException
+from app.vision.recognizer import serialize_encoding, deserialize_encoding
 
 logger = logging.getLogger(__name__)
 
@@ -192,8 +187,17 @@ class PersonService:
         encoding: np.ndarray,
         source_image: Optional[str] = None,
         quality: float = 1.0,
+        yaw: Optional[float] = None,
+        pitch: Optional[float] = None,
+        roll: Optional[float] = None,
+        det_score: Optional[float] = None,
+        blur_score: Optional[float] = None,
+        camera_id: Optional[str] = None,
+        capture_distance: Optional[float] = None,
+        lighting: Optional[str] = None,
+        model_version: str = "arcface_r50",
     ) -> dict:
-        """Store a face encoding for a person."""
+        """Store a face encoding for a person with metadata."""
         db: Session = SessionLocal()
         try:
             # Verify person exists
@@ -201,15 +205,33 @@ class PersonService:
             if not person:
                 raise NotFoundException("Person", person_id)
 
+            # Get current version for the new encoding
+            current_version = PersonService._get_or_create_version(db)
+            new_version = current_version + 1
+
             enc = FaceEncoding(
                 id=str(uuid4()),
                 person_id=person_id,
-                encoding_data=pickle.dumps(encoding),  # store as binary
+                encoding_data=serialize_encoding(encoding),  # raw float32 bytes
                 source_image=source_image,
                 quality=quality,
+                yaw=yaw,
+                pitch=pitch,
+                roll=roll,
+                det_score=det_score,
+                blur_score=blur_score,
+                camera_id=camera_id,
+                capture_distance=capture_distance,
+                lighting=lighting,
+                model_version=model_version,
+                version=new_version,
                 created_at=datetime.now(timezone.utc),
             )
             db.add(enc)
+
+            # Increment global encoding version
+            PersonService._set_version(db, new_version)
+
             db.commit()
 
             return {
@@ -233,6 +255,7 @@ class PersonService:
         """
         Load all face encodings from database.
         Returns list of dicts ready for FaceRecognizer.load_encodings().
+        Handles both new float32 format and legacy pickle format.
         """
         db: Session = SessionLocal()
         try:
@@ -246,14 +269,17 @@ class PersonService:
             encodings = []
             for enc, person_name in results:
                 try:
-                    arr = pickle.loads(enc.encoding_data)
-                    encodings.append({
-                        "encoding_id": enc.id,
-                        "person_id": enc.person_id,
-                        "person_name": person_name or "Unknown",
-                        "encoding": arr,
-                        "quality": enc.quality or 1.0,
-                    })
+                    arr = deserialize_encoding(enc.encoding_data)
+                    if arr is not None:
+                        encodings.append({
+                            "encoding_id": enc.id,
+                            "person_id": enc.person_id,
+                            "person_name": person_name or "Unknown",
+                            "encoding": arr,
+                            "quality": enc.quality or 1.0,
+                        })
+                    else:
+                        logger.warning(f"Failed to deserialize encoding {enc.id}")
                 except Exception as e:
                     logger.warning(f"Failed to decode encoding {enc.id}: {e}")
 
@@ -261,6 +287,36 @@ class PersonService:
             return encodings
         finally:
             db.close()
+
+    @staticmethod
+    def get_encoding_version() -> int:
+        """Get the current global encoding version number."""
+        db: Session = SessionLocal()
+        try:
+            return PersonService._get_or_create_version(db)
+        finally:
+            db.close()
+
+    @staticmethod
+    def _get_or_create_version(db: Session) -> int:
+        """Get or create the encoding version row (internal, uses existing session)."""
+        row = db.query(EncodingVersion).filter(EncodingVersion.id == 1).first()
+        if row is None:
+            row = EncodingVersion(id=1, version=0, updated_at=datetime.now(timezone.utc))
+            db.add(row)
+            db.flush()
+        return row.version
+
+    @staticmethod
+    def _set_version(db: Session, version: int):
+        """Set the encoding version (internal, uses existing session)."""
+        row = db.query(EncodingVersion).filter(EncodingVersion.id == 1).first()
+        if row:
+            row.version = version
+            row.updated_at = datetime.now(timezone.utc)
+        else:
+            db.add(EncodingVersion(id=1, version=version, updated_at=datetime.now(timezone.utc)))
+
 
     @staticmethod
     def get_person_history(

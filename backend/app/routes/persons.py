@@ -86,6 +86,7 @@ async def upload_face_encoding(
     """
     Upload a face image for a person.
     Generates ArcFace embedding (512-d) using SCRFD detection + insightface.
+    Runs quality gate to reject blurry/dark/angled faces.
     """
     # Validate person exists
     PersonService.get_person(person_id)
@@ -128,22 +129,52 @@ async def upload_face_encoding(
 
     encoding = face.embedding  # 512-d numpy array
 
-    # Extract face location for quality assessment
+    # Extract face location
     bbox = face.bbox.astype(int)
     x1, y1, x2, y2 = bbox
     face_location = (y1, x2, y2, x1)  # Convert to (top, right, bottom, left)
 
-    # Assess quality
-    from app.vision.detector import FaceDetector
-    detector = FaceDetector()
-    quality = detector.assess_face_quality(image, face_location)
+    # ── Face Quality Gate ─────────────────────────────────────
+    from app.vision.quality import FaceQualityGate
 
-    # Store encoding
+    quality_gate = FaceQualityGate()
+
+    # Extract face crop for quality assessment
+    face_crop = image[max(0, y1):y2, max(0, x1):x2]
+
+    # Get landmarks for pose estimation
+    landmarks = face.landmark_2d_106 if hasattr(face, 'landmark_2d_106') else None
+    if landmarks is None and hasattr(face, 'kps') and face.kps is not None:
+        landmarks = face.kps  # 5-point landmarks
+
+    quality_result = quality_gate.assess(
+        face_crop=face_crop,
+        face_location=face_location,
+        det_score=float(face.det_score) if hasattr(face, 'det_score') else 1.0,
+        landmarks=landmarks,
+    )
+
+    # Reject low-quality faces
+    if not quality_result.passed:
+        raise ValidationException(
+            f"Face quality too low for enrollment. "
+            f"Issues: {'; '.join(quality_result.rejection_reasons)}. "
+            f"Quality score: {quality_result.quality_score:.2f}"
+        )
+
+    # ── Store encoding with metadata ──────────────────────────
+    metrics = quality_result.metrics
     result = PersonService.add_face_encoding(
         person_id=person_id,
         encoding=encoding,
         source_image=file.filename,
-        quality=quality,
+        quality=quality_result.quality_score,
+        yaw=metrics.get("yaw"),
+        pitch=metrics.get("pitch"),
+        roll=metrics.get("roll"),
+        det_score=metrics.get("det_score"),
+        blur_score=metrics.get("blur_score"),
+        lighting=metrics.get("lighting"),
     )
 
     # Reload encodings in active pipelines
@@ -153,7 +184,11 @@ async def upload_face_encoding(
     return {
         "message": "Face encoding created successfully",
         "encoding": result,
-        "quality": quality,
+        "quality": {
+            "score": quality_result.quality_score,
+            "passed": True,
+            "metrics": quality_result.metrics,
+        },
         "face_location": {
             "top": face_location[0],
             "right": face_location[1],

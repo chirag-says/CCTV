@@ -3,7 +3,6 @@ Unknown Faces API Routes — Admin Queue for reviewing and enrolling.
 Now uses SQLAlchemy + PostgreSQL.
 """
 
-import pickle
 import logging
 import numpy as np
 from fastapi import APIRouter, Depends, Query, HTTPException
@@ -35,6 +34,7 @@ def _unknown_to_dict(face: UnknownFaceDB) -> dict:
         "first_seen": face.first_seen.isoformat() if face.first_seen else None,
         "last_seen": face.last_seen.isoformat() if face.last_seen else None,
         "status": face.status,
+        "cluster_id": face.cluster_id,
         "created_at": face.created_at.isoformat() if face.created_at else None,
     }
 
@@ -158,13 +158,15 @@ async def enroll_unknown_face(
         # 3. Move encoding
         if face.face_encoding:
             try:
-                encoding_array = pickle.loads(face.face_encoding)
-                PersonService.add_face_encoding(
-                    person_id=person["id"],
-                    encoding=encoding_array,
-                    source_image=face.snapshot_url,
-                    quality=0.8,
-                )
+                from app.vision.recognizer import deserialize_encoding
+                encoding_array = deserialize_encoding(face.face_encoding)
+                if encoding_array is not None:
+                    PersonService.add_face_encoding(
+                        person_id=person["id"],
+                        encoding=encoding_array,
+                        source_image=face.snapshot_url,
+                        quality=0.8,
+                    )
             except Exception as e:
                 logger.warning(f"Failed to migrate encoding: {e}")
 

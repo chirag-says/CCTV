@@ -9,7 +9,6 @@ import asyncio
 import threading
 import time
 import logging
-import pickle
 from typing import Dict, Optional, Callable
 from uuid import uuid4
 
@@ -80,8 +79,8 @@ class CameraWorker:
                     # Pre-encode JPEG in THIS background thread (not the async loop!)
                     # This is the key optimization: JPEG encoding is CPU-heavy (~5-15ms)
                     # and must NOT run in the async event loop where it blocks everything.
-                    small = resize_frame(frame, max_width=640, max_height=480)
-                    self.pipeline._last_jpeg = frame_to_jpeg_bytes(small, quality=65)
+                    small = resize_frame(frame, max_width=1280, max_height=720)
+                    self.pipeline._last_jpeg = frame_to_jpeg_bytes(small, quality=80)
             except Exception as e:
                 logger.error(f"Camera {self.camera_id} error: {e}", exc_info=True)
                 time.sleep(1)  # Brief pause on error

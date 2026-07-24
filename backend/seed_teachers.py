@@ -12,7 +12,6 @@ For each teacher:
 
 import sys
 import os
-import pickle
 import cv2
 import numpy as np
 import shutil
@@ -197,12 +196,34 @@ def seed_teachers():
             db.flush()  # Get person into session before FK reference
 
             # Create FaceEncoding record
+            from app.vision.recognizer import serialize_encoding
+            from app.vision.quality import FaceQualityGate
+
+            # Assess quality (relaxed for studio portraits)
+            quality_gate = FaceQualityGate(min_blur=30.0, min_size=40)
+            bbox_i = face.bbox.astype(int)
+            face_crop = image[max(0, bbox_i[1]):bbox_i[3], max(0, bbox_i[0]):bbox_i[2]]
+            landmarks = face.kps if hasattr(face, 'kps') and face.kps is not None else None
+            qr = quality_gate.assess(
+                face_crop=face_crop,
+                face_location=(bbox_i[1], bbox_i[2], bbox_i[3], bbox_i[0]),
+                det_score=float(face.det_score) if hasattr(face, 'det_score') else 1.0,
+                landmarks=landmarks,
+            )
+
             enc = FaceEncoding(
                 id=str(uuid4()),
                 person_id=person_id,
-                encoding_data=pickle.dumps(encoding),
+                encoding_data=serialize_encoding(encoding),  # raw float32 bytes
                 source_image=filename,
-                quality=1.0,  # Studio-quality portrait photos
+                quality=qr.quality_score,
+                yaw=qr.metrics.get('yaw'),
+                pitch=qr.metrics.get('pitch'),
+                roll=qr.metrics.get('roll'),
+                det_score=qr.metrics.get('det_score'),
+                blur_score=qr.metrics.get('blur_score'),
+                lighting=qr.metrics.get('lighting'),
+                model_version="arcface_r50",
                 created_at=datetime.now(timezone.utc),
             )
             db.add(enc)

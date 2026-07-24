@@ -29,8 +29,30 @@ class Settings(BaseSettings):
     INSIGHTFACE_DET_THRESH: float = 0.5  # Face detection confidence threshold
 
     # Face Recognition (ArcFace via insightface)
-    FACE_MATCH_TOLERANCE: float = 0.75  # Cosine distance threshold (lower = stricter, 0.75 handles angle variations)
+    FACE_MATCH_TOLERANCE: float = 0.75  # Legacy fallback cosine distance threshold
     FACE_EMBEDDING_DIM: int = 512  # ArcFace embedding dimension
+
+    # Adaptive thresholds (initial defaults — calibrate per deployment via FAR/FRR benchmarking)
+    FACE_MATCH_STRICT: float = 0.52     # High-quality face threshold (quality >= 0.8)
+    FACE_MATCH_BALANCED: float = 0.62   # Medium-quality threshold (quality >= 0.5)
+    FACE_MATCH_LENIENT: float = 0.72    # Low-quality threshold (quality < 0.5)
+    FACE_MATCH_MIN_MARGIN: float = 0.10 # Min gap between best and second-best person match
+    FACE_MATCH_TOP_K: int = 5           # Number of candidate persons to retrieve
+
+    # Face Quality Gate (minimum thresholds for enrollment)
+    FACE_QUALITY_MIN_BLUR: float = 80.0       # Minimum Laplacian variance (higher = sharper)
+    FACE_QUALITY_MIN_BRIGHTNESS: float = 40.0 # Minimum mean pixel brightness
+    FACE_QUALITY_MAX_BRIGHTNESS: float = 220.0  # Maximum mean pixel brightness
+    FACE_QUALITY_MIN_SIZE: int = 80            # Minimum face width/height in pixels
+    FACE_QUALITY_MIN_DET_SCORE: float = 0.55   # Minimum SCRFD detection confidence
+    FACE_QUALITY_MAX_YAW: float = 45.0         # Maximum head yaw (degrees)
+    FACE_QUALITY_MAX_PITCH: float = 35.0       # Maximum head pitch (degrees)
+
+    # FP16 Inference (enable only after benchmarking accuracy)
+    ENABLE_FP16: bool = False
+
+    # Search Backend: "numpy" (default) or "faiss" (future)
+    SEARCH_BACKEND: str = "numpy"
 
     # ByteTrack Multi-Object Tracking
     BYTETRACK_TRACK_THRESH: float = 0.5  # High-confidence detection threshold

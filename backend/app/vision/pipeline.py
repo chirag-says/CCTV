@@ -23,7 +23,6 @@ import asyncio
 import logging
 import threading
 import os
-import pickle
 import time
 from datetime import datetime, timezone
 from typing import Callable, Dict, List, Optional, Tuple
@@ -219,9 +218,10 @@ class VisionPipeline:
         self._last_fps_time = time.time()
         self._fps_frame_count = 0
 
-        # Auto-refresh encodings: detect when recognizer cache is stale
+        # Auto-refresh encodings: safety net for out-of-process enrollment (e.g., seed_teachers.py)
+        # Normal enrollment triggers instant reload via camera_manager.load_encodings_all()
         self._last_encoding_refresh = 0.0  # Force immediate check on first face detection
-        self._encoding_refresh_interval = 60.0  # Re-check DB every 60 seconds
+        self._encoding_refresh_interval = 300.0  # Safety-net re-check every 5 minutes
         self._encoding_db_count = 0  # Track DB count to detect new additions
 
         logger.info(f"Pipeline created for camera {camera_id}: source={stream_source}, mode={self.pipeline_mode}")
