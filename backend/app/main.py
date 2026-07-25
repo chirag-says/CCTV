@@ -41,16 +41,20 @@ logger = logging.getLogger("cctv")
 _main_loop: asyncio.AbstractEventLoop = None
 
 
-# ── Event Handlers (Pipeline → WebSocket → DB) ───────────────
+# ── Event Handlers (Pipeline → EventQueue → DB/WS) ───────────
+#
+# The vision pipeline calls handle_pipeline_event() and handle_unknown_face()
+# from the camera worker thread. These functions MUST be non-blocking.
+# They enqueue events into the EventQueue which processes them in a
+# dedicated background consumer thread.
+
+from app.core.event_queue import get_event_queue, EventPriority
+from app.vision.benchmarks import pipeline_bench
+
 
 async def _broadcast_event(event: dict):
     """Forward pipeline event to WebSocket clients."""
     await ws_manager.broadcast_event(event)
-
-
-async def _send_frame_async(camera_id: str, frame_bytes: bytes):
-    """Send JPEG frame to WebSocket subscribers."""
-    await ws_manager.send_frame(camera_id, frame_bytes)
 
 
 def handle_frame(camera_id: str, frame):
@@ -65,14 +69,11 @@ def handle_frame(camera_id: str, frame):
 def handle_pipeline_event(event: dict):
     """
     Called by vision pipeline on entry/exit/detection events.
-    Bridges sync pipeline → async WebSocket.
-    Also persists events to PostgreSQL.
+    NON-BLOCKING: enqueues event for async processing.
     """
-    global _main_loop
     event_type = event.get('event_type', 'unknown')
-    logger.info(f"📡 Event: {event_type} — {event.get('person_name', 'N/A')}")
 
-    # vehicle_count events are high-frequency status updates — broadcast only, don't persist
+    # vehicle_count events are high-frequency — broadcast only, don't persist
     if event_type == "vehicle_count":
         if _main_loop:
             try:
@@ -80,6 +81,37 @@ def handle_pipeline_event(event: dict):
             except Exception:
                 pass
         return
+
+    # Critical events (entry, exit, security alerts) must never be dropped
+    is_critical = event_type in ("entry", "exit", "security_alert")
+    priority = EventPriority.CRITICAL if is_critical else EventPriority.NORMAL
+
+    eq = get_event_queue()
+    with pipeline_bench.measure("queue_put"):
+        eq.put("pipeline_event", event, priority=priority)
+
+
+def handle_unknown_face(data: dict):
+    """
+    Called when an unknown face is detected.
+    NON-BLOCKING: enqueues for async processing (snapshot saving + DB + WS).
+    """
+    eq = get_event_queue()
+    with pipeline_bench.measure("queue_put"):
+        eq.put("unknown_face", data, priority=EventPriority.NORMAL)
+
+
+# ── Actual Event Processing (runs in EventQueue consumer thread) ──────────
+
+def _process_pipeline_event(event: dict):
+    """
+    Actual handler for pipeline events. Runs in the EventQueue consumer thread.
+    Persists to PostgreSQL and broadcasts via WebSocket.
+    """
+    event_type = event.get('event_type', 'unknown')
+    logger.info(f"📡 Event: {event_type} — {event.get('person_name', 'N/A')}")
+
+    eq = get_event_queue()
 
     # Persist to PostgreSQL
     try:
@@ -106,28 +138,36 @@ def handle_pipeline_event(event: dict):
                     db.add(cam)
                     db.flush()
 
+            # ── FK Guard: use in-memory person ID cache instead of DB query ──
+            person_id = event.get("person_id")
+            event_metadata = {
+                k: v for k, v in event.items()
+                if k not in ("person_id", "camera_id", "event_type", "confidence", "snapshot_url", "subtype")
+            }
+            if person_id and not eq.is_known_person(person_id):
+                # Unknown person UUID — don't set FK, store in metadata instead
+                event_metadata["unknown_person_id"] = person_id
+                person_id = None
+
             # Create detection event
             db_event = DetectionEvent(
                 id=str(uuid4()),
-                person_id=event.get("person_id"),
+                person_id=person_id,
                 camera_id=camera_id,
                 event_type=event.get("event_type", "detection"),
                 subtype=event.get("subtype"),
                 confidence=event.get("confidence", 0.0),
                 snapshot_url=event.get("snapshot_url"),
-                metadata_json={
-                    k: v for k, v in event.items()
-                    if k not in ("person_id", "camera_id", "event_type", "confidence", "snapshot_url", "subtype")
-                },
+                metadata_json=event_metadata,
                 created_at=datetime.fromisoformat(event["timestamp"]) if event.get("timestamp") else datetime.now(timezone.utc),
             )
             db.add(db_event)
 
-            # Create/update tracking session for entry/exit
-            if event["event_type"] == "entry" and event.get("person_id"):
+            # Create/update tracking session for entry/exit (only for known persons)
+            if event["event_type"] == "entry" and person_id:
                 session = TrackingSession(
                     id=str(uuid4()),
-                    person_id=event["person_id"],
+                    person_id=person_id,
                     camera_id=event["camera_id"],
                     entry_time=datetime.fromisoformat(event["timestamp"]) if event.get("timestamp") else datetime.now(timezone.utc),
                     status="active",
@@ -141,7 +181,7 @@ def handle_pipeline_event(event: dict):
                     worker = camera_manager._workers.get(cid)
                     if worker:
                         worker.pipeline.tracker.set_session_id(
-                            event["person_id"], session.id
+                            event.get("person_id", person_id), session.id
                         )
             elif event["event_type"] == "exit" and event.get("session_id"):
                 session = db.query(TrackingSession).filter(
@@ -170,19 +210,48 @@ def handle_pipeline_event(event: dict):
             pass
 
 
-def handle_unknown_face(data: dict):
+def _process_unknown_face(data: dict):
     """
-    Called when an unknown face (or body-only person) is detected.
-    Persists to unknown_faces table in PostgreSQL and broadcasts event.
+    Actual handler for unknown face events. Runs in EventQueue consumer thread.
 
-    DB-level dedup: compares incoming face encoding against all existing
-    pending unknown faces. If a similar face exists (cosine distance < threshold),
-    increments occurrence count instead of creating a duplicate.
+    Handles:
+    1. Saving snapshots to disk (if frame data is provided)
+    2. DB-level dedup via encoding comparison
+    3. Persisting to unknown_faces table
+    4. Broadcasting via WebSocket
     """
     detection_type = data.get("detection_type", "face")
     logger.info(
         f"👤 Unknown {detection_type} detected on camera {data.get('camera_id')}"
     )
+
+    # ── Step 1: Save snapshots if frame data was passed ──
+    # (Snapshot saving was moved out of the vision thread into the queue)
+    snapshot_path = data.get("snapshot_path", "")
+    context_path = data.get("context_path", "")
+    full_frame_path = data.get("full_frame_path", "")
+
+    if data.get("face_crop") is not None:
+        try:
+            from app.utils.image_utils import save_snapshot
+            unknown_id = data.get("unknown_id", "")
+
+            _, snapshot_path = save_snapshot(
+                data["face_crop"], f"unknown_{unknown_id}",
+                subdirectory="unknowns", quality=95,
+            )
+            if data.get("context_crop") is not None:
+                _, context_path = save_snapshot(
+                    data["context_crop"], f"context_{unknown_id}",
+                    subdirectory="unknowns", quality=95,
+                )
+            if data.get("full_frame") is not None:
+                _, full_frame_path = save_snapshot(
+                    data["full_frame"], f"fullframe_{unknown_id}",
+                    subdirectory="frames", quality=90,
+                )
+        except Exception as e:
+            logger.error(f"Failed to save unknown snapshots: {e}")
 
     try:
         import numpy as np
@@ -278,8 +347,8 @@ def handle_unknown_face(data: dict):
                 unknown = UnknownFace(
                     id=data.get("unknown_id", str(uuid4())),
                     camera_id=camera_id,
-                    snapshot_url=data.get("snapshot_path", ""),
-                    full_frame=data.get("full_frame_path", ""),
+                    snapshot_url=snapshot_path,
+                    full_frame=full_frame_path,
                     face_encoding=encoding_bytes,
                     occurrence=1,
                     first_seen=ts,
@@ -300,12 +369,12 @@ def handle_unknown_face(data: dict):
     except Exception as e:
         logger.error(f"Failed to persist unknown face: {e}")
 
-    # Broadcast only for genuinely new unknowns (not deduped updates)
-    handle_pipeline_event({
+    # Broadcast unknown event via WebSocket
+    _process_pipeline_event({
         "event_type": "unknown",
         "camera_id": data.get("camera_id", ""),
         "timestamp": data.get("timestamp", ""),
-        "snapshot_url": data.get("snapshot_path", ""),
+        "snapshot_url": snapshot_path,
         "detection_type": detection_type,
     })
 
@@ -330,6 +399,14 @@ async def lifespan(app: FastAPI):
         logger.error(f"❌ Database initialization failed: {e}")
         logger.error("Make sure PostgreSQL is running and accessible")
         raise
+
+    # ── Initialize Async Event Queue ──────────────────────────
+    eq = get_event_queue()
+    eq.register_handler("pipeline_event", _process_pipeline_event)
+    eq.register_handler("unknown_face", _process_unknown_face)
+    eq.refresh_person_ids()  # Load known person IDs into memory
+    eq.start()
+    logger.info(f"✅ Event Queue started (size={settings.EVENT_QUEUE_SIZE})")
 
     # Set up pipeline callbacks (event + unknown + frame streaming)
     camera_manager.set_callbacks(
@@ -360,7 +437,8 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("🛑 Shutting down...")
     camera_manager.stop_all()
-    logger.info("✅ All cameras stopped. Goodbye!")
+    eq.stop()  # Drain remaining events before exit
+    logger.info("✅ All cameras stopped. Event queue drained. Goodbye!")
 
 
 # ── Create Application ────────────────────────────────────────

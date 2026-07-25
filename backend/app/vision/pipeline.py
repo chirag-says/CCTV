@@ -60,6 +60,7 @@ from app.vision.reid import get_reid_tracker, ReIDTracker
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Internal: Utilities Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 from app.utils.image_utils import frame_to_jpeg_bytes, save_snapshot
+from app.vision.benchmarks import pipeline_bench
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,11 @@ class VisionPipeline:
         # Maintains track IDs across frames, reducing the need to run
         # expensive ArcFace recognition on every single frame.
         self.byte_tracker = ByteTracker()
-        self._recognition_interval = 3  # Run ArcFace every N frames per track (lower = fewer identity flickers)
+
+        # Recognition cache: time-based re-check intervals (FPS-independent)
+        self._recognition_lock_confidence = settings.RECOGNITION_LOCK_CONFIDENCE
+        self._recognition_recheck_sec = settings.RECOGNITION_RECHECK_SEC
+        self._recognition_full_recheck_sec = settings.RECOGNITION_FULL_RECHECK_SEC
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ YOLO Person Detector (for body-level person detection) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         # Used in FACE mode to assist face detection when face_recognition
@@ -403,7 +408,8 @@ class VisionPipeline:
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ DETECTION Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         # Detect faces AND get embeddings in a SINGLE insightface pass
-        face_locations, embeddings, rgb_frame = self.detector.detect_faces_with_embeddings(frame)
+        with pipeline_bench.measure("scrfd_detect"):
+            face_locations, embeddings, rgb_frame = self.detector.detect_faces_with_embeddings(frame)
 
         if not face_locations:
             # Update ByteTrack with empty detections
@@ -428,7 +434,8 @@ class VisionPipeline:
         scores_array = np.array(det_scores, dtype=np.float32)
 
         # ByteTrack update: assigns stable track IDs across frames
-        active_tracks = self.byte_tracker.update(bboxes_array, scores_array)
+        with pipeline_bench.measure("bytetrack_update"):
+            active_tracks = self.byte_tracker.update(bboxes_array, scores_array)
 
         # Collect all face boxes to draw
         boxes_to_draw = []
@@ -461,18 +468,24 @@ class VisionPipeline:
                     best_iou = iou
                     best_embedding = embeddings[i]
 
-            # Only run recognition if track has no identity or periodic re-check
-            needs_recognition = (
-                track.person_id is None
-                or track.tracklet_len % self._recognition_interval == 0
-            )
+            # ── Time-based recognition cache ──────────────────────
+            # Only run ArcFace if the track needs re-recognition.
+            # This is FPS-independent: uses wall-clock time, not frame counts.
+            needs_recognition = self._should_recognize(track)
 
             if needs_recognition and best_embedding is not None:
-                result: MatchResult = self.recognizer.recognize_face(best_embedding)
+                with pipeline_bench.measure("arcface_match"):
+                    result: MatchResult = self.recognizer.recognize_face(best_embedding)
 
                 if result.matched:
                     track.person_id = result.person_id
                     track.person_name = result.person_name
+                    # Update recognition cache on the track
+                    track.recognition_confidence = result.confidence
+                    track.recognition_time = time.time()
+                    if result.confidence >= self._recognition_lock_confidence:
+                        track.recognition_locked = True
+
                     boxes_to_draw.append((location, result.person_name, (0, 255, 0), result.confidence))
 
                     self.tracker.on_detection(
@@ -506,13 +519,13 @@ class VisionPipeline:
                     boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
                     self._handle_unknown_face(clean_frame, rgb_frame, location, best_embedding, centroid)
             elif not needs_recognition and track.person_id and track.person_name:
-                # Reuse existing identity from ByteTrack (skip ArcFace)
-                boxes_to_draw.append((location, track.person_name, (0, 255, 0), 0.0))
+                # Reuse existing identity from ByteTrack cache (skip ArcFace)
+                boxes_to_draw.append((location, track.person_name, (0, 255, 0), track.recognition_confidence))
                 self.tracker.on_detection(
                     person_id=track.person_id,
                     person_name=track.person_name,
                     camera_id=self.camera_id,
-                    confidence=0.0,
+                    confidence=track.recognition_confidence,
                     centroid=centroid,
                 )
             else:
@@ -544,9 +557,38 @@ class VisionPipeline:
         self._run_safety_analytics()
         self._check_periodic_exits()
         self._update_fps()
+        pipeline_bench.tick_frame()  # Benchmark: log timing summary periodically
 
         self._last_frame = frame
         return frame
+
+    def _should_recognize(self, track: STrack) -> bool:
+        """
+        Determine if a ByteTrack track needs ArcFace recognition.
+
+        Uses wall-clock time (FPS-independent) instead of frame counts:
+        - No identity yet → always recognize
+        - Just created (tracklet_len < 3) → always recognize
+        - Unlocked (low confidence) → re-check every RECOGNITION_RECHECK_SEC
+        - Locked (high confidence) → re-check every RECOGNITION_FULL_RECHECK_SEC
+        """
+        # No identity yet — must recognize
+        if track.person_id is None:
+            return True
+
+        # Track was just re-created (lost and found) — must re-verify
+        if track.tracklet_len < 3:
+            return True
+
+        now = time.time()
+        elapsed = now - track.recognition_time
+
+        if track.recognition_locked:
+            # Confidently identified — long re-check interval
+            return elapsed >= self._recognition_full_recheck_sec
+        else:
+            # Not yet confident — shorter re-check interval
+            return elapsed >= self._recognition_recheck_sec
 
 
     # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
@@ -588,7 +630,7 @@ class VisionPipeline:
     def _run_safety_analytics(self):
         """
         Run crowd and loitering detection at a throttled interval.
-        Uses centroid data from the tracker Ã¢â‚¬â€ completely non-blocking
+        Uses centroid data from the tracker — completely non-blocking
         since all heavy work is already done by the time centroids exist.
         """
         now = time.time()
@@ -619,7 +661,7 @@ class VisionPipeline:
         """
         logger.warning(
             f"Security alert on camera {self.camera_id}: "
-            f"{alert.get('subtype', 'unknown')} Ã¢â‚¬â€ {alert}"
+            f"{alert.get('subtype', 'unknown')} — {alert}"
         )
         if self.on_event:
             self.on_event(alert)
@@ -811,30 +853,20 @@ class VisionPipeline:
             unknown_label = f"Unknown #{unknown_number}"
 
             # Ã¢â€â‚¬Ã¢â€â‚¬ High-quality face crop with generous padding Ã¢â€â‚¬Ã¢â€â‚¬
-            face_crop = self.detector.extract_face_crop(frame, location, padding=80)
-            _, snapshot_url = save_snapshot(
-                face_crop, f"unknown_{unknown_id}", subdirectory="unknowns", quality=95
-            )
+            # Copy frame data NOW (frame reference changes next iteration)
+            # These copies are fast (~0.5ms each) vs save_snapshot (~10-30ms each)
+            face_crop = self.detector.extract_face_crop(frame, location, padding=80).copy()
+            context_crop = self._extract_context_crop(frame, location).copy()
+            full_frame_copy = frame.copy()
 
             # Ã¢â€â‚¬Ã¢â€â‚¬ Wider context crop (head + shoulders) for better identification Ã¢â€â‚¬Ã¢â€â‚¬
-            context_crop = self._extract_context_crop(frame, location)
-            _, context_url = save_snapshot(
-                context_crop, f"context_{unknown_id}", subdirectory="unknowns", quality=95
-            )
 
             # Ã¢â€â‚¬Ã¢â€â‚¬ Full frame at good quality Ã¢â€â‚¬Ã¢â€â‚¬
-            _, full_frame_url = save_snapshot(
-                frame, f"fullframe_{unknown_id}", subdirectory="frames", quality=90
-            )
-
             self._unknown_cache[unknown_id] = {
                 "encoding": encoding,
                 "count": 1,
                 "first_seen": time.time(),
                 "last_seen": time.time(),
-                "snapshot_path": snapshot_url,
-                "context_path": context_url,
-                "full_frame_path": full_frame_url,
                 "label": unknown_label,
             }
 
@@ -847,14 +879,15 @@ class VisionPipeline:
                 centroid=centroid,
             )
 
-            # Emit unknown face event
+            # Enqueue for async processing (snapshot saving + DB + WS)
+            # on_unknown() now just enqueues to EventQueue — non-blocking
             if self.on_unknown:
                 self.on_unknown({
                     "unknown_id": unknown_id,
                     "camera_id": self.camera_id,
-                    "snapshot_path": snapshot_url,
-                    "context_path": context_url,
-                    "full_frame_path": full_frame_url,
+                    "face_crop": face_crop,
+                    "context_crop": context_crop,
+                    "full_frame": full_frame_copy,
                     "encoding": encoding,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "bounding_box": {

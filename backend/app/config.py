@@ -76,6 +76,18 @@ class Settings(BaseSettings):
     BYTETRACK_TRACK_BUFFER: int = 90  # Frames to keep lost tracks alive (~3s at 30fps, prevents track fragmentation)
     BYTETRACK_MATCH_THRESH: float = 0.8  # IoU threshold for matching
 
+    # Recognition Cache (time-based, FPS-independent)
+    # Once a track is confidently recognized, skip ArcFace until re-check
+    RECOGNITION_LOCK_CONFIDENCE: float = 0.85   # Min confidence to lock a track identity
+    RECOGNITION_RECHECK_SEC: float = 1.0         # Re-check unlocked tracks every N seconds
+    RECOGNITION_FULL_RECHECK_SEC: float = 3.0    # Re-check locked tracks every N seconds
+
+    # Async Event Queue
+    EVENT_QUEUE_SIZE: int = 500                  # Max queued events (critical events bypass this limit)
+
+    # Pipeline Benchmarks
+    ENABLE_PIPELINE_BENCHMARKS: bool = True       # Log per-stage timing every 100 frames
+
     FRAME_SKIP: int = 3
     DETECTION_SCALE: float = 0.5
     EXIT_THRESHOLD_SECONDS: int = 30  # 30 seconds — avoids premature exits from brief occlusions

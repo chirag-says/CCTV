@@ -45,6 +45,12 @@ class STrack:
     _velocity: Optional[np.ndarray] = field(default=None, repr=False)
     _prev_bbox: Optional[np.ndarray] = field(default=None, repr=False)
 
+    # ── Recognition Cache ─────────────────────────────────────────
+    # Time-based (FPS-independent) — avoids redundant ArcFace calls
+    recognition_confidence: float = 0.0   # Best recognition confidence so far
+    recognition_time: float = 0.0         # time.time() of last recognition
+    recognition_locked: bool = False      # True if confidently identified
+
     def predict(self):
         """Predict the next position using simple linear motion."""
         if self._velocity is not None:

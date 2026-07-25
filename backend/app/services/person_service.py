@@ -118,6 +118,14 @@ class PersonService:
             db.add(person)
             db.commit()
             db.refresh(person)
+
+            # Update event queue's in-memory FK guard
+            try:
+                from app.core.event_queue import get_event_queue
+                get_event_queue().add_person_id(person.id)
+            except Exception:
+                pass
+
             return _person_to_dict(person, 0)
         except Exception as e:
             db.rollback()
@@ -171,6 +179,14 @@ class PersonService:
             person.is_active = False
             person.updated_at = datetime.now(timezone.utc)
             db.commit()
+
+            # Update event queue's in-memory FK guard
+            try:
+                from app.core.event_queue import get_event_queue
+                get_event_queue().remove_person_id(person_id)
+            except Exception:
+                pass
+
             return True
         except NotFoundException:
             raise
