@@ -3,9 +3,14 @@
 /**
  * Unknown Faces Page — Admin review and enrollment queue.
  * All data fetched from backend API — no mock/dummy data.
+ *
+ * Features:
+ * - View pending unknown faces
+ * - Enroll as new person OR merge into existing person
+ * - Dismiss unwanted entries
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import AppShell from '@/components/AppShell';
 import api, { API_BASE } from '@/lib/api';
 import { useToast } from '@/lib/ToastContext';
@@ -20,11 +25,26 @@ export default function UnknownFacesPage() {
     const [selectedUnknown, setSelectedUnknown] = useState(null);
     const [enrollData, setEnrollData] = useState({ name: '', role: 'visitor', department: '', phone: '', email: '' });
     const { showToast } = useToast();
-    
+
+    // ── Merge mode state ──────────────────────────────────────
+    const [enrollMode, setEnrollMode] = useState('new'); // 'new' | 'merge'
+    const [persons, setPersons] = useState([]);
+    const [personsLoading, setPersonsLoading] = useState(false);
+    const [personSearch, setPersonSearch] = useState('');
+    const [selectedPerson, setSelectedPerson] = useState(null);
+    const [merging, setMerging] = useState(false);
+
     useEffect(() => {
         loadUnknowns();
         loadSuggestions();
     }, []);
+
+    // Load persons when switching to merge mode
+    useEffect(() => {
+        if (enrollMode === 'merge' && showEnrollModal) {
+            loadPersons();
+        }
+    }, [enrollMode, showEnrollModal]);
 
     async function loadSuggestions() {
         try {
@@ -49,19 +69,70 @@ export default function UnknownFacesPage() {
         }
     }
 
+    async function loadPersons(search = '') {
+        setPersonsLoading(true);
+        try {
+            const params = { is_active: true };
+            if (search) params.search = search;
+            const result = await api.getPersons(params);
+            setPersons(result.data || []);
+        } catch {
+            setPersons([]);
+        } finally {
+            setPersonsLoading(false);
+        }
+    }
+
+    // Debounced person search
+    const handlePersonSearch = useCallback((value) => {
+        setPersonSearch(value);
+        // Simple debounce via timeout
+        clearTimeout(window._personSearchTimeout);
+        window._personSearchTimeout = setTimeout(() => loadPersons(value), 300);
+    }, []);
+
     function openEnrollModal(unknown) {
         setSelectedUnknown(unknown);
         setEnrollData({ name: '', role: 'visitor', department: '', phone: '', email: '' });
+        setEnrollMode('new');
+        setSelectedPerson(null);
+        setPersonSearch('');
         setShowEnrollModal(true);
+    }
+
+    function closeEnrollModal() {
+        setShowEnrollModal(false);
+        setSelectedPerson(null);
+        setPersonSearch('');
+        setMerging(false);
     }
 
     async function handleEnroll() {
         try {
             await api.enrollUnknownFace(selectedUnknown.id, enrollData);
-            setShowEnrollModal(false);
+            closeEnrollModal();
             setUnknowns(unknowns.filter(u => u.id !== selectedUnknown.id));
+            showToast({ type: 'success', message: `Enrolled ${enrollData.name} successfully` });
         } catch (e) {
             showToast({ type: 'error', message: e.message });
+        }
+    }
+
+    async function handleMerge() {
+        if (!selectedPerson) return;
+        setMerging(true);
+        try {
+            const result = await api.mergeUnknownFace(selectedUnknown.id, selectedPerson.id);
+            closeEnrollModal();
+            setUnknowns(unknowns.filter(u => u.id !== selectedUnknown.id));
+            showToast({
+                type: 'success',
+                message: result.message || `Merged face into ${selectedPerson.name}`,
+            });
+        } catch (e) {
+            showToast({ type: 'error', message: e.message });
+        } finally {
+            setMerging(false);
         }
     }
 
@@ -85,6 +156,34 @@ export default function UnknownFacesPage() {
             });
         } catch { return '—'; }
     };
+
+    const getRoleBadgeClass = (role) => {
+        switch (role) {
+            case 'employee': return 'active';
+            case 'vip': return 'detection';
+            case 'visitor': return 'pending';
+            case 'banned': return 'exit';
+            default: return 'pending';
+        }
+    };
+
+    // ── Segmented Control Style ──────────────────────────────
+    const segmentStyle = (active) => ({
+        flex: 1,
+        padding: '8px 16px',
+        fontSize: '0.8125rem',
+        fontWeight: 600,
+        border: 'none',
+        cursor: 'pointer',
+        borderRadius: '8px',
+        transition: 'all 0.25s ease',
+        background: active ? 'var(--primary)' : 'transparent',
+        color: active ? '#fff' : 'var(--text-secondary)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: '6px',
+    });
 
     return (
         <AppShell unknownCount={unknowns.length}>
@@ -138,7 +237,7 @@ export default function UnknownFacesPage() {
                                         ⭐ Frequently Seen — Consider Enrolling
                                     </h3>
                                     <div className="card-subtitle">
-                                        These faces have been seen {'>'}3 times. They may be regulars.
+                                        These faces have been seen {'>'} 3 times. They may be regulars.
                                     </div>
                                 </div>
                             </div>
@@ -263,25 +362,46 @@ export default function UnknownFacesPage() {
                 </>
             )}
 
-            {/* Enroll Modal */}
+            {/* ═══ Enroll / Merge Modal ═══════════════════════════════════ */}
             {showEnrollModal && (
-                <div className="modal-overlay" onClick={() => setShowEnrollModal(false)}>
-                    <div className="modal" onClick={(e) => e.stopPropagation()}>
+                <div className="modal-overlay" onClick={closeEnrollModal}>
+                    <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '520px' }}>
                         <div className="modal-header">
                             <h3 className="modal-title">Enroll Unknown Person</h3>
-                            <button className="modal-close" onClick={() => setShowEnrollModal(false)}><XIcon size={18} /></button>
+                            <button className="modal-close" onClick={closeEnrollModal}><XIcon size={18} /></button>
                         </div>
 
+                        {/* Unknown face preview */}
                         <div style={{
                             background: 'var(--bg-tertiary)',
                             borderRadius: 'var(--radius-md)',
-                            padding: '16px',
-                            marginBottom: '20px',
+                            padding: '12px 16px',
+                            marginBottom: '16px',
                             fontSize: '0.813rem',
                             color: 'var(--text-secondary)',
                         }}>
-                            <div style={{ display: 'flex', gap: '16px', alignItems: 'center' }}>
-                                <div style={{ display: 'flex' }}><UserIcon size={32} /></div>
+                            <div style={{ display: 'flex', gap: '14px', alignItems: 'center' }}>
+                                {(() => {
+                                    const imgUrl = selectedUnknown?.context_url || selectedUnknown?.snapshot_url;
+                                    return imgUrl ? (
+                                        <img
+                                            src={`${API_BASE}${imgUrl}`}
+                                            alt="Unknown face"
+                                            style={{
+                                                width: 48, height: 48, borderRadius: '10px',
+                                                objectFit: 'cover', border: '2px solid var(--border)',
+                                            }}
+                                        />
+                                    ) : (
+                                        <div style={{
+                                            width: 48, height: 48, borderRadius: '10px',
+                                            background: 'var(--bg-secondary)',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        }}>
+                                            <UserIcon size={24} />
+                                        </div>
+                                    );
+                                })()}
                                 <div>
                                     <div>Camera: {selectedUnknown?.camera_name || selectedUnknown?.camera_id}</div>
                                     <div>Seen {selectedUnknown?.occurrence} times</div>
@@ -290,77 +410,392 @@ export default function UnknownFacesPage() {
                             </div>
                         </div>
 
-                        <div className="input-group">
-                            <label className="input-label">Full Name *</label>
-                            <input
-                                className="input"
-                                value={enrollData.name}
-                                onChange={(e) => setEnrollData({ ...enrollData, name: e.target.value })}
-                                placeholder="Enter person's name"
-                                autoFocus
-                                id="enroll-name"
-                            />
-                        </div>
-
-                        <div className="input-group">
-                            <label className="input-label">Role</label>
-                            <select
-                                className="input"
-                                value={enrollData.role}
-                                onChange={(e) => setEnrollData({ ...enrollData, role: e.target.value })}
-                                id="enroll-role"
-                            >
-                                <option value="visitor">Visitor</option>
-                                <option value="employee">Employee</option>
-                                <option value="vip">VIP</option>
-                            </select>
-                        </div>
-
-                        <div className="input-group">
-                            <label className="input-label">Department</label>
-                            <input
-                                className="input"
-                                value={enrollData.department}
-                                onChange={(e) => setEnrollData({ ...enrollData, department: e.target.value })}
-                                placeholder="e.g., Engineering"
-                                id="enroll-department"
-                            />
-                        </div>
-
-                        <div className="input-group">
-                            <label className="input-label">Email</label>
-                            <input
-                                className="input"
-                                type="email"
-                                value={enrollData.email}
-                                onChange={(e) => setEnrollData({ ...enrollData, email: e.target.value })}
-                                placeholder="person@company.com"
-                                id="enroll-email"
-                            />
-                        </div>
-
-                        <div className="input-group">
-                            <label className="input-label">Phone</label>
-                            <input
-                                className="input"
-                                value={enrollData.phone}
-                                onChange={(e) => setEnrollData({ ...enrollData, phone: e.target.value })}
-                                placeholder="+91-XXXXXXXXXX"
-                                id="enroll-phone"
-                            />
-                        </div>
-
-                        <div className="modal-actions">
-                            <button className="btn btn-secondary" onClick={() => setShowEnrollModal(false)}>Cancel</button>
+                        {/* ── Mode Toggle (Segmented Control) ─────────────── */}
+                        <div style={{
+                            display: 'flex',
+                            background: 'var(--bg-tertiary)',
+                            borderRadius: '10px',
+                            padding: '3px',
+                            marginBottom: '20px',
+                            border: '1px solid var(--border)',
+                        }}>
                             <button
-                                className="btn btn-primary"
-                                onClick={handleEnroll}
-                                disabled={!enrollData.name.trim()}
-                                id="enroll-submit"
+                                style={segmentStyle(enrollMode === 'new')}
+                                onClick={() => { setEnrollMode('new'); setSelectedPerson(null); }}
+                                id="mode-new-person"
                             >
-                                Enroll Person
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M16 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                                    <circle cx="8.5" cy="7" r="4" />
+                                    <line x1="20" y1="8" x2="20" y2="14" />
+                                    <line x1="23" y1="11" x2="17" y2="11" />
+                                </svg>
+                                New Person
+                            </button>
+                            <button
+                                style={segmentStyle(enrollMode === 'merge')}
+                                onClick={() => setEnrollMode('merge')}
+                                id="mode-match-existing"
+                            >
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                    <path d="M17 21v-2a4 4 0 0 0-3-3.87" />
+                                    <path d="M9 21v-2a4 4 0 0 1 3-3.87" />
+                                    <circle cx="13" cy="7" r="4" />
+                                    <circle cx="7" cy="7" r="4" />
+                                </svg>
+                                Match Existing
                             </button>
                         </div>
+
+                        {/* ═══ NEW PERSON MODE ═══════════════════════════ */}
+                        {enrollMode === 'new' && (
+                            <>
+                                <div className="input-group">
+                                    <label className="input-label">Full Name *</label>
+                                    <input
+                                        className="input"
+                                        value={enrollData.name}
+                                        onChange={(e) => setEnrollData({ ...enrollData, name: e.target.value })}
+                                        placeholder="Enter person's name"
+                                        autoFocus
+                                        id="enroll-name"
+                                    />
+                                </div>
+
+                                <div className="input-group">
+                                    <label className="input-label">Role</label>
+                                    <select
+                                        className="input"
+                                        value={enrollData.role}
+                                        onChange={(e) => setEnrollData({ ...enrollData, role: e.target.value })}
+                                        id="enroll-role"
+                                    >
+                                        <option value="visitor">Visitor</option>
+                                        <option value="employee">Employee</option>
+                                        <option value="vip">VIP</option>
+                                    </select>
+                                </div>
+
+                                <div className="input-group">
+                                    <label className="input-label">Department</label>
+                                    <input
+                                        className="input"
+                                        value={enrollData.department}
+                                        onChange={(e) => setEnrollData({ ...enrollData, department: e.target.value })}
+                                        placeholder="e.g., Engineering"
+                                        id="enroll-department"
+                                    />
+                                </div>
+
+                                <div className="input-group">
+                                    <label className="input-label">Email</label>
+                                    <input
+                                        className="input"
+                                        type="email"
+                                        value={enrollData.email}
+                                        onChange={(e) => setEnrollData({ ...enrollData, email: e.target.value })}
+                                        placeholder="person@company.com"
+                                        id="enroll-email"
+                                    />
+                                </div>
+
+                                <div className="input-group">
+                                    <label className="input-label">Phone</label>
+                                    <input
+                                        className="input"
+                                        value={enrollData.phone}
+                                        onChange={(e) => setEnrollData({ ...enrollData, phone: e.target.value })}
+                                        placeholder="+91-XXXXXXXXXX"
+                                        id="enroll-phone"
+                                    />
+                                </div>
+
+                                <div className="modal-actions">
+                                    <button className="btn btn-secondary" onClick={closeEnrollModal}>Cancel</button>
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={handleEnroll}
+                                        disabled={!enrollData.name.trim()}
+                                        id="enroll-submit"
+                                    >
+                                        Enroll Person
+                                    </button>
+                                </div>
+                            </>
+                        )}
+
+                        {/* ═══ MATCH EXISTING MODE ══════════════════════ */}
+                        {enrollMode === 'merge' && (
+                            <>
+                                {/* Search existing persons */}
+                                <div className="input-group" style={{ marginBottom: '12px' }}>
+                                    <label className="input-label">Search Persons</label>
+                                    <input
+                                        className="input"
+                                        value={personSearch}
+                                        onChange={(e) => handlePersonSearch(e.target.value)}
+                                        placeholder="Type to search by name..."
+                                        autoFocus
+                                        id="merge-search"
+                                    />
+                                </div>
+
+                                {/* Person list */}
+                                <div style={{
+                                    maxHeight: '220px',
+                                    overflowY: 'auto',
+                                    border: '1px solid var(--border)',
+                                    borderRadius: 'var(--radius-md)',
+                                    marginBottom: '16px',
+                                }}>
+                                    {personsLoading ? (
+                                        <div style={{
+                                            padding: '30px 16px', textAlign: 'center',
+                                            color: 'var(--text-muted)', fontSize: '0.8125rem',
+                                        }}>
+                                            Loading persons...
+                                        </div>
+                                    ) : persons.length === 0 ? (
+                                        <div style={{
+                                            padding: '30px 16px', textAlign: 'center',
+                                            color: 'var(--text-muted)', fontSize: '0.8125rem',
+                                        }}>
+                                            No persons found{personSearch ? ` matching "${personSearch}"` : ''}
+                                        </div>
+                                    ) : (
+                                        persons.map((person) => {
+                                            const isSelected = selectedPerson?.id === person.id;
+                                            return (
+                                                <div
+                                                    key={person.id}
+                                                    onClick={() => setSelectedPerson(person)}
+                                                    id={`merge-person-${person.id}`}
+                                                    style={{
+                                                        display: 'flex',
+                                                        alignItems: 'center',
+                                                        gap: '12px',
+                                                        padding: '10px 14px',
+                                                        cursor: 'pointer',
+                                                        transition: 'all 0.15s ease',
+                                                        borderBottom: '1px solid var(--border)',
+                                                        background: isSelected
+                                                            ? 'rgba(99, 102, 241, 0.12)'
+                                                            : 'transparent',
+                                                        borderLeft: isSelected
+                                                            ? '3px solid var(--primary)'
+                                                            : '3px solid transparent',
+                                                    }}
+                                                    onMouseEnter={(e) => {
+                                                        if (!isSelected) e.currentTarget.style.background = 'var(--bg-tertiary)';
+                                                    }}
+                                                    onMouseLeave={(e) => {
+                                                        if (!isSelected) e.currentTarget.style.background = 'transparent';
+                                                    }}
+                                                >
+                                                    {/* Avatar */}
+                                                    {person.avatar_url ? (
+                                                        <img
+                                                            src={`${API_BASE}${person.avatar_url}`}
+                                                            alt={person.name}
+                                                            style={{
+                                                                width: 38, height: 38, borderRadius: '10px',
+                                                                objectFit: 'cover',
+                                                                border: isSelected
+                                                                    ? '2px solid var(--primary)'
+                                                                    : '2px solid var(--border)',
+                                                            }}
+                                                        />
+                                                    ) : (
+                                                        <div style={{
+                                                            width: 38, height: 38, borderRadius: '10px',
+                                                            background: 'var(--bg-secondary)',
+                                                            display: 'flex', alignItems: 'center',
+                                                            justifyContent: 'center',
+                                                            fontSize: '0.875rem', fontWeight: 700,
+                                                            color: 'var(--text-muted)',
+                                                            border: isSelected
+                                                                ? '2px solid var(--primary)'
+                                                                : '2px solid var(--border)',
+                                                        }}>
+                                                            {person.name.charAt(0).toUpperCase()}
+                                                        </div>
+                                                    )}
+
+                                                    {/* Info */}
+                                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                                        <div style={{
+                                                            fontWeight: 600, fontSize: '0.8125rem',
+                                                            color: isSelected ? 'var(--primary)' : 'var(--text-primary)',
+                                                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                                        }}>
+                                                            {person.name}
+                                                        </div>
+                                                        <div style={{
+                                                            fontSize: '0.6875rem', color: 'var(--text-muted)',
+                                                            display: 'flex', gap: '8px', alignItems: 'center',
+                                                        }}>
+                                                            <span className={`badge ${getRoleBadgeClass(person.role)}`} style={{
+                                                                fontSize: '0.625rem', padding: '1px 6px',
+                                                            }}>
+                                                                {person.role}
+                                                            </span>
+                                                            <span>{person.encoding_count} face{person.encoding_count !== 1 ? 's' : ''}</span>
+                                                        </div>
+                                                    </div>
+
+                                                    {/* Selection indicator */}
+                                                    {isSelected && (
+                                                        <div style={{
+                                                            width: 22, height: 22, borderRadius: '50%',
+                                                            background: 'var(--primary)',
+                                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                            flexShrink: 0,
+                                                        }}>
+                                                            <CheckIcon size={13} style={{ color: '#fff' }} />
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            );
+                                        })
+                                    )}
+                                </div>
+
+                                {/* Side-by-side merge preview */}
+                                {selectedPerson && (
+                                    <div style={{
+                                        background: 'var(--bg-tertiary)',
+                                        borderRadius: 'var(--radius-md)',
+                                        padding: '14px',
+                                        marginBottom: '16px',
+                                        border: '1px solid rgba(99, 102, 241, 0.25)',
+                                    }}>
+                                        <div style={{
+                                            fontSize: '0.6875rem', color: 'var(--text-muted)',
+                                            textTransform: 'uppercase', letterSpacing: '0.08em',
+                                            marginBottom: '10px', fontWeight: 600,
+                                        }}>
+                                            Merge Preview
+                                        </div>
+                                        <div style={{
+                                            display: 'flex', alignItems: 'center',
+                                            justifyContent: 'center', gap: '16px',
+                                        }}>
+                                            {/* Unknown face */}
+                                            <div style={{ textAlign: 'center' }}>
+                                                {(() => {
+                                                    const imgUrl = selectedUnknown?.context_url || selectedUnknown?.snapshot_url;
+                                                    return imgUrl ? (
+                                                        <img
+                                                            src={`${API_BASE}${imgUrl}`}
+                                                            alt="Unknown"
+                                                            style={{
+                                                                width: 56, height: 56, borderRadius: '12px',
+                                                                objectFit: 'cover',
+                                                                border: '2px solid var(--warning)',
+                                                            }}
+                                                        />
+                                                    ) : (
+                                                        <div style={{
+                                                            width: 56, height: 56, borderRadius: '12px',
+                                                            background: 'var(--bg-secondary)',
+                                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                            border: '2px solid var(--warning)',
+                                                        }}>
+                                                            <UnknownFaceIcon size={24} />
+                                                        </div>
+                                                    );
+                                                })()}
+                                                <div style={{
+                                                    fontSize: '0.625rem', color: 'var(--text-muted)',
+                                                    marginTop: '4px',
+                                                }}>
+                                                    Unknown
+                                                </div>
+                                            </div>
+
+                                            {/* Arrow */}
+                                            <div style={{
+                                                display: 'flex', flexDirection: 'column',
+                                                alignItems: 'center', gap: '2px',
+                                            }}>
+                                                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                    <line x1="5" y1="12" x2="19" y2="12" />
+                                                    <polyline points="12 5 19 12 12 19" />
+                                                </svg>
+                                                <span style={{
+                                                    fontSize: '0.5625rem', color: 'var(--primary)',
+                                                    fontWeight: 700, textTransform: 'uppercase',
+                                                    letterSpacing: '0.05em',
+                                                }}>
+                                                    merge
+                                                </span>
+                                            </div>
+
+                                            {/* Target person */}
+                                            <div style={{ textAlign: 'center' }}>
+                                                {selectedPerson.avatar_url ? (
+                                                    <img
+                                                        src={`${API_BASE}${selectedPerson.avatar_url}`}
+                                                        alt={selectedPerson.name}
+                                                        style={{
+                                                            width: 56, height: 56, borderRadius: '12px',
+                                                            objectFit: 'cover',
+                                                            border: '2px solid var(--success)',
+                                                        }}
+                                                    />
+                                                ) : (
+                                                    <div style={{
+                                                        width: 56, height: 56, borderRadius: '12px',
+                                                        background: 'var(--bg-secondary)',
+                                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                        fontSize: '1.25rem', fontWeight: 700,
+                                                        color: 'var(--text-muted)',
+                                                        border: '2px solid var(--success)',
+                                                    }}>
+                                                        {selectedPerson.name.charAt(0).toUpperCase()}
+                                                    </div>
+                                                )}
+                                                <div style={{
+                                                    fontSize: '0.625rem', color: 'var(--success)',
+                                                    marginTop: '4px', fontWeight: 600,
+                                                    maxWidth: '80px', whiteSpace: 'nowrap',
+                                                    overflow: 'hidden', textOverflow: 'ellipsis',
+                                                }}>
+                                                    {selectedPerson.name}
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                )}
+
+                                <div className="modal-actions">
+                                    <button className="btn btn-secondary" onClick={closeEnrollModal}>Cancel</button>
+                                    <button
+                                        className="btn btn-primary"
+                                        onClick={handleMerge}
+                                        disabled={!selectedPerson || merging}
+                                        id="merge-submit"
+                                        style={{
+                                            display: 'flex', alignItems: 'center', gap: '6px',
+                                        }}
+                                    >
+                                        {merging ? (
+                                            'Merging...'
+                                        ) : (
+                                            <>
+                                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                                    <path d="M17 21v-2a4 4 0 0 0-3-3.87" />
+                                                    <path d="M9 21v-2a4 4 0 0 1 3-3.87" />
+                                                    <circle cx="13" cy="7" r="4" />
+                                                    <circle cx="7" cy="7" r="4" />
+                                                </svg>
+                                                Merge Face
+                                            </>
+                                        )}
+                                    </button>
+                                </div>
+                            </>
+                        )}
                     </div>
                 </div>
             )}

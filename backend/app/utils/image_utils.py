@@ -1,82 +1,72 @@
 """
-Image processing utilities for snapshot management, compression,
-and URL path generation.
+Image utility functions for the CCTV pipeline.
+
+- Snapshot saving (face crops, context frames)
+- Frame resizing (aspect-ratio preserving)
+- JPEG encoding (TurboJPEG with OpenCV fallback)
 """
 
+import os
 import cv2
 import numpy as np
-import os
-import time
 import logging
-from typing import Optional, Tuple
-from app.config import settings
+from typing import Tuple
 
 logger = logging.getLogger(__name__)
 
+# ── JPEG Encoder Selection ────────────────────────────────────────
+# TurboJPEG is 2-4x faster than OpenCV's libjpeg for JPEG encoding.
+# We try to use it first, and fall back to OpenCV if not installed.
 
-def compress_image(
-    image: np.ndarray,
-    max_size_kb: int = None,
-    quality: int = 85,
-) -> bytes:
-    """
-    Compress an image to JPEG with optional max size constraint.
+_turbojpeg_encoder = None
+_jpeg_encoder_name = "OpenCV"
 
-    Args:
-        image: BGR numpy array
-        max_size_kb: Maximum size in KB (iteratively reduces quality)
-        quality: Initial JPEG quality (0-100)
+try:
+    from turbojpeg import TurboJPEG, TJPF_BGR
+    _turbojpeg_encoder = TurboJPEG()
+    _jpeg_encoder_name = "TurboJPEG"
+    logger.info("JPEG Encoder: TurboJPEG (libturbojpeg) — fast path active")
+except ImportError:
+    logger.info("JPEG Encoder: OpenCV (libjpeg) — install PyTurboJPEG for 2-4x faster encoding")
+except (RuntimeError, OSError) as e:
+    logger.info(f"JPEG Encoder: OpenCV (libjpeg) — TurboJPEG native lib not found: {e}")
+except Exception as e:
+    logger.warning(f"TurboJPEG init failed, using OpenCV: {e}")
 
-    Returns:
-        Compressed JPEG bytes
-    """
-    max_size = (max_size_kb or settings.MAX_SNAPSHOT_SIZE_KB) * 1024
 
-    encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
-    _, buffer = cv2.imencode(".jpg", image, encode_params)
-
-    # Iteratively reduce quality if too large
-    while len(buffer) > max_size and quality > 20:
-        quality -= 10
-        encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
-        _, buffer = cv2.imencode(".jpg", image, encode_params)
-
-    return buffer.tobytes()
+def get_jpeg_encoder_name() -> str:
+    """Return the active JPEG encoder name for startup summary."""
+    return _jpeg_encoder_name
 
 
 def save_snapshot(
     image: np.ndarray,
-    prefix: str,
+    name: str,
     subdirectory: str = "",
-    quality: int = 85,
+    quality: int = 90,
 ) -> Tuple[str, str]:
     """
-    Save a snapshot image to disk and return both file path and URL path.
+    Save an image as a JPEG snapshot.
 
     Args:
         image: BGR numpy array
-        prefix: Filename prefix (e.g., 'unknown_<uuid>')
-        subdirectory: Optional subdirectory under SNAPSHOT_DIR
-        quality: JPEG quality
+        name: Filename (without extension)
+        subdirectory: Optional subdirectory under snapshots/
+        quality: JPEG quality (1-100)
 
     Returns:
-        Tuple of (filesystem_path, url_path)
+        Tuple of (filepath, url_path)
     """
     try:
-        timestamp = int(time.time() * 1000)  # Millisecond precision
-        filename = f"{prefix}_{timestamp}.jpg"
+        base_dir = os.path.join("snapshots", subdirectory) if subdirectory else "snapshots"
+        os.makedirs(base_dir, exist_ok=True)
 
-        save_dir = settings.SNAPSHOT_DIR
-        if subdirectory:
-            save_dir = os.path.join(save_dir, subdirectory)
-            os.makedirs(save_dir, exist_ok=True)
-
-        filepath = os.path.join(save_dir, filename)
+        filename = f"{name}.jpg"
+        filepath = os.path.join(base_dir, filename)
 
         encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
         cv2.imwrite(filepath, image, encode_params)
 
-        # Generate URL-accessible path
         url_parts = ["snapshots"]
         if subdirectory:
             url_parts.append(subdirectory)
@@ -121,19 +111,32 @@ def resize_frame(
 
 def frame_to_jpeg_bytes(
     frame: np.ndarray,
-    quality: int = 70,
+    quality: int = 65,
 ) -> bytes:
     """
     Convert a BGR frame to JPEG bytes for WebSocket streaming.
 
+    Uses TurboJPEG if available (2-4x faster), otherwise OpenCV.
+
     Args:
         frame: BGR numpy array
-        quality: JPEG quality (lower = smaller payload)
+        quality: JPEG quality (lower = smaller payload, faster encode)
 
     Returns:
         JPEG-encoded bytes
     """
-    encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+    if _turbojpeg_encoder is not None:
+        try:
+            return _turbojpeg_encoder.encode(frame, quality=quality)
+        except Exception:
+            pass  # Fall through to OpenCV
+
+    # OpenCV fallback with optimized params
+    encode_params = [
+        cv2.IMWRITE_JPEG_QUALITY, quality,
+        cv2.IMWRITE_JPEG_OPTIMIZE, 0,       # Skip Huffman optimization (faster)
+        cv2.IMWRITE_JPEG_RST_INTERVAL, 0,    # No restart markers (smaller)
+    ]
     _, buffer = cv2.imencode(".jpg", frame, encode_params)
     return buffer.tobytes()
 

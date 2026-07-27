@@ -25,8 +25,8 @@ print(f"Image loaded: {img.shape}")
 app = FaceAnalysis(name="buffalo_l")
 app.prepare(ctx_id=0, det_size=(640, 640), det_thresh=0.5)
 
-rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-faces = app.get(rgb)
+# Pass BGR directly — InsightFace handles BGR→RGB internally
+faces = app.get(img)
 print(f"Faces detected: {len(faces)}")
 
 if not faces:

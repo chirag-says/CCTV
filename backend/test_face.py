@@ -25,7 +25,7 @@ if not ret:
     sys.exit(1)
 
 print(f"Frame shape: {frame.shape}")
-rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+# Pass BGR directly — InsightFace handles BGR→RGB internally via swapRB=True
 
 # Test insightface
 try:
@@ -40,7 +40,7 @@ try:
     
     # Scale down like the detector does
     scale = 0.5
-    small = cv2.resize(rgb, (0, 0), fx=scale, fy=scale)
+    small = cv2.resize(frame, (0, 0), fx=scale, fy=scale)
     print(f"Small frame: {small.shape}")
     
     faces = app.get(small)

@@ -79,6 +79,11 @@ class EnrollUnknownFace(BaseModel):
     email: Optional[str] = None
 
 
+class MergeUnknownFace(BaseModel):
+    """Schema for merging an unknown face's encoding into an existing person."""
+    person_id: str = Field(..., description="ID of the existing person to merge into")
+
+
 # ── Live Event (WebSocket) ────────────────────────────────────
 
 class LiveDetectionEvent(BaseModel):

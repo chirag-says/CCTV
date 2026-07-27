@@ -8,7 +8,7 @@ import numpy as np
 from fastapi import APIRouter, Depends, Query, HTTPException
 from typing import Optional
 
-from app.models.event import UnknownFaceResponse, EnrollUnknownFace
+from app.models.event import UnknownFaceResponse, EnrollUnknownFace, MergeUnknownFace
 from app.services.person_service import PersonService
 from app.core.security import get_current_user, require_admin
 from app.core.exceptions import NotFoundException
@@ -46,7 +46,7 @@ async def list_unknown_faces(
     offset: int = Query(0, ge=0),
     current_user: dict = Depends(get_current_user),
 ):
-    """List unknown faces queue, sorted by occurrence count."""
+    """List unknown faces queue, sorted by most recently seen first."""
     db = SessionLocal()
     try:
         query = db.query(UnknownFaceDB)
@@ -56,7 +56,10 @@ async def list_unknown_faces(
 
         total = query.count()
         faces = (
-            query.order_by(UnknownFaceDB.occurrence.desc())
+            query.order_by(
+                UnknownFaceDB.last_seen.desc(),
+                UnknownFaceDB.occurrence.desc(),
+            )
             .offset(offset)
             .limit(limit)
             .all()
@@ -196,6 +199,95 @@ async def enroll_unknown_face(
         db.rollback()
         logger.error(f"Enrollment failed: {e}")
         raise HTTPException(status_code=500, detail="Enrollment failed")
+    finally:
+        db.close()
+
+@router.post("/{unknown_id}/merge")
+async def merge_unknown_face(
+    unknown_id: str,
+    data: MergeUnknownFace,
+    current_user: dict = Depends(require_admin),
+):
+    """
+    Merge an unknown face's encoding into an existing person.
+
+    This adds the unknown face's embedding to the person's encoding set,
+    giving them broader angle/condition coverage for better recognition.
+
+    Steps:
+    1. Validate unknown face exists and is pending
+    2. Validate target person exists and is active
+    3. Move face encoding from unknown_faces to face_encodings (linked to existing person)
+    4. Mark unknown_face as enrolled
+    5. Reload encoding cache in all active pipelines
+    """
+    db = SessionLocal()
+    try:
+        # 1. Get the unknown face record
+        face = db.query(UnknownFaceDB).filter(UnknownFaceDB.id == unknown_id).first()
+        if not face:
+            raise NotFoundException("Unknown face", unknown_id)
+
+        if face.status != "pending":
+            raise HTTPException(status_code=400, detail="Unknown face already processed")
+
+        # 2. Validate target person exists
+        person = PersonService.get_person(data.person_id)
+
+        # 3. Move encoding to the existing person
+        if face.face_encoding:
+            try:
+                from app.vision.recognizer import deserialize_encoding
+                encoding_array = deserialize_encoding(face.face_encoding)
+                if encoding_array is not None:
+                    PersonService.add_face_encoding(
+                        person_id=data.person_id,
+                        encoding=encoding_array,
+                        source_image=face.snapshot_url,
+                        quality=0.8,
+                    )
+                    logger.info(
+                        f"Merged unknown face {unknown_id} encoding into person "
+                        f"{person['name']} ({data.person_id})"
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Unknown face has no valid encoding to merge"
+                    )
+            except HTTPException:
+                raise
+            except Exception as e:
+                logger.warning(f"Failed to migrate encoding during merge: {e}")
+                raise HTTPException(status_code=500, detail="Failed to merge encoding")
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Unknown face has no encoding data to merge"
+            )
+
+        # 4. Mark unknown face as enrolled
+        face.status = "enrolled"
+        db.commit()
+
+        # 5. Reload encodings in all pipelines
+        try:
+            all_encodings = PersonService.get_all_encodings()
+            camera_manager.load_encodings_all(all_encodings)
+        except Exception as e:
+            logger.error(f"Failed to reload encodings after merge: {e}")
+
+        return {
+            "message": f"Successfully merged face into {person['name']}",
+            "person_id": data.person_id,
+            "person": person,
+        }
+    except (NotFoundException, HTTPException):
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Merge failed: {e}")
+        raise HTTPException(status_code=500, detail="Merge failed")
     finally:
         db.close()
 

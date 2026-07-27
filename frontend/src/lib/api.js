@@ -239,6 +239,13 @@ class ApiClient {
     return this.request(`/api/unknown-faces/${id}/dismiss`, { method: 'POST' });
   }
 
+  async mergeUnknownFace(unknownId, personId) {
+    return this.request(`/api/unknown-faces/${unknownId}/merge`, {
+      method: 'POST',
+      body: JSON.stringify({ person_id: personId }),
+    });
+  }
+
   // ── Analytics ─────────────────────────────────────────────
   async getDashboard() {
     return this.request('/api/analytics/dashboard');

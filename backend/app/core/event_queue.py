@@ -131,6 +131,12 @@ class EventQueue:
             except queue.Full:
                 with self._lock:
                     self._dropped += 1
+                # Notify profiler
+                try:
+                    from app.core.profiler import profiler
+                    profiler.record_event_dropped()
+                except Exception:
+                    pass
                 if self._dropped % 50 == 1:
                     logger.warning(
                         f"EventQueue: dropped {event_type} event (queue full, "
@@ -206,6 +212,16 @@ class EventQueue:
         if handler is None:
             logger.warning(f"EventQueue: no handler for event type '{event_type}'")
             return
+
+        # Record wait time in profiler
+        try:
+            from app.core.profiler import profiler
+            enqueued_at = event.get("enqueued_at", 0)
+            if enqueued_at > 0:
+                wait_ms = (time.time() - enqueued_at) * 1000
+                profiler.record_event_dispatched(wait_ms)
+        except Exception:
+            pass
 
         try:
             handler(event["data"])

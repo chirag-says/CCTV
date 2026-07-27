@@ -25,7 +25,10 @@ class Settings(BaseSettings):
     # ── Vision Pipeline ───────────────────────────────────────
     # Face Detection (SCRFD via insightface)
     INSIGHTFACE_MODEL_NAME: str = "buffalo_l"  # buffalo_l has SCRFD_10G + ArcFace R50
-    INSIGHTFACE_DET_SIZE: int = 640  # Detection input size (640x640)
+    INSIGHTFACE_DET_SIZE: int = 1024  # Detection input size (1024x1024, was 640)
+    # 1024 gives ~2.5x better resolution for small faces on 4MP frames.
+    # On a 2560x1440 source, 1024 letterbox means 0.71x downscale
+    # (vs 0.44x at 640), so a 60px face arrives at SCRFD as 43px not 26px.
     INSIGHTFACE_DET_THRESH: float = 0.5  # Face detection confidence threshold
 
     # Face Recognition (ArcFace via insightface)
@@ -88,11 +91,21 @@ class Settings(BaseSettings):
     # Pipeline Benchmarks
     ENABLE_PIPELINE_BENCHMARKS: bool = True       # Log per-stage timing every 100 frames
 
+    # Performance Profiler (structured aggregate reports)
+    ENABLE_PROFILING: bool = True                 # Enable performance profiler (disable in production)
+    DEBUG_LOGS: bool = False                      # Enable DEBUG-level app logs (independent of uvicorn reload)
+
     FRAME_SKIP: int = 3
     DETECTION_SCALE: float = 0.5
     EXIT_THRESHOLD_SECONDS: int = 30  # 30 seconds — avoids premature exits from brief occlusions
     ENTRY_THRESHOLD_SECONDS: int = 3
     UNKNOWN_SIMILARITY_THRESHOLD: float = 0.70  # Cosine distance for unknown dedup (lower = merges more aggressively, reduces duplicates)
+
+    # Face size thresholds — split detection gate from recognition gate
+    # Detection gate: small faces are useful for tracking, counting, entry/exit
+    # Recognition gate: only compute embeddings on faces large enough for reliable matching
+    MIN_FACE_DETECT_PX: int = 32     # Minimum face size to detect and track
+    MIN_FACE_RECOGNIZE_PX: int = 80  # Minimum face size to extract embeddings (recognition)
 
     # ── Camera ────────────────────────────────────────────────
     DEFAULT_CAMERA_SOURCE: str = "0"

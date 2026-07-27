@@ -1,86 +1,99 @@
 """
-Request Logging Middleware — logs method, path, status, response time, and client IP.
-Each request gets a unique X-Request-ID for traceability.
+Request Logging Middleware — logs only slow (>100ms) or error requests.
+
+Normal fast requests are silently processed to reduce log noise.
+Each logged request gets a unique X-Request-ID for traceability.
+
+NOTE: Implemented as a pure ASGI middleware (NOT BaseHTTPMiddleware)
+because BaseHTTPMiddleware wraps responses in StreamingResponse,
+which strips headers set by outer middleware like CORSMiddleware.
+See: https://github.com/encode/starlette/issues/1600
 """
 
 import time
 import uuid
 import logging
-from starlette.middleware.base import BaseHTTPMiddleware
-from starlette.requests import Request
-from starlette.responses import Response
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 logger = logging.getLogger("cctv.requests")
 
+# Requests slower than this threshold are logged as warnings
+SLOW_REQUEST_THRESHOLD_MS = 100.0
 
-class RequestLoggingMiddleware(BaseHTTPMiddleware):
-    """Middleware that logs each HTTP request with timing and a unique ID."""
+# Paths to always skip logging (health checks, docs)
+SKIP_PATHS = {
+    "/health",
+    "/",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+}
 
-    # Paths to skip logging (high-frequency, noisy endpoints)
-    SKIP_PATHS = {
-        "/health",
-        "/",
-        "/docs",
-        "/redoc",
-        "/openapi.json",
-    }
 
-    # Paths that are logged at DEBUG level (frequent polling)
-    DEBUG_PATHS_PREFIXES = (
-        "/api/cameras/active-persons",
-        "/snapshots/",
-    )
+class RequestLoggingMiddleware:
+    """
+    Pure ASGI middleware that logs only slow or error HTTP requests.
 
-    async def dispatch(self, request: Request, call_next):
-        # Skip logging for noisy endpoints
-        path = request.url.path
-        if path in self.SKIP_PATHS:
-            return await call_next(request)
+    Does NOT use BaseHTTPMiddleware to avoid the response-header-stripping
+    bug that breaks CORSMiddleware.
+    """
 
-        # Generate unique request ID
+    def __init__(self, app: ASGIApp):
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send):
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        path = scope.get("path", "")
+        if path in SKIP_PATHS:
+            await self.app(scope, receive, send)
+            return
+
         request_id = str(uuid.uuid4())[:8]
 
-        # Extract client IP
-        client_ip = request.client.host if request.client else "unknown"
+        # Extract client IP from scope
+        client = scope.get("client")
+        client_ip = client[0] if client else "unknown"
 
-        # Start timer
+        method = scope.get("method", "???")
         start = time.perf_counter()
+        status_code = 0
 
-        # Add request ID to request state for use in error handlers
-        request.state.request_id = request_id
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message["type"] == "http.response.start":
+                status_code = message.get("status", 0)
+                # Inject X-Request-ID header
+                headers = list(message.get("headers", []))
+                headers.append((b"x-request-id", request_id.encode()))
+                message = {**message, "headers": headers}
+            await send(message)
 
-        response: Response = None
         try:
-            response = await call_next(request)
+            await self.app(scope, receive, send_wrapper)
         except Exception as exc:
             elapsed = (time.perf_counter() - start) * 1000
             logger.error(
-                f"[REQ-{request_id}] {request.method} {path} → 500 ({elapsed:.0f}ms) "
+                f"[REQ-{request_id}] {method} {path} → 500 ({elapsed:.0f}ms) "
                 f"IP={client_ip} ERROR={type(exc).__name__}: {exc}"
             )
             raise
 
         elapsed = (time.perf_counter() - start) * 1000
 
-        # Add request ID to response headers
-        response.headers["X-Request-ID"] = request_id
-
-        # Choose log level based on path and status
-        status = response.status_code
-        is_debug_path = any(path.startswith(p) for p in self.DEBUG_PATHS_PREFIXES)
-
-        msg = (
-            f"[REQ-{request_id}] {request.method} {path} → {status} ({elapsed:.0f}ms) "
-            f"IP={client_ip}"
-        )
-
-        if is_debug_path:
-            logger.debug(msg)
-        elif status >= 500:
-            logger.error(msg)
-        elif status >= 400:
-            logger.warning(msg)
-        else:
-            logger.info(msg)
-
-        return response
+        # Only log: errors (≥400) or slow requests (>100ms)
+        if status_code >= 500:
+            logger.error(
+                f"[REQ-{request_id}] {method} {path} → {status_code} ({elapsed:.0f}ms) IP={client_ip}"
+            )
+        elif status_code >= 400:
+            logger.warning(
+                f"[REQ-{request_id}] {method} {path} → {status_code} ({elapsed:.0f}ms) IP={client_ip}"
+            )
+        elif elapsed > SLOW_REQUEST_THRESHOLD_MS:
+            logger.warning(
+                f"[SLOW] {method} {path} → {status_code} ({elapsed:.0f}ms) IP={client_ip}"
+            )
+        # else: fast + successful → silently skip

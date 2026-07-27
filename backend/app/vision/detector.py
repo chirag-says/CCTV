@@ -56,8 +56,14 @@ def _get_insightface_app():
 
             logger.info(f"Loading insightface model: {model_name} (det_size={det_size})")
 
+            # Request CUDA explicitly — do NOT silently fall back to CPU.
+            # ONNX Runtime 1.17 predates Blackwell (sm_120) and will silently
+            # use CPUExecutionProvider if CUDA fails, turning 10 ms inference
+            # into 200-500 ms. Fail loudly instead.
+            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
             app = FaceAnalysis(
                 name=model_name,
+                providers=providers,
             )
             app.prepare(
                 ctx_id=0,  # GPU 0
@@ -65,10 +71,36 @@ def _get_insightface_app():
                 det_thresh=settings.INSIGHTFACE_DET_THRESH,
             )
 
+            # Verify CUDA is actually being used, not just listed
+            _cuda_active = False
+            for model_name_key in ['detection', 'recognition']:
+                model = app.models.get(model_name_key)
+                if model and hasattr(model, 'session'):
+                    active_providers = model.session.get_providers()
+                    logger.info(
+                        f"InsightFace {model_name_key} providers: {active_providers}"
+                    )
+                    if 'CUDAExecutionProvider' in active_providers:
+                        _cuda_active = True
+
+            if not _cuda_active:
+                logger.error(
+                    "\n" + "=" * 70 + "\n"
+                    "  CRITICAL: InsightFace is running on CPU, NOT GPU!\n"
+                    "  This causes 10-50x slower inference (200-500 ms/frame).\n"
+                    "  Fix: pip install -U 'onnxruntime-gpu>=1.20'\n"
+                    "  Then verify: python -c \"import onnxruntime; "
+                    "print(onnxruntime.get_available_providers())\"\n"
+                    + "=" * 70
+                )
+                # Continue running (CPU is slow but functional)
+                # but make the problem unmistakably visible in logs
+
             _insightface_app = app
             logger.info(
                 f"InsightFace loaded successfully: {model_name}, "
-                f"det_size={det_size}, thresh={settings.INSIGHTFACE_DET_THRESH}"
+                f"det_size={det_size}, thresh={settings.INSIGHTFACE_DET_THRESH}, "
+                f"CUDA={'active' if _cuda_active else 'INACTIVE (CPU fallback!)'}"
             )
             return _insightface_app
 
@@ -90,10 +122,10 @@ class FaceDetector:
     - Backward-compatible (top, right, bottom, left) output format
     """
 
-    # Minimum face size to filter out tiny false-positive detections
-    # (vehicles, reflections, distant objects). 60px ensures enough detail
-    # for meaningful face recognition.
-    MIN_FACE_SIZE_DEFAULT = 60
+    # Minimum face size for detection (tracking + counting).
+    # Separate from recognition gate — small faces are still useful
+    # for tracking, entry/exit events, and crowd counting.
+    MIN_FACE_SIZE_DEFAULT = 32
 
     def __init__(
         self,
@@ -210,29 +242,32 @@ class FaceDetector:
             frame: BGR image from OpenCV (numpy array)
 
         Returns:
-            Tuple of (face_locations, rgb_frame)
+            Tuple of (face_locations, frame)
             face_locations: List of (top, right, bottom, left) tuples
                             (backward-compatible format)
-            rgb_frame: The RGB-converted frame
+            frame: The original BGR frame (passed through unchanged)
+
+        Note: InsightFace expects BGR input — it does swapRB=True
+        internally in both SCRFD and ArcFace. Do NOT convert to RGB.
         """
-        # Convert BGR to RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        # Pass BGR directly — InsightFace handles BGR→RGB internally
+        # via cv2.dnn.blobFromImage(swapRB=True)
 
         # Scale down for performance if needed
         if self.scale_factor < 1.0:
             small_frame = cv2.resize(
-                rgb_frame, (0, 0),
+                frame, (0, 0),
                 fx=self.scale_factor,
                 fy=self.scale_factor,
             )
         else:
-            small_frame = rgb_frame
+            small_frame = frame
 
         # Run SCRFD detection
         app = self._get_app()
         if app is None:
             self._frame_count += 1
-            return [], rgb_frame
+            return [], frame
 
         faces = app.get(small_frame)
 
@@ -265,7 +300,7 @@ class FaceDetector:
             face_locations.append((y1, x2, y2, x1))
 
         self._frame_count += 1
-        return face_locations, rgb_frame
+        return face_locations, frame
 
     def detect_faces_with_embeddings(
         self, frame: np.ndarray
@@ -277,56 +312,75 @@ class FaceDetector:
         full-resolution frame, returning both bounding boxes and 512-d
         embeddings. No separate crop-and-re-detect needed.
 
+        Sub-stage timing is recorded in the profiler:
+          scrfd_preprocess  — (no-op now, color conversion removed)
+          scrfd_inference   — insightface app.get() (ONNX forward pass)
+          scrfd_postprocess — bbox/embedding extraction + filtering
+
         Args:
             frame: BGR image from OpenCV (numpy array)
 
         Returns:
-            Tuple of (face_locations, embeddings, rgb_frame)
+            Tuple of (face_locations, embeddings, frame)
             face_locations: List of (top, right, bottom, left)
             embeddings: List of 512-d numpy arrays (or None per face)
-            rgb_frame: The RGB-converted frame
-        """
-        # Convert BGR to RGB
-        rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame: The original BGR frame (passed through unchanged)
 
-        # Run on FULL resolution for better embedding quality
+        Note: InsightFace expects BGR input — it does swapRB=True
+        internally in both SCRFD and ArcFace. Do NOT convert to RGB.
+        """
+        from app.core.profiler import profiler
+
+        # ── Preprocess ────────────────────────────────────────────
+        # No color conversion needed: InsightFace handles BGR→RGB
+        # internally via cv2.dnn.blobFromImage(swapRB=True).
+        # Removing the cvtColor saves ~1-2 ms and fixes the double-swap
+        # bug that was degrading both detection and recognition accuracy.
+
         app = self._get_app()
         if app is None:
             self._frame_count += 1
-            return [], [], rgb_frame
+            return [], [], frame
 
-        faces = app.get(rgb_frame)
+        # ── Inference (GPU via ONNX) ──────────────────────────────
+        with profiler.measure("scrfd_inference"):
+            faces = app.get(frame)
 
-        face_locations = []
-        embeddings = []
-        for face in faces:
-            bbox = face.bbox.astype(int)
-            x1, y1, x2, y2 = bbox
+        # ── Postprocess (CPU) ─────────────────────────────────────
+        with profiler.measure("scrfd_postprocess"):
+            face_locations = []
+            embeddings = []
+            for face in faces:
+                bbox = face.bbox.astype(int)
+                x1, y1, x2, y2 = bbox
 
-            # Filter too-small faces
-            face_w = x2 - x1
-            face_h = y2 - y1
-            if face_w < self.min_face_size or face_h < self.min_face_size:
-                continue
+                # Filter too-small faces
+                face_w = x2 - x1
+                face_h = y2 - y1
+                if face_w < self.min_face_size or face_h < self.min_face_size:
+                    continue
 
-            # Validate face landmark geometry to reject non-face detections
-            if not self._is_valid_face_geometry(face):
-                continue
+                # Validate face landmark geometry to reject non-face detections
+                if not self._is_valid_face_geometry(face):
+                    continue
 
-            # Convert to (top, right, bottom, left)
-            face_locations.append((y1, x2, y2, x1))
+                # Convert to (top, right, bottom, left)
+                face_locations.append((y1, x2, y2, x1))
 
-            # Extract embedding (already computed by app.get)
-            if hasattr(face, 'embedding') and face.embedding is not None:
-                embeddings.append(face.embedding)
-            else:
-                embeddings.append(None)
+                # Extract embedding (already computed by app.get)
+                if hasattr(face, 'embedding') and face.embedding is not None:
+                    embeddings.append(face.embedding)
+                else:
+                    embeddings.append(None)
+
+        # Record face count in profiler
+        profiler.record_faces_detected(len(face_locations))
 
         self._frame_count += 1
-        return face_locations, embeddings, rgb_frame
+        return face_locations, embeddings, frame
 
     def detect_faces_raw(
-        self, frame_rgb: np.ndarray
+        self, frame_bgr: np.ndarray
     ) -> list:
         """
         Detect faces and return raw insightface Face objects.
@@ -334,7 +388,8 @@ class FaceDetector:
         model is loaded.
 
         Args:
-            frame_rgb: RGB image (numpy array)
+            frame_bgr: BGR image from OpenCV (numpy array).
+                       InsightFace handles BGR→RGB internally.
 
         Returns:
             List of insightface Face objects
@@ -342,7 +397,7 @@ class FaceDetector:
         app = self._get_app()
         if app is None:
             return []
-        faces = app.get(frame_rgb)
+        faces = app.get(frame_bgr)
         return [f for f in faces if self._is_valid_face_geometry(f)]
 
     def extract_face_crop(
@@ -418,19 +473,20 @@ class FaceDetector:
             crop: BGR image crop (numpy array)
 
         Returns:
-            Tuple of (face_locations_in_crop_coords, rgb_crop)
+            Tuple of (face_locations_in_crop_coords, bgr_crop)
+
+        Note: InsightFace expects BGR input — it does swapRB=True
+        internally. Do NOT convert to RGB before calling.
         """
         if crop.size == 0 or crop.shape[0] < 20 or crop.shape[1] < 20:
-            return [], cv2.cvtColor(crop, cv2.COLOR_BGR2RGB) if crop.size > 0 else crop
+            return [], crop
 
-        rgb_crop = cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)
-
-        # Run detection on the crop
+        # Pass BGR directly — InsightFace handles BGR→RGB internally
         app = self._get_app()
         if app is None:
-            return [], rgb_crop
-            
-        faces = app.get(rgb_crop)
+            return [], crop
+
+        faces = app.get(crop)
 
         face_locations = []
         for face in faces:
@@ -444,7 +500,7 @@ class FaceDetector:
             # Convert to (top, right, bottom, left)
             face_locations.append((y1, x2, y2, x1))
 
-        return face_locations, rgb_crop
+        return face_locations, crop
 
     @staticmethod
     def estimate_head_region(

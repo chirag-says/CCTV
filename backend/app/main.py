@@ -31,11 +31,19 @@ from app.utils.image_utils import frame_to_jpeg_bytes, resize_frame
 
 # ── Logging Setup ─────────────────────────────────────────────
 logging.basicConfig(
-    level=logging.DEBUG if settings.DEBUG else logging.INFO,
+    level=logging.DEBUG if settings.DEBUG_LOGS else logging.INFO,
     format="%(asctime)s │ %(levelname)-8s │ %(name)-25s │ %(message)s",
     datefmt="%H:%M:%S",
 )
 logger = logging.getLogger("cctv")
+
+# Suppress noisy third-party loggers (binary WebSocket dumps, per-request logs)
+# These MUST be WARNING regardless of DEBUG_LOGS to prevent log flooding.
+for _noisy in (
+    "websockets", "websockets.protocol", "websockets.server",
+    "uvicorn.access", "uvicorn.error",
+):
+    logging.getLogger(_noisy).setLevel(logging.WARNING)
 
 # Module-level reference to the main asyncio event loop (set during startup)
 _main_loop: asyncio.AbstractEventLoop = None
@@ -49,7 +57,7 @@ _main_loop: asyncio.AbstractEventLoop = None
 # dedicated background consumer thread.
 
 from app.core.event_queue import get_event_queue, EventPriority
-from app.vision.benchmarks import pipeline_bench
+from app.core.profiler import profiler
 
 
 async def _broadcast_event(event: dict):
@@ -87,7 +95,7 @@ def handle_pipeline_event(event: dict):
     priority = EventPriority.CRITICAL if is_critical else EventPriority.NORMAL
 
     eq = get_event_queue()
-    with pipeline_bench.measure("queue_put"):
+    with profiler.measure("queue_put"):
         eq.put("pipeline_event", event, priority=priority)
 
 
@@ -97,7 +105,7 @@ def handle_unknown_face(data: dict):
     NON-BLOCKING: enqueues for async processing (snapshot saving + DB + WS).
     """
     eq = get_event_queue()
-    with pipeline_bench.measure("queue_put"):
+    with profiler.measure("queue_put"):
         eq.put("unknown_face", data, priority=EventPriority.NORMAL)
 
 
@@ -114,6 +122,9 @@ def _process_pipeline_event(event: dict):
     eq = get_event_queue()
 
     # Persist to PostgreSQL
+    import time as _time
+    _db_start = _time.perf_counter()
+    _db_ok = False
     try:
         from uuid import uuid4
         from datetime import datetime, timezone
@@ -193,6 +204,7 @@ def _process_pipeline_event(event: dict):
                     session.status = "completed"
 
             db.commit()
+            _db_ok = True
         except Exception as e:
             db.rollback()
             logger.error(f"Failed to persist event: {e}")
@@ -201,6 +213,13 @@ def _process_pipeline_event(event: dict):
 
     except Exception as e:
         logger.error(f"Failed to persist event: {e}")
+
+    # Record DB timing in profiler
+    _db_elapsed = (_time.perf_counter() - _db_start) * 1000
+    if _db_ok:
+        profiler.record_db_insert(_db_elapsed)
+    else:
+        profiler.record_db_failure()
 
     # Broadcast via WebSocket (fire-and-forget async)
     if _main_loop:
@@ -227,11 +246,13 @@ def _process_unknown_face(data: dict):
 
     # ── Step 1: Save snapshots if frame data was passed ──
     # (Snapshot saving was moved out of the vision thread into the queue)
+    import time as _time
     snapshot_path = data.get("snapshot_path", "")
     context_path = data.get("context_path", "")
     full_frame_path = data.get("full_frame_path", "")
 
     if data.get("face_crop") is not None:
+        _snap_start = _time.perf_counter()
         try:
             from app.utils.image_utils import save_snapshot
             unknown_id = data.get("unknown_id", "")
@@ -250,6 +271,9 @@ def _process_unknown_face(data: dict):
                     data["full_frame"], f"fullframe_{unknown_id}",
                     subdirectory="frames", quality=90,
                 )
+            # Record snapshot save timing
+            _snap_elapsed = (_time.perf_counter() - _snap_start) * 1000
+            profiler.record_snapshot_save(_snap_elapsed)
         except Exception as e:
             logger.error(f"Failed to save unknown snapshots: {e}")
 
@@ -428,9 +452,11 @@ async def lifespan(app: FastAPI):
 
     logger.info(f"🌐 API Server: http://{settings.HOST}:{settings.PORT}")
     logger.info(f"📖 Docs: http://{settings.HOST}:{settings.PORT}/docs")
-
     logger.info("📷 Cameras will start when triggered from the dashboard")
-    logger.info("=" * 60)
+
+    # ── Print Startup Summary ─────────────────────────────────
+    from app.core.profiler import PerformanceProfiler
+    PerformanceProfiler.print_startup_summary()
 
     yield  # Application is running
 
@@ -455,7 +481,15 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
+# ── Request Logging Middleware ─────────────────────────────────
+# Pure ASGI middleware — does NOT use BaseHTTPMiddleware to avoid
+# the response-header-stripping bug that breaks CORSMiddleware.
+from app.core.middleware import RequestLoggingMiddleware
+app.add_middleware(RequestLoggingMiddleware)
+
 # ── CORS ──────────────────────────────────────────────────────
+# Added last so it runs FIRST (Starlette LIFO order).
+# Must intercept OPTIONS preflight before any other middleware.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -463,10 +497,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# ── Request Logging Middleware ─────────────────────────────────
-from app.core.middleware import RequestLoggingMiddleware
-app.add_middleware(RequestLoggingMiddleware)
 
 # ── Static Files (Snapshots) ─────────────────────────────────
 os.makedirs(settings.SNAPSHOT_DIR, exist_ok=True)

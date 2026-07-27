@@ -475,7 +475,7 @@ class FaceRecognizer:
         return results
 
     def generate_encoding(
-        self, rgb_frame: np.ndarray, face_location: tuple
+        self, frame_bgr: np.ndarray, face_location: tuple
     ) -> Optional[np.ndarray]:
         """
         Generate a face embedding from a frame and face location.
@@ -484,7 +484,8 @@ class FaceRecognizer:
         at the specified location.
 
         Args:
-            rgb_frame: RGB frame (numpy array)
+            frame_bgr: BGR image from OpenCV (numpy array).
+                       InsightFace handles BGR→RGB internally.
             face_location: (top, right, bottom, left) tuple
 
         Returns:
@@ -497,7 +498,7 @@ class FaceRecognizer:
 
             # Crop the face region with generous padding for better detection
             top, right, bottom, left = face_location
-            h, w = rgb_frame.shape[:2]
+            h, w = frame_bgr.shape[:2]
 
             # Add padding for better detection
             pad = max(int((bottom - top) * 0.3), int((right - left) * 0.3), 20)
@@ -506,11 +507,12 @@ class FaceRecognizer:
             crop_left = max(0, left - pad)
             crop_right = min(w, right + pad)
 
-            crop = rgb_frame[crop_top:crop_bottom, crop_left:crop_right]
+            crop = frame_bgr[crop_top:crop_bottom, crop_left:crop_right]
             if crop.size == 0:
                 return None
 
             # Run detection on the crop to get the embedding
+            # Pass BGR directly — InsightFace handles BGR→RGB internally
             faces = app.get(crop)
             if not faces:
                 return None

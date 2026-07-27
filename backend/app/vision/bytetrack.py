@@ -364,6 +364,16 @@ class ByteTracker:
                 self._next_id += 1
                 new_tracked.append(new_track)
 
+                # Record identity carryover result in profiler
+                try:
+                    from app.core.profiler import profiler
+                    if carried_person_id:
+                        profiler.record_carryover_success()
+                    else:
+                        profiler.record_carryover_failed()
+                except Exception:
+                    pass
+
                 if carried_person_id:
                     logger.debug(
                         f"ByteTrack: carried identity {carried_person_name} "

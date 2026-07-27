@@ -66,7 +66,7 @@ class CameraWorker:
     def _run_loop(self):
         """Main processing loop running in background thread."""
         from app.utils.image_utils import resize_frame, frame_to_jpeg_bytes
-        from app.vision.benchmarks import pipeline_bench
+        from app.core.profiler import profiler
 
         logger.info(f"Camera worker loop started: {self.camera_id}")
         target_fps = 30
@@ -75,15 +75,30 @@ class CameraWorker:
         while not self._stop_event.is_set():
             loop_start = time.monotonic()
             try:
-                with pipeline_bench.measure("frame_total"):
+                with profiler.measure("frame_total"):
+                    profiler.record_frame_received()
                     frame = self.pipeline.process_frame()
                     if frame is not None:
                         # Pre-encode JPEG in THIS background thread (not the async loop!)
-                        # This is the key optimization: JPEG encoding is CPU-heavy (~5-15ms)
+                        # This is the key optimization: JPEG encoding is CPU-heavy
                         # and must NOT run in the async event loop where it blocks everything.
-                        with pipeline_bench.measure("jpeg_encode"):
-                            small = resize_frame(frame, max_width=1280, max_height=720)
-                            self.pipeline._last_jpeg = frame_to_jpeg_bytes(small, quality=80)
+                        with profiler.measure("jpeg_encode"):
+                            # Resize for streaming (detection runs on full resolution)
+                            small = resize_frame(frame, max_width=960, max_height=540)
+                            # Record raw frame size for compression ratio
+                            profiler.record_raw_frame_size(small.nbytes)
+                            jpeg_bytes = frame_to_jpeg_bytes(small, quality=65)
+                            self.pipeline._last_jpeg = jpeg_bytes
+
+                        # Record WebSocket frame size for stats
+                        if jpeg_bytes:
+                            profiler.record_ws_send(len(jpeg_bytes), 0.0)
+                    else:
+                        profiler.record_frame_dropped()
+
+                # Tick profiler for every frame (report every N total frames)
+                profiler.tick_frame()
+
             except Exception as e:
                 logger.error(f"Camera {self.camera_id} error: {e}", exc_info=True)
                 time.sleep(1)  # Brief pause on error

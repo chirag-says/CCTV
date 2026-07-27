@@ -142,10 +142,8 @@ def seed_teachers():
                 errors += 1
                 continue
 
-            rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-            # Detect face and get embedding
-            faces = app.get(rgb_image)
+            # Pass BGR directly — InsightFace handles BGR→RGB internally
+            faces = app.get(image)
 
             if not faces:
                 print(f"  ❌ No face detected in {filename}")

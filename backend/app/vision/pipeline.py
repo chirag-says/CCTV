@@ -60,7 +60,7 @@ from app.vision.reid import get_reid_tracker, ReIDTracker
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Internal: Utilities Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 from app.utils.image_utils import frame_to_jpeg_bytes, save_snapshot
-from app.vision.benchmarks import pipeline_bench
+from app.core.profiler import profiler
 
 logger = logging.getLogger(__name__)
 
@@ -372,17 +372,20 @@ class VisionPipeline:
         # Auto-refresh face encodings from DB if cache is stale/empty
         self._auto_refresh_encodings()
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ TRAFFIC MODE Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # ── TRAFFIC MODE ────────────────────────────────────────────────────────────
         if self.pipeline_mode == "traffic":
             return self._process_frame_traffic(frame)
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ HYBRID MODE Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # ── HYBRID MODE ─────────────────────────────────────────────────────────────
         if self.pipeline_mode == "hybrid":
             return self._process_frame_hybrid(frame)
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ FACE MODE (default) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-        # Keep a clean copy for snapshots (before drawing boxes)
-        clean_frame = frame.copy()
+        # ── FACE MODE (default) ─────────────────────────────────────────────────────
+        # Defer frame.copy() until a snapshot is actually needed.
+        # Eagerly copying a 4 MP frame (~11 MB) every processed frame wastes
+        # ~22 MB of memory bandwidth per frame (copy + cvtColor allocation).
+        # Instead, we copy lazily inside _handle_unknown_face, save_snapshot, etc.
+        clean_frame = frame  # Alias — only copied when needed for snapshots
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ HAZARD DETECTION (runs on its own schedule) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         # Submit frame to hazard detector Ã¢â‚¬â€ it internally throttles
@@ -401,15 +404,18 @@ class VisionPipeline:
             for draw_args in self._last_face_draws:
                 self._draw_box(frame, *draw_args)
             self._last_frame = frame
+            profiler.record_frame_skipped()
             return frame
 
         # Clear cache for this new detection frame
         self._last_face_draws.clear()
+        profiler.record_detection_frame()
 
         # Ã¢â€â‚¬Ã¢â€â‚¬ DETECTION Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         # Detect faces AND get embeddings in a SINGLE insightface pass
-        with pipeline_bench.measure("scrfd_detect"):
-            face_locations, embeddings, rgb_frame = self.detector.detect_faces_with_embeddings(frame)
+        # (sub-stage timing: scrfd_preprocess/scrfd_inference/scrfd_postprocess
+        #  is recorded inside detector.detect_faces_with_embeddings)
+        face_locations, embeddings, rgb_frame = self.detector.detect_faces_with_embeddings(frame)
 
         if not face_locations:
             # Update ByteTrack with empty detections
@@ -420,7 +426,7 @@ class VisionPipeline:
             self._last_frame = frame
             return frame
 
-        logger.info(f"Camera {self.camera_id}: Detected {len(face_locations)} face(s)")
+        logger.debug(f"Camera {self.camera_id}: Detected {len(face_locations)} face(s)")
 
         # Convert face locations to xyxy format for ByteTrack
         bboxes_xyxy = []
@@ -434,7 +440,7 @@ class VisionPipeline:
         scores_array = np.array(det_scores, dtype=np.float32)
 
         # ByteTrack update: assigns stable track IDs across frames
-        with pipeline_bench.measure("bytetrack_update"):
+        with profiler.measure("bytetrack"):
             active_tracks = self.byte_tracker.update(bboxes_array, scores_array)
 
         # Collect all face boxes to draw
@@ -472,9 +478,48 @@ class VisionPipeline:
             # Only run ArcFace if the track needs re-recognition.
             # This is FPS-independent: uses wall-clock time, not frame counts.
             needs_recognition = self._should_recognize(track)
+            profiler.record_track_seen()
+
+            # Track re-created detection (lost and found)
+            if track.tracklet_len < 3:
+                profiler.record_track_recreated()
+
+            # ── Face size gate for recognition ────────────────────
+            # Only compute embeddings on faces large enough for reliable
+            # matching. Small faces (32-80px) are still tracked but
+            # reported as unidentified — never guess on insufficient pixels.
+            face_w = abs(location[1] - location[3])  # right - left
+            face_h = abs(location[2] - location[0])  # bottom - top
+            face_too_small = (face_w < settings.MIN_FACE_RECOGNIZE_PX or
+                             face_h < settings.MIN_FACE_RECOGNIZE_PX)
+
+            if face_too_small:
+                # Track but don't recognize — show as tracked face
+                label = track.person_name if track.person_name else f"Track #{track.track_id}"
+                color = (0, 200, 0) if track.person_name else (255, 165, 0)
+                boxes_to_draw.append((location, label, color, 0.0))
+                self.tracker.on_detection(
+                    person_id=track.person_id or f"small_track_{track.track_id}",
+                    person_name=label,
+                    camera_id=self.camera_id,
+                    confidence=0.0,
+                    centroid=centroid,
+                )
+                continue
 
             if needs_recognition and best_embedding is not None:
-                with pipeline_bench.measure("arcface_match"):
+                profiler.record_recognition_call()
+                # Record WHY recognition was triggered for diagnostics
+                if track.person_id is None:
+                    profiler.record_cache_reason("no_identity")
+                elif track.tracklet_len < 3:
+                    profiler.record_cache_reason("new_track")
+                elif track.recognition_locked:
+                    profiler.record_cache_reason("recheck_locked")
+                    profiler.record_forced_recheck()
+                else:
+                    profiler.record_cache_reason("recheck_unlocked")
+                with profiler.measure("arcface"):
                     result: MatchResult = self.recognizer.recognize_face(best_embedding)
 
                 if result.matched:
@@ -517,9 +562,10 @@ class VisionPipeline:
                     )
                 else:
                     boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
-                    self._handle_unknown_face(clean_frame, rgb_frame, location, best_embedding, centroid)
+                    self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid)
             elif not needs_recognition and track.person_id and track.person_name:
                 # Reuse existing identity from ByteTrack cache (skip ArcFace)
+                profiler.record_cache_hit()
                 boxes_to_draw.append((location, track.person_name, (0, 255, 0), track.recognition_confidence))
                 self.tracker.on_detection(
                     person_id=track.person_id,
@@ -536,8 +582,9 @@ class VisionPipeline:
 
         # Cache boxes for frame skip & draw them
         self._last_face_draws = boxes_to_draw
-        for draw_args in boxes_to_draw:
-            self._draw_box(frame, *draw_args)
+        with profiler.measure("drawing"):
+            for draw_args in boxes_to_draw:
+                self._draw_box(frame, *draw_args)
 
         # YOLO-ASSISTED DETECTION (catch missed persons)
         now_assist = time.time()
@@ -557,7 +604,6 @@ class VisionPipeline:
         self._run_safety_analytics()
         self._check_periodic_exits()
         self._update_fps()
-        pipeline_bench.tick_frame()  # Benchmark: log timing summary periodically
 
         self._last_frame = frame
         return frame
@@ -1234,8 +1280,8 @@ class VisionPipeline:
                     )
                 else:
                     self._draw_box(frame, global_loc, "UNKNOWN", (0, 0, 255), 0.0)
-                    rgb_frame = cv2.cvtColor(clean_frame, cv2.COLOR_BGR2RGB)
-                    self._handle_unknown_face(clean_frame, rgb_frame, global_loc, encoding, centroid)
+                    # Pass BGR frame directly — InsightFace handles color internally
+                    self._handle_unknown_face(clean_frame, clean_frame, global_loc, encoding, centroid)
 
             logger.info(
                 f"[{self.camera_id}] YOLO-assisted: found {len(crop_face_locs)} face(s) "
@@ -1502,7 +1548,7 @@ class VisionPipeline:
              else:
                  # Unknown - Draw on the ACCUMULATED frame
                  boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
-                 self._handle_unknown_face(clean_frame, rgb_frame, location, encoding, centroid)
+                 self._handle_unknown_face(clean_frame, clean_frame, location, encoding, centroid)
 
                  # ReID: also track unknown persons for cross-camera matching
                  if run_reid:

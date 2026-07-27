@@ -103,14 +103,13 @@ async def upload_face_encoding(
     if image is None:
         raise ValidationException("Failed to decode image")
 
-    # Convert to RGB for insightface
-    rgb_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-
-    # Use insightface (SCRFD + ArcFace) for detection and embedding
+    # Pass BGR directly — InsightFace expects BGR input and handles
+    # BGR→RGB internally via cv2.dnn.blobFromImage(swapRB=True).
+    # Do NOT convert to RGB: that double-swaps the channels.
     from app.vision.detector import _get_insightface_app
 
     app = _get_insightface_app()
-    faces = app.get(rgb_image)
+    faces = app.get(image)  # BGR input — correct for InsightFace
 
     if not faces:
         raise ValidationException("No face detected in the uploaded image")
