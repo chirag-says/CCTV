@@ -559,7 +559,10 @@ class VisionPipeline:
                 else:
                     profiler.record_cache_reason("recheck_unlocked")
                 with profiler.measure("arcface"):
-                    result: MatchResult = self.recognizer.recognize_face(best_embedding)
+                    result: MatchResult = self.recognizer.recognize_face(
+                        best_embedding,
+                        face_quality=self._face_quality_for(frame, location),
+                    )
 
                 if result.matched:
                     track.person_id = result.person_id
@@ -760,6 +763,28 @@ class VisionPipeline:
 
         self._last_frame = display_frame
         return display_frame
+
+    def _face_quality_for(self, frame: np.ndarray, location: tuple) -> float:
+        """
+        Quality score (0.0–1.0) used to pick the adaptive recognition threshold.
+
+        Returns the neutral 0.5 unless ENABLE_ADAPTIVE_THRESHOLDS is set, which
+        keeps recognition behaviour byte-identical to the previous (accidentally
+        fixed-threshold) behaviour until a deployment has measured FAR/FRR.
+
+        When enabled, delegates to FaceDetector.assess_face_quality, which blends
+        face area, Laplacian sharpness, and brightness.
+        """
+        if not settings.ENABLE_ADAPTIVE_THRESHOLDS:
+            return 0.5
+        try:
+            return self.detector.assess_face_quality(frame, location)
+        except Exception as e:
+            logger.warning(
+                f"[{self.camera_id}] Face quality assessment failed, "
+                f"falling back to neutral 0.5: {e}"
+            )
+            return 0.5
 
     def _should_recognize(self, track: STrack) -> bool:
         """
@@ -1042,8 +1067,16 @@ class VisionPipeline:
             # Step 3: Quality gate
             gate = FaceQualityGate()
             face_crop = self.detector.extract_face_crop(frame, location, padding=40)
+            # NOTE: face_location must be the *unpadded* box — assess() uses it for
+            # the size gate and size_score, which should measure the face itself,
+            # not the padded crop.
+            # TODO(phase2): pass real 5-point landmarks so estimate_pose() returns a
+            # true yaw. With landmarks=None it returns (0,0,0), so every suggestion
+            # buckets as "frontal" and the pose-coverage check (step 2 of the
+            # diversity ladder) can never fire.
             quality_result = gate.assess(
                 face_crop=face_crop,
+                face_location=location,
                 det_score=confidence,
                 landmarks=None,
             )
@@ -1515,7 +1548,10 @@ class VisionPipeline:
                             (global_loc[0] + global_loc[2]) // 2)
 
                 # Try to recognize
-                result = self.recognizer.recognize_face(encoding)
+                result = self.recognizer.recognize_face(
+                    encoding,
+                    face_quality=self._face_quality_for(clean_frame, global_loc),
+                )
                 if result.matched:
                     self._draw_box(frame, global_loc, result.person_name, (0, 255, 0), result.confidence)
                     self.tracker.on_detection(
@@ -1768,7 +1804,10 @@ class VisionPipeline:
              top, right, bottom, left = location
              centroid = ((left + right) // 2, (top + bottom) // 2)
 
-             result = self.recognizer.recognize_face(encoding)
+             result = self.recognizer.recognize_face(
+                 encoding,
+                 face_quality=self._face_quality_for(clean_frame, location),
+             )
              if result.matched:
                  # Known - Draw on the ACCUMULATED frame
                  boxes_to_draw.append((location, result.person_name, (0, 255, 0), result.confidence))
@@ -1846,7 +1885,7 @@ class VisionPipeline:
 
         # YOLO-assisted detection (for HYBRID mode)
         now_assist = time.time()
-        if now_assist - self._last_yolo_assist_check >= self._yolo_assist_interval:
+        if now_assist - self._last_yolo_assist_check >= self._yolo_assist_min_interval:
             self._last_yolo_assist_check = now_assist
             try:
                 yolo_persons = self._get_yolo_person_detections_from_traffic()

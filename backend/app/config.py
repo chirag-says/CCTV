@@ -36,6 +36,17 @@ class Settings(BaseSettings):
     FACE_EMBEDDING_DIM: int = 512  # ArcFace embedding dimension
 
     # Adaptive thresholds (initial defaults — calibrate per deployment via FAR/FRR benchmarking)
+    #
+    # DISABLED BY DEFAULT. Until this is True, every face is scored at quality=0.5,
+    # so _get_adaptive_threshold() always returns FACE_MATCH_BALANCED and the STRICT
+    # and LENIENT tiers below are unreachable. That was previously an accidental
+    # dead-code bug; it is now an explicit, reversible switch.
+    #
+    # Turning this on CHANGES RECOGNITION BEHAVIOUR: sharp/large faces get the
+    # stricter 0.52 ceiling (fewer false accepts) and small/blurry ones get 0.72
+    # (fewer false rejects). Measure FAR/FRR on a labelled set before enabling.
+    # Cost when enabled: one cvtColor + Laplacian per recognised face per frame.
+    ENABLE_ADAPTIVE_THRESHOLDS: bool = False
     FACE_MATCH_STRICT: float = 0.52     # High-quality face threshold (quality >= 0.8)
     FACE_MATCH_BALANCED: float = 0.62   # Medium-quality threshold (quality >= 0.5)
     FACE_MATCH_LENIENT: float = 0.72    # Low-quality threshold (quality < 0.5)
