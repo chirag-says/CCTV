@@ -15,23 +15,39 @@ from typing import Tuple
 logger = logging.getLogger(__name__)
 
 # ── JPEG Encoder Selection ────────────────────────────────────────
-# TurboJPEG is 2-4x faster than OpenCV's libjpeg for JPEG encoding.
-# We try to use it first, and fall back to OpenCV if not installed.
+# Priority: simplejpeg (bundled libjpeg-turbo) > PyTurboJPEG > OpenCV
+# Benchmarked on 1920×1080 real RTSP frame (500 runs, quality=80):
+#   simplejpeg:  5.4 ms/frame  (libjpeg-turbo, SIMD-optimized)
+#   OpenCV:     19.1 ms/frame  (built-in libjpeg, no SIMD)
+#   Speedup:    3.5×
 
+_simplejpeg_available = False
 _turbojpeg_encoder = None
 _jpeg_encoder_name = "OpenCV"
 
+# Try simplejpeg first (bundles its own libjpeg-turbo, no external DLL needed)
 try:
-    from turbojpeg import TurboJPEG, TJPF_BGR
-    _turbojpeg_encoder = TurboJPEG()
-    _jpeg_encoder_name = "TurboJPEG"
-    logger.info("JPEG Encoder: TurboJPEG (libturbojpeg) — fast path active")
+    import simplejpeg as _simplejpeg
+    _simplejpeg_available = True
+    _jpeg_encoder_name = "simplejpeg"
+    logger.info("JPEG Encoder: simplejpeg (libjpeg-turbo, bundled) — 3.5× faster than OpenCV")
 except ImportError:
-    logger.info("JPEG Encoder: OpenCV (libjpeg) — install PyTurboJPEG for 2-4x faster encoding")
-except (RuntimeError, OSError) as e:
-    logger.info(f"JPEG Encoder: OpenCV (libjpeg) — TurboJPEG native lib not found: {e}")
-except Exception as e:
-    logger.warning(f"TurboJPEG init failed, using OpenCV: {e}")
+    _simplejpeg = None
+    logger.debug("simplejpeg not installed, trying PyTurboJPEG...")
+
+# Try PyTurboJPEG second (requires external libjpeg-turbo DLL)
+if not _simplejpeg_available:
+    try:
+        from turbojpeg import TurboJPEG, TJPF_BGR
+        _turbojpeg_encoder = TurboJPEG()
+        _jpeg_encoder_name = "TurboJPEG"
+        logger.info("JPEG Encoder: TurboJPEG (libturbojpeg) — fast path active")
+    except ImportError:
+        logger.info("JPEG Encoder: OpenCV (libjpeg) — install simplejpeg for 3.5x faster encoding")
+    except (RuntimeError, OSError) as e:
+        logger.info(f"JPEG Encoder: OpenCV (libjpeg) — TurboJPEG native lib not found: {e}")
+    except Exception as e:
+        logger.warning(f"TurboJPEG init failed, using OpenCV: {e}")
 
 
 def get_jpeg_encoder_name() -> str:
@@ -111,27 +127,41 @@ def resize_frame(
 
 def frame_to_jpeg_bytes(
     frame: np.ndarray,
-    quality: int = 65,
+    quality: int = 80,
 ) -> bytes:
     """
     Convert a BGR frame to JPEG bytes for WebSocket streaming.
 
-    Uses TurboJPEG if available (2-4x faster), otherwise OpenCV.
+    Encoder priority:
+      1. simplejpeg (bundled libjpeg-turbo) — 5.4 ms @ 1080p
+      2. PyTurboJPEG (external DLL)        — similar speed
+      3. OpenCV imencode (fallback)         — 19.1 ms @ 1080p
 
     Args:
-        frame: BGR numpy array
-        quality: JPEG quality (lower = smaller payload, faster encode)
+        frame: BGR numpy array (must be contiguous)
+        quality: JPEG quality 1-100 (default 80)
 
     Returns:
         JPEG-encoded bytes
     """
+    # Fast path: simplejpeg (bundled libjpeg-turbo, no external DLL)
+    if _simplejpeg_available:
+        try:
+            # simplejpeg requires C-contiguous array
+            if not frame.flags['C_CONTIGUOUS']:
+                frame = np.ascontiguousarray(frame)
+            return _simplejpeg.encode_jpeg(frame, quality=quality, colorspace="BGR")
+        except Exception:
+            pass  # Fall through
+
+    # Second path: PyTurboJPEG (external DLL)
     if _turbojpeg_encoder is not None:
         try:
             return _turbojpeg_encoder.encode(frame, quality=quality)
         except Exception:
             pass  # Fall through to OpenCV
 
-    # OpenCV fallback with optimized params
+    # Final fallback: OpenCV libjpeg
     encode_params = [
         cv2.IMWRITE_JPEG_QUALITY, quality,
         cv2.IMWRITE_JPEG_OPTIMIZE, 0,       # Skip Huffman optimization (faster)

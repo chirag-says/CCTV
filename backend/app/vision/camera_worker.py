@@ -150,7 +150,7 @@ class CameraWorker:
 
         This thread is the ONLY writer of _last_jpeg after startup.
         """
-        from app.utils.image_utils import resize_frame, frame_to_jpeg_bytes
+        from app.utils.image_utils import frame_to_jpeg_bytes
         from app.core.profiler import profiler
 
         logger.info(f"JPEG encoder thread started: {self.camera_id}")
@@ -172,14 +172,13 @@ class CameraWorker:
 
             try:
                 with profiler.measure("jpeg_encode"):
-                    # Resize for streaming (detection runs on full resolution)
-                    # 1920×1080 retains much more detail from the 4MP source
-                    small = resize_frame(frame, max_width=1920, max_height=1080)
+                    # Pipeline now returns a pre-resized 1080p display frame.
+                    # No resize needed here — frame is already at streaming resolution.
                     # Record raw frame size for compression ratio
-                    profiler.record_raw_frame_size(small.nbytes)
+                    profiler.record_raw_frame_size(frame.nbytes)
                     # Use load-tier quality override if pipeline has one
                     jpeg_q = getattr(self.pipeline, '_jpeg_quality_override', None) or 80
-                    jpeg_bytes = frame_to_jpeg_bytes(small, quality=jpeg_q)
+                    jpeg_bytes = frame_to_jpeg_bytes(frame, quality=jpeg_q)
                     self.pipeline._last_jpeg = jpeg_bytes
 
                 # Record WebSocket frame size for stats

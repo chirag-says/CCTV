@@ -51,6 +51,31 @@ class STrack:
     recognition_time: float = 0.0         # time.time() of last recognition
     recognition_locked: bool = False      # True if confidently identified
 
+    # ── Identity Hysteresis (anti-flicker) ────────────────────────
+    # Prevents Known→Unknown→Known flicker on borderline embeddings.
+    # Identity is only dropped after N consecutive recognition failures,
+    # not on a single bad frame.
+    identity_fail_streak: int = 0         # Consecutive frames where recognition failed
+    _distance_history: List[float] = field(default_factory=list, repr=False)
+    _distance_history_max: int = 10       # Rolling window size
+
+    @property
+    def temporal_avg_distance(self) -> float:
+        """Rolling average of recent recognition distances."""
+        if not self._distance_history:
+            return 1.0
+        return sum(self._distance_history) / len(self._distance_history)
+
+    def record_distance(self, distance: float):
+        """Append a distance to the rolling window for temporal averaging."""
+        self._distance_history.append(distance)
+        if len(self._distance_history) > self._distance_history_max:
+            self._distance_history.pop(0)
+
+    def reset_fail_streak(self):
+        """Called on successful recognition match."""
+        self.identity_fail_streak = 0
+
     def predict(self):
         """Predict the next position using simple linear motion."""
         if self._velocity is not None:

@@ -84,6 +84,7 @@ class MatchResult:
     margin: float = 0.0  # Gap between best and second-best person
     top_k: List[dict] = field(default_factory=list)  # Top-K candidates
     rejection_reason: Optional[str] = None  # Why match was rejected
+    in_gray_zone: bool = False  # True if distance is borderline (just above threshold)
 
 
 class FaceRecognizer:
@@ -417,12 +418,20 @@ class FaceRecognizer:
                     quality_tier=quality_tier,
                     margin=round(min(margin, 9.99), 4),
                     top_k=top_k_candidates,
+                    in_gray_zone=False,
                 )
             else:
                 # No match — best distance exceeds threshold
+                # Gray zone: distance is above threshold but within the
+                # hysteresis buffer. The pipeline uses this to keep a
+                # previously-known identity instead of flipping to Unknown.
+                gray_zone_upper = settings.IDENTITY_GRAY_ZONE_UPPER
+                is_gray = best_distance <= (threshold + gray_zone_upper)
+                zone_label = "GRAY ZONE" if is_gray else "DEFINITE"
                 logger.info(
-                    f"❌ NO MATCH: closest={best['person_name']} "
+                    f"❌ NO MATCH ({zone_label}): closest={best['person_name']} "
                     f"(distance={best_distance:.4f}, threshold={threshold}, "
+                    f"gray_ceiling={threshold + gray_zone_upper:.4f}, "
                     f"tier={quality_tier})"
                 )
                 return MatchResult(
@@ -434,6 +443,7 @@ class FaceRecognizer:
                     margin=round(min(margin, 9.99), 4),
                     top_k=top_k_candidates,
                     rejection_reason="distance_exceeds_threshold",
+                    in_gray_zone=is_gray,
                 )
 
     def recognize_faces_batch(

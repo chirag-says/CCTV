@@ -53,8 +53,9 @@ python-dateutil>=2.8.2
 psutil>=5.9.0
 pynvml>=11.5.0
 
-# Fast JPEG encoding (optional — 2-4x faster than OpenCV libjpeg)
-PyTurboJPEG>=1.7.0
+# Fast JPEG encoding (3.5× faster than OpenCV libjpeg)
+simplejpeg>=1.7.0        # Primary: bundles libjpeg-turbo, no external DLL needed
+PyTurboJPEG>=1.7.0       # Fallback: requires libjpeg-turbo DLL installed separately
 
 # Rate Limiting
 slowapi>=0.1.9

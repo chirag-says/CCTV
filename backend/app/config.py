@@ -86,6 +86,15 @@ class Settings(BaseSettings):
     RECOGNITION_RECHECK_SEC: float = 1.0         # Re-check unlocked tracks every N seconds
     RECOGNITION_FULL_RECHECK_SEC: float = 3.0    # Re-check locked tracks every N seconds
 
+    # Identity Hysteresis (anti-flicker for borderline embeddings)
+    # When a known person's distance oscillates around the threshold,
+    # hysteresis prevents Known→Unknown→Known flicker by requiring
+    # N consecutive failures before dropping identity.
+    IDENTITY_GRACE_FRAMES: int = 5               # Consecutive failures before dropping identity
+    IDENTITY_GRAY_ZONE_UPPER: float = 0.08       # Distance above threshold that's still "gray zone"
+                                                  # e.g., balanced=0.62 → gray zone extends to 0.70
+                                                  # Distances above gray ceiling = immediate unknown
+
     # Async Event Queue
     EVENT_QUEUE_SIZE: int = 500                  # Max queued events (critical events bypass this limit)
 

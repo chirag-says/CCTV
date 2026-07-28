@@ -3,18 +3,26 @@ Seed script — Register teachers from the Teachers/ folder into the database.
 
 For each teacher:
   1. Creates a Person record (name, role/designation, department)
-  2. Detects face in the photo using SCRFD (insightface)
-  3. Generates ArcFace 512-d embedding
-  4. Stores the encoding in face_encodings table
-  5. Copies the photo as avatar snapshot
+  2. Detects face in EACH photo using SCRFD (insightface)
+  3. Generates ArcFace 512-d embedding per photo
+  4. Stores multiple encodings in face_encodings table (multi-embedding recognition)
+  5. Copies best photo as avatar snapshot
   6. Refreshes the recognition cache in all active pipelines
 """
 
 import sys
 import os
+
+# Fix Windows console encoding for emoji/unicode output
+if sys.platform == "win32":
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 import cv2
 import numpy as np
 import shutil
+import glob
+import re
 
 sys.path.insert(0, ".")
 
@@ -25,63 +33,57 @@ from app.db.session import SessionLocal
 from app.db.models import Person, FaceEncoding
 from app.config import settings
 
-# ── Teacher data from the Atria IT CSE department page ──────────────
-# Matched by filename → name/designation from the screenshots
+# ── Teacher metadata ────────────────────────────────────────────
+# The Teachers/ folder has files named like "dileep (1).jpeg", "farhana (2).jpeg", etc.
+# We group by first-name prefix and assign metadata here.
 TEACHERS = [
     {
-        "filename": "DeviKannan.png",
-        "name": "Dr. Devi Kannan",
-        "role": "hod",           # HOD + Professor
-        "department": "CSE",
-        "email": "devikannan@atria.edu",
-    },
-    {
-        "filename": "VijaySwaroop.png",
-        "name": "A. Vijay Swaroop",
+        "prefix": "dileep",
+        "name": "Dileep",
         "role": "assistant_professor",
         "department": "CSE",
-        "email": "vijayswaroop@atria.edu",
+        "email": "dileep@atria.edu",
     },
     {
-        "filename": "Keerthi.png",
-        "name": "Keerthi K S",
+        "prefix": "farhana",
+        "name": "Farhana",
         "role": "assistant_professor",
         "department": "CSE",
-        "email": "keerthiks@atria.edu",
+        "email": "farhana@atria.edu",
     },
     {
-        "filename": "Pavithra.png",
-        "name": "Pavithra S",
+        "prefix": "geetha",
+        "name": "Geetha",
         "role": "assistant_professor",
         "department": "CSE",
-        "email": "pavithras@atria.edu",
+        "email": "geetha@atria.edu",
     },
     {
-        "filename": "Veena.png",
-        "name": "Veena S",
+        "prefix": "niranjani",
+        "name": "Niranjani",
         "role": "assistant_professor",
         "department": "CSE",
-        "email": "veenas@atria.edu",
+        "email": "niranjani@atria.edu",
     },
     {
-        "filename": "Vijaylaxmi.png",
-        "name": "V. Vijayalakshmi",
+        "prefix": "reena",
+        "name": "Reena",
         "role": "assistant_professor",
         "department": "CSE",
-        "email": "vijayalakshmi@atria.edu",
+        "email": "reena@atria.edu",
     },
 ]
 
-TEACHERS_DIR = os.path.join(os.path.dirname(__file__), "..", "Teachers")
-TEACHERS_DIR = os.path.normpath(TEACHERS_DIR)
-
-# Fallback: if Teachers dir is at project root level
+# Resolve Teachers directory relative to this script → ../Teachers
+TEACHERS_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "Teachers")
+)
 if not os.path.isdir(TEACHERS_DIR):
     TEACHERS_DIR = os.path.normpath(
         os.path.join(os.path.dirname(__file__), "Teachers")
     )
 if not os.path.isdir(TEACHERS_DIR):
-    TEACHERS_DIR = r"c:\Users\lokes\OneDrive\Desktop\CCTV\CCTV\Teachers"
+    TEACHERS_DIR = r"c:\Users\chira\Downloads\CCTV-COLLEGE\CCTV\Teachers"
 
 
 def load_insightface():
@@ -94,12 +96,41 @@ def load_insightface():
     return app
 
 
+def find_teacher_images(prefix: str) -> list:
+    """
+    Find all images for a teacher by filename prefix.
+    Matches patterns like 'dileep (1).jpeg', 'dileep (2).jpeg', etc.
+    """
+    pattern = os.path.join(TEACHERS_DIR, f"{prefix} (*).jpeg")
+    files = sorted(glob.glob(pattern))
+    if not files:
+        # Try without spaces, or other extensions
+        pattern = os.path.join(TEACHERS_DIR, f"{prefix}*.jpeg")
+        files = sorted(glob.glob(pattern))
+    if not files:
+        pattern = os.path.join(TEACHERS_DIR, f"{prefix}*.jpg")
+        files = sorted(glob.glob(pattern))
+    if not files:
+        pattern = os.path.join(TEACHERS_DIR, f"{prefix}*.png")
+        files = sorted(glob.glob(pattern))
+    return files
+
+
 def seed_teachers():
     print("=" * 60)
-    print("  SentinelAI — Teacher Seeder")
+    print("  SentinelAI — Teacher Seeder (Multi-Embedding)")
     print("=" * 60)
-    print(f"  Teachers dir: {TEACHERS_DIR}")
-    print(f"  Teachers to seed: {len(TEACHERS)}")
+    print(f"  Teachers dir : {TEACHERS_DIR}")
+    print(f"  Teachers     : {len(TEACHERS)}")
+    print()
+
+    if not os.path.isdir(TEACHERS_DIR):
+        print(f"  ❌ Teachers directory not found: {TEACHERS_DIR}")
+        sys.exit(1)
+
+    # List actual files in directory
+    all_files = os.listdir(TEACHERS_DIR)
+    print(f"  Files found  : {len(all_files)}")
     print()
 
     # Load insightface
@@ -108,23 +139,25 @@ def seed_teachers():
     print("  ✅ insightface loaded\n")
 
     db = SessionLocal()
-    created = 0
+    persons_created = 0
+    encodings_created = 0
     skipped = 0
     errors = 0
 
     try:
         for teacher in TEACHERS:
-            filename = teacher["filename"]
-            filepath = os.path.join(TEACHERS_DIR, filename)
+            prefix = teacher["prefix"]
+            images = find_teacher_images(prefix)
 
             print(f"── {teacher['name']} ({teacher['role']}) ──")
+            print(f"   Images found: {len(images)}")
 
-            if not os.path.exists(filepath):
-                print(f"  ❌ Photo not found: {filepath}")
+            if not images:
+                print(f"  ❌ No images found for prefix '{prefix}'")
                 errors += 1
                 continue
 
-            # Check if already exists
+            # Check if person already exists
             existing = (
                 db.query(Person)
                 .filter(Person.name == teacher["name"], Person.is_active == True)
@@ -135,49 +168,7 @@ def seed_teachers():
                 skipped += 1
                 continue
 
-            # Read and process image
-            image = cv2.imread(filepath)
-            if image is None:
-                print(f"  ❌ Failed to read image: {filepath}")
-                errors += 1
-                continue
-
-            # Pass BGR directly — InsightFace handles BGR→RGB internally
-            faces = app.get(image)
-
-            if not faces:
-                print(f"  ❌ No face detected in {filename}")
-                errors += 1
-                continue
-
-            if len(faces) > 1:
-                print(f"  ⚠️  Multiple faces ({len(faces)}) detected, using largest")
-                # Use the face with the largest bounding box
-                faces = sorted(
-                    faces,
-                    key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
-                    reverse=True,
-                )
-
-            face = faces[0]
-
-            if face.embedding is None:
-                print(f"  ❌ No embedding generated for {filename}")
-                errors += 1
-                continue
-
-            encoding = face.embedding  # 512-d numpy array
-            print(f"  📐 Embedding: shape={encoding.shape}, norm={np.linalg.norm(encoding):.2f}")
-
-            # Save avatar snapshot
-            avatar_filename = f"teacher_{teacher['name'].replace(' ', '_').replace('.', '')}.jpg"
-            avatar_dir = os.path.join(settings.SNAPSHOT_DIR, "avatars")
-            os.makedirs(avatar_dir, exist_ok=True)
-            avatar_path = os.path.join(avatar_dir, avatar_filename)
-            cv2.imwrite(avatar_path, image)
-            avatar_url = f"/snapshots/avatars/{avatar_filename}"
-
-            # Create Person record
+            # Create Person record first
             person_id = str(uuid4())
             person = Person(
                 id=person_id,
@@ -185,60 +176,135 @@ def seed_teachers():
                 role=teacher["role"],
                 department=teacher.get("department", "CSE"),
                 email=teacher.get("email"),
-                avatar_url=avatar_url,
+                avatar_url=None,  # Will be set after processing images
                 is_active=True,
                 created_at=datetime.now(timezone.utc),
                 updated_at=datetime.now(timezone.utc),
             )
             db.add(person)
-            db.flush()  # Get person into session before FK reference
+            db.flush()
 
-            # Create FaceEncoding record
-            from app.vision.recognizer import serialize_encoding
-            from app.vision.quality import FaceQualityGate
+            # Process each image → create one FaceEncoding per image
+            best_quality = -1
+            best_image = None
+            enc_count = 0
 
-            # Assess quality (relaxed for studio portraits)
-            quality_gate = FaceQualityGate(min_blur=30.0, min_size=40)
-            bbox_i = face.bbox.astype(int)
-            face_crop = image[max(0, bbox_i[1]):bbox_i[3], max(0, bbox_i[0]):bbox_i[2]]
-            landmarks = face.kps if hasattr(face, 'kps') and face.kps is not None else None
-            qr = quality_gate.assess(
-                face_crop=face_crop,
-                face_location=(bbox_i[1], bbox_i[2], bbox_i[3], bbox_i[0]),
-                det_score=float(face.det_score) if hasattr(face, 'det_score') else 1.0,
-                landmarks=landmarks,
-            )
+            for img_path in images:
+                filename = os.path.basename(img_path)
+                image = cv2.imread(img_path)
+                if image is None:
+                    print(f"     ❌ Failed to read: {filename}")
+                    continue
 
-            enc = FaceEncoding(
-                id=str(uuid4()),
-                person_id=person_id,
-                encoding_data=serialize_encoding(encoding),  # raw float32 bytes
-                source_image=filename,
-                quality=qr.quality_score,
-                yaw=qr.metrics.get('yaw'),
-                pitch=qr.metrics.get('pitch'),
-                roll=qr.metrics.get('roll'),
-                det_score=qr.metrics.get('det_score'),
-                blur_score=qr.metrics.get('blur_score'),
-                lighting=qr.metrics.get('lighting'),
-                model_version="arcface_r50",
-                created_at=datetime.now(timezone.utc),
-            )
-            db.add(enc)
+                # Detect faces (BGR — InsightFace handles internally)
+                faces = app.get(image)
 
-            print(f"  ✅ Created: {teacher['name']} → id={person_id[:12]}...")
-            print(f"     Role: {teacher['role']}, Dept: {teacher.get('department', 'CSE')}")
-            print(f"     Avatar: {avatar_url}")
-            created += 1
+                if not faces:
+                    print(f"     ❌ No face detected in {filename}")
+                    continue
+
+                if len(faces) > 1:
+                    print(f"     ⚠️  {len(faces)} faces in {filename}, using largest")
+                    faces = sorted(
+                        faces,
+                        key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]),
+                        reverse=True,
+                    )
+
+                face = faces[0]
+
+                if face.embedding is None:
+                    print(f"     ❌ No embedding for {filename}")
+                    continue
+
+                encoding = face.embedding  # 512-d numpy array
+
+                # Quality assessment
+                from app.vision.recognizer import serialize_encoding
+                from app.vision.quality import FaceQualityGate
+
+                quality_gate = FaceQualityGate(min_blur=30.0, min_size=40)
+                bbox_i = face.bbox.astype(int)
+                face_crop = image[max(0, bbox_i[1]):bbox_i[3], max(0, bbox_i[0]):bbox_i[2]]
+                landmarks = face.kps if hasattr(face, 'kps') and face.kps is not None else None
+                qr = quality_gate.assess(
+                    face_crop=face_crop,
+                    face_location=(bbox_i[1], bbox_i[2], bbox_i[3], bbox_i[0]),
+                    det_score=float(face.det_score) if hasattr(face, 'det_score') else 1.0,
+                    landmarks=landmarks,
+                )
+
+                # Save face crop image to snapshots/faces/ for frontend display
+                enc_id = str(uuid4())
+                crop_filename = f"teacher_{teacher['prefix']}_{enc_count + 1}.jpg"
+                crop_dir = os.path.join(settings.SNAPSHOT_DIR, "faces")
+                os.makedirs(crop_dir, exist_ok=True)
+                crop_path = os.path.join(crop_dir, crop_filename)
+                cv2.imwrite(crop_path, face_crop)
+                source_image_url = f"/snapshots/faces/{crop_filename}"
+
+                # Create FaceEncoding record
+                enc = FaceEncoding(
+                    id=enc_id,
+                    person_id=person_id,
+                    encoding_data=serialize_encoding(encoding),
+                    source_image=source_image_url,
+                    quality=qr.quality_score,
+                    yaw=qr.metrics.get('yaw'),
+                    pitch=qr.metrics.get('pitch'),
+                    roll=qr.metrics.get('roll'),
+                    det_score=qr.metrics.get('det_score'),
+                    blur_score=qr.metrics.get('blur_score'),
+                    lighting=qr.metrics.get('lighting'),
+                    model_version="arcface_r50",
+                    created_at=datetime.now(timezone.utc),
+                )
+                db.add(enc)
+                enc_count += 1
+
+                norm = np.linalg.norm(encoding)
+                print(f"     ✅ {filename}: quality={qr.quality_score:.2f}, "
+                      f"norm={norm:.2f}, "
+                      f"yaw={qr.metrics.get('yaw', 0):.1f}°, "
+                      f"det={qr.metrics.get('det_score', 0):.2f}")
+
+                # Track best quality image for avatar
+                if qr.quality_score > best_quality:
+                    best_quality = qr.quality_score
+                    best_image = img_path
+
+            # Save avatar from best quality image
+            if best_image is not None:
+                avatar_filename = f"teacher_{teacher['name'].replace(' ', '_')}.jpg"
+                avatar_dir = os.path.join(settings.SNAPSHOT_DIR, "avatars")
+                os.makedirs(avatar_dir, exist_ok=True)
+                avatar_path = os.path.join(avatar_dir, avatar_filename)
+                shutil.copy2(best_image, avatar_path)
+                avatar_url = f"/snapshots/avatars/{avatar_filename}"
+                person.avatar_url = avatar_url
+                print(f"   📷 Avatar: {avatar_url} (quality={best_quality:.2f})")
+
+            if enc_count > 0:
+                print(f"   ✅ Created {teacher['name']}: {enc_count} embeddings → id={person_id[:12]}...")
+                persons_created += 1
+                encodings_created += enc_count
+            else:
+                print(f"   ❌ No valid embeddings for {teacher['name']}, removing person record")
+                db.delete(person)
+                errors += 1
 
         db.commit()
         print()
         print("=" * 60)
-        print(f"  RESULTS: {created} created, {skipped} skipped, {errors} errors")
+        print(f"  RESULTS")
+        print(f"    Persons created   : {persons_created}")
+        print(f"    Embeddings stored  : {encodings_created}")
+        print(f"    Skipped (existing) : {skipped}")
+        print(f"    Errors             : {errors}")
         print("=" * 60)
 
         # Refresh encoding cache in active pipelines
-        if created > 0:
+        if encodings_created > 0:
             try:
                 from app.vision.camera_worker import camera_manager
                 from app.services.person_service import PersonService

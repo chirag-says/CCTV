@@ -224,6 +224,17 @@ class VisionPipeline:
         self._safety_check_interval = 1.0  # Run crowd/loiter checks every 1s
         self._last_face_draws: List[Tuple] = [] # Cache for drawing face boxes on skipped frames
 
+        # ── Streaming Resolution ──────────────────────────────────────────────
+        # AI detection runs on full 4MP for accuracy.
+        # Drawing + JPEG encoding happen on a single 1080p resize.
+        # This saves ~13ms/frame (no redundant resize in JPEG thread)
+        # and reduces per-frame memory from 11.7MB to 6.2MB.
+        self._stream_max_w = 1920
+        self._stream_max_h = 1080
+        self._stream_scale_x = 1.0  # Updated when first frame arrives
+        self._stream_scale_y = 1.0
+        self._stream_res_initialized = False
+
         # ── Threaded Frame Grabber ────────────────────────────────────────────
         # Solves the OpenCV buffer-lag problem: cv2.VideoCapture buffers frames
         # internally, and many backends (DSHOW on Windows) ignore BUFFERSIZE=1.
@@ -393,6 +404,27 @@ class VisionPipeline:
         # Instead, we copy lazily inside _handle_unknown_face, save_snapshot, etc.
         clean_frame = frame  # Alias — only copied when needed for snapshots
 
+        # ── Compute streaming scale factors (once per stream) ─────────
+        if not self._stream_res_initialized:
+            h, w = frame.shape[:2]
+            if w > self._stream_max_w or h > self._stream_max_h:
+                scale = min(self._stream_max_w / w, self._stream_max_h / h)
+                self._stream_scale_x = scale
+                self._stream_scale_y = scale
+            else:
+                self._stream_scale_x = 1.0
+                self._stream_scale_y = 1.0
+            self._stream_res_initialized = True
+            logger.info(
+                f"[{self.camera_id}] Stream scale: {w}x{h} -> "
+                f"{int(w * self._stream_scale_x)}x{int(h * self._stream_scale_y)} "
+                f"(scale={self._stream_scale_x:.3f})"
+            )
+
+        # ── Create 1080p display frame (one resize per frame) ─────────
+        from app.utils.image_utils import resize_frame
+        display_frame = resize_frame(frame, self._stream_max_w, self._stream_max_h)
+
         # Ã¢â€â‚¬Ã¢â€â‚¬ HAZARD DETECTION (runs on its own schedule) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
         # Submit frame to hazard detector Ã¢â‚¬â€ it internally throttles
         # to every Nth frame and runs inference on a background thread.
@@ -407,18 +439,18 @@ class VisionPipeline:
         # Frame skip for performance (load-tier override or config default)
         effective_skip = self._frame_skip_override or settings.FRAME_SKIP
         if self._frame_count % effective_skip != 0:
-            # Draw previously cached boxes so they don't flicker
+            # Draw previously cached boxes on the display frame
             for draw_args in self._last_face_draws:
-                self._draw_box(frame, *draw_args)
-            self._last_frame = frame
+                self._draw_box(display_frame, *draw_args)
+            self._last_frame = display_frame
             profiler.record_frame_skipped()
-            return frame
+            return display_frame
 
         # Clear cache for this new detection frame
         self._last_face_draws.clear()
         profiler.record_detection_frame()
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ DETECTION Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+        # ── DETECTION ────────────────────────────────────────────────────────────────
         # Detect faces AND get embeddings in a SINGLE insightface pass
         # (sub-stage timing: scrfd_preprocess/scrfd_inference/scrfd_postprocess
         #  is recorded inside detector.detect_faces_with_embeddings)
@@ -430,8 +462,8 @@ class VisionPipeline:
             self._run_safety_analytics()
             self._check_periodic_exits()
             self._update_fps()
-            self._last_frame = frame
-            return frame
+            self._last_frame = display_frame
+            return display_frame
 
         logger.debug(f"Camera {self.camera_id}: Detected {len(face_locations)} face(s)")
 
@@ -535,6 +567,8 @@ class VisionPipeline:
                     # Update recognition cache on the track
                     track.recognition_confidence = result.confidence
                     track.recognition_time = time.time()
+                    track.reset_fail_streak()
+                    track.record_distance(result.distance)
                     if result.confidence >= self._recognition_lock_confidence:
                         track.recognition_locked = True
 
@@ -578,8 +612,91 @@ class VisionPipeline:
                             location=location,
                         )
                 else:
-                    boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
-                    self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid)
+                    # ── HYSTERESIS: don't immediately drop a known identity ──
+                    # If the track already has a person_id and the failure is
+                    # borderline (gray zone), keep the previous identity for
+                    # up to IDENTITY_GRACE_FRAMES consecutive failures.
+                    # This eliminates Known→Unknown→Known flicker caused by
+                    # ArcFace distance oscillating around the threshold.
+                    track.record_distance(result.distance)
+
+                    # Temporal voting rescue: if the rolling average distance
+                    # is below threshold even though this single frame missed,
+                    # treat it as a match (the person IS known on average).
+                    temporal_rescue = False
+                    if (track.person_id and track.person_name
+                            and len(track._distance_history) >= 3):
+                        # Use the balanced threshold for temporal comparison
+                        temporal_threshold = settings.FACE_MATCH_BALANCED
+                        if track.temporal_avg_distance <= temporal_threshold:
+                            temporal_rescue = True
+                            logger.info(
+                                f"🔄 TEMPORAL RESCUE: {track.person_name} "
+                                f"single_dist={result.distance:.4f} > threshold, "
+                                f"but avg={track.temporal_avg_distance:.4f} <= "
+                                f"{temporal_threshold} (window={len(track._distance_history)})"
+                            )
+
+                    if temporal_rescue:
+                        # Temporal average says this person is known — keep identity
+                        track.reset_fail_streak()
+                        track.recognition_time = time.time()
+                        boxes_to_draw.append((location, track.person_name, (0, 200, 0), track.recognition_confidence))
+                        self.tracker.on_detection(
+                            person_id=track.person_id,
+                            person_name=track.person_name,
+                            camera_id=self.camera_id,
+                            confidence=track.recognition_confidence,
+                            centroid=centroid,
+                        )
+                    elif track.person_id and track.person_name and result.in_gray_zone:
+                        # Gray zone: borderline failure — apply hysteresis
+                        track.identity_fail_streak += 1
+                        if track.identity_fail_streak < settings.IDENTITY_GRACE_FRAMES:
+                            # Keep previous identity (grace period)
+                            logger.info(
+                                f"⏳ HYSTERESIS: keeping {track.person_name} "
+                                f"(T{track.track_id}) despite distance={result.distance:.4f}, "
+                                f"fail {track.identity_fail_streak}/{settings.IDENTITY_GRACE_FRAMES}, "
+                                f"avg={track.temporal_avg_distance:.4f}"
+                            )
+                            # Show with slightly dimmer green to indicate borderline
+                            boxes_to_draw.append((location, track.person_name, (0, 200, 0), track.recognition_confidence))
+                            self.tracker.on_detection(
+                                person_id=track.person_id,
+                                person_name=track.person_name,
+                                camera_id=self.camera_id,
+                                confidence=track.recognition_confidence,
+                                centroid=centroid,
+                            )
+                        else:
+                            # Exhausted grace period — drop identity
+                            logger.info(
+                                f"🚫 HYSTERESIS EXPIRED: dropping {track.person_name} "
+                                f"(T{track.track_id}) after {track.identity_fail_streak} "
+                                f"consecutive gray-zone failures"
+                            )
+                            track.person_id = None
+                            track.person_name = None
+                            track.recognition_locked = False
+                            track.identity_fail_streak = 0
+                            boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
+                            self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid)
+                    else:
+                        # Definitive failure (distance far above threshold, or
+                        # no previous identity) — immediate unknown
+                        if track.person_id and track.person_name:
+                            logger.info(
+                                f"🚫 DEFINITE MISS: dropping {track.person_name} "
+                                f"(T{track.track_id}), distance={result.distance:.4f} "
+                                f"above gray ceiling"
+                            )
+                            track.person_id = None
+                            track.person_name = None
+                            track.recognition_locked = False
+                            track.identity_fail_streak = 0
+                        boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
+                        self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid)
             elif not needs_recognition and track.person_id and track.person_name:
                 # Reuse existing identity from ByteTrack cache (skip ArcFace)
                 profiler.record_cache_hit()
@@ -597,15 +714,28 @@ class VisionPipeline:
                 color = (0, 200, 0) if track.person_name else (255, 165, 0)
                 boxes_to_draw.append((location, label, color, 0.0))
 
-        # Cache boxes for frame skip & draw them
-        self._last_face_draws = boxes_to_draw
+        # ── Scale bounding boxes to display resolution & draw ─────
+        # boxes_to_draw contains coords in full 4MP space.
+        # Scale them to 1080p display_frame coords for drawing.
+        sx = self._stream_scale_x
+        sy = self._stream_scale_y
+        scaled_boxes = []
+        for (location, label, color, conf) in boxes_to_draw:
+            top, right, bottom, left = location
+            scaled_loc = (
+                int(top * sy), int(right * sx),
+                int(bottom * sy), int(left * sx),
+            )
+            scaled_boxes.append((scaled_loc, label, color, conf))
+
+        # Cache SCALED boxes for frame-skip redraw
+        self._last_face_draws = scaled_boxes
         with profiler.measure("drawing"):
-            for draw_args in boxes_to_draw:
-                self._draw_box(frame, *draw_args)
+            for draw_args in scaled_boxes:
+                self._draw_box(display_frame, *draw_args)
 
         # ── YOLO-ASSISTED DETECTION (adaptive trigger) ────────────
-        # Runs when detection needs help, not on a fixed timer.
-        # See §10 of the architecture plan.
+        # Runs on full-res clean_frame for maximum detection accuracy.
         if self._should_run_yolo_assist(active_tracks, face_locations):
             self._last_yolo_assist_check = time.time()
             try:
@@ -628,8 +758,8 @@ class VisionPipeline:
         self._check_periodic_exits()
         self._update_fps()
 
-        self._last_frame = frame
-        return frame
+        self._last_frame = display_frame
+        return display_frame
 
     def _should_recognize(self, track: STrack) -> bool:
         """
@@ -1560,6 +1690,18 @@ class VisionPipeline:
         clean_frame_for_face = frame.copy()
         clean_frame = clean_frame_for_face
 
+        # ── Compute streaming scale factors (once per stream) ─────────
+        if not self._stream_res_initialized:
+            h, w = frame.shape[:2]
+            if w > self._stream_max_w or h > self._stream_max_h:
+                scale = min(self._stream_max_w / w, self._stream_max_h / h)
+                self._stream_scale_x = scale
+                self._stream_scale_y = scale
+            else:
+                self._stream_scale_x = 1.0
+                self._stream_scale_y = 1.0
+            self._stream_res_initialized = True
+
         # Hazard detection (if enabled)
         if self.hazard_detector:
              try:
@@ -1590,12 +1732,14 @@ class VisionPipeline:
 
         # ── 4. Face Recognition & Tracking ──
         if self._frame_count % settings.FRAME_SKIP != 0:
-            # Draw previously cached boxes so they don't flicker
+            # Create display frame and draw cached boxes on it
+            from app.utils.image_utils import resize_frame
+            display_frame = resize_frame(frame, self._stream_max_w, self._stream_max_h)
             for draw_args in self._last_face_draws:
-                self._draw_box(frame, *draw_args)
+                self._draw_box(display_frame, *draw_args)
             self._update_fps()
-            self._last_frame = frame
-            return frame
+            self._last_frame = display_frame
+            return display_frame
 
         # Clear cache for this new detection frame
         self._last_face_draws.clear()
@@ -1604,8 +1748,10 @@ class VisionPipeline:
             self._run_safety_analytics()
             self._check_periodic_exits()
             self._update_fps()
-            self._last_frame = frame
-            return frame
+            from app.utils.image_utils import resize_frame
+            display_frame = resize_frame(frame, self._stream_max_w, self._stream_max_h)
+            self._last_frame = display_frame
+            return display_frame
 
         # Collect all face boxes to draw
         boxes_to_draw = []
@@ -1679,21 +1825,31 @@ class VisionPipeline:
         if run_reid:
             self._last_reid_frame = self._frame_count
 
-        # Cache boxes for frame skip & draw them
-        self._last_face_draws = boxes_to_draw
-        for draw_args in boxes_to_draw:
-            self._draw_box(frame, *draw_args)
+        # Scale boxes to display resolution and draw on display frame
+        sx = self._stream_scale_x
+        sy = self._stream_scale_y
+        scaled_boxes = []
+        for (location, label, color, conf) in boxes_to_draw:
+            top, right, bottom, left = location
+            scaled_loc = (
+                int(top * sy), int(right * sx),
+                int(bottom * sy), int(left * sx),
+            )
+            scaled_boxes.append((scaled_loc, label, color, conf))
 
-        # Ã¢â€â‚¬Ã¢â€â‚¬ YOLO-ASSISTED DETECTION (for HYBRID mode) Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
-        # Reuse TrafficMonitor's cached person detections (zero inference cost).
-        # Throttled to every N seconds to avoid expensive crop-face-detection.
+        self._last_face_draws = scaled_boxes
+
+        from app.utils.image_utils import resize_frame
+        display_frame = resize_frame(frame, self._stream_max_w, self._stream_max_h)
+        for draw_args in scaled_boxes:
+            self._draw_box(display_frame, *draw_args)
+
+        # YOLO-assisted detection (for HYBRID mode)
         now_assist = time.time()
         if now_assist - self._last_yolo_assist_check >= self._yolo_assist_interval:
             self._last_yolo_assist_check = now_assist
             try:
                 yolo_persons = self._get_yolo_person_detections_from_traffic()
-                # Fallback: if traffic backend (e.g. Roboflow) doesn't detect persons,
-                # run direct YOLO person detection for body-level person finding
                 if not yolo_persons:
                     yolo_persons = self._get_yolo_person_detections(clean_frame)
                 if yolo_persons:
@@ -1709,8 +1865,8 @@ class VisionPipeline:
         self._run_safety_analytics()
         self._check_periodic_exits()
         self._update_fps()
-        self._last_frame = frame
-        return frame
+        self._last_frame = display_frame
+        return display_frame
 
     def _process_frame_traffic_logic(self, frame: np.ndarray) -> np.ndarray:
         """Helper to run traffic logic and return modified frame."""
