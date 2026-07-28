@@ -192,10 +192,16 @@ async def stop_camera(
 # ── MJPEG Streaming (no auth required for <img> tags) ─────────
 
 @router.get("/{camera_id}/feed")
-async def camera_feed(camera_id: str):
+async def camera_feed(
+    camera_id: str,
+    current_user: dict = Depends(get_current_user),
+):
     """
-    HTTP MJPEG feed / Snapshot endpoint.
-    Returns the latest pre-encoded JPEG frame.
+    HTTP snapshot endpoint — returns the latest pre-encoded JPEG frame.
+
+    Requires authentication. This previously had no auth at all and sent
+    `Access-Control-Allow-Origin: *`, so any website could embed a live
+    annotated camera feed from this deployment.
     """
     from fastapi.responses import Response
 
@@ -217,7 +223,6 @@ async def camera_feed(camera_id: str):
             "Cache-Control": "no-cache, no-store, must-revalidate",
             "Pragma": "no-cache",
             "Expires": "0",
-            "Access-Control-Allow-Origin": "*",
         },
     )
 
@@ -234,19 +239,14 @@ async def camera_stream(
     Reads pre-encoded JPEG bytes from the pipeline (encoded in the worker thread).
     Also supports browser camera sessions directly.
     
-    Accepts optional JWT token via query parameter for authentication:
+    Requires a JWT via query parameter:
       ws://host/api/cameras/{id}/stream?token=<jwt>
     """
-    # Optional: validate JWT token from query param
-    token = websocket.query_params.get("token")
-    if token:
-        try:
-            from app.core.security import verify_token
-            verify_token(token)
-        except Exception:
-            await websocket.close(code=4001, reason="Invalid token")
-            return
-    
+    from app.core.security import require_ws_token
+
+    if await require_ws_token(websocket) is None:
+        return  # already closed with 4001
+
     await websocket.accept()
     logger.info(f"Stream WebSocket connected for camera: {camera_id}")
 

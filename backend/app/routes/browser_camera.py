@@ -13,7 +13,9 @@ from typing import Dict, Optional
 
 import cv2
 import numpy as np
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, WebSocket, WebSocketDisconnect
+
+from app.core.security import get_current_user, require_ws_token
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +62,14 @@ class BrowserCameraSession:
 
 
 @router.get("/sessions")
-async def list_sessions():
-    """List all active browser camera sessions."""
+async def list_sessions(current_user: dict = Depends(get_current_user)):
+    """
+    List all active browser camera sessions.
+
+    Requires authentication: this enumerates live session IDs, which are the
+    handles needed to view (or, until the ingest endpoint is hardened, spoof)
+    a remote camera.
+    """
     return {
         "sessions": [s.status for s in _browser_sessions.values() if s.is_active],
         "count": sum(1 for s in _browser_sessions.values() if s.is_active),
@@ -77,6 +85,26 @@ async def browser_camera_stream(websocket: WebSocket, session_id: str):
     The server decodes them and makes them available for viewing
     via the /feed endpoint and for AI processing.
     """
+    ############################################################################
+    # SECURITY -- KNOWN OPEN HOLE, DELIBERATELY NOT CLOSED IN THIS COMMIT
+    #
+    # This endpoint is UNAUTHENTICATED. Anyone who can reach the port may:
+    #   1. Inject arbitrary frames into the vision pipeline, fabricating
+    #      detection events in the audit log that the record is meant to be
+    #      trusted for; and
+    #   2. Cause a full VisionPipeline (3 threads + model handles) to be
+    #      spawned per connection, bounded only by MAX_CAMERAS.
+    #
+    # It is NOT fixed here because the phone that streams from /share-camera
+    # is unauthenticated BY DESIGN -- a user opens a share link, they do not
+    # log in. Requiring a normal JWT would simply break that flow.
+    #
+    # The correct fix is a scoped, short-TTL share token:
+    #   POST /api/browser-cam/sessions  (authenticated) -> {session_id, share_token}
+    #   the share URL carries the token, and this endpoint verifies it
+    # That changes the share UX, so it needs a product decision first.
+    # Tracked as Phase 0 item E.
+    ############################################################################
     await websocket.accept()
 
     # Get label from query params
@@ -114,8 +142,11 @@ async def browser_camera_stream(websocket: WebSocket, session_id: str):
 
 
 @router.get("/feed/{session_id}")
-async def browser_camera_feed(session_id: str):
-    """Get the latest JPEG frame from a browser camera."""
+async def browser_camera_feed(
+    session_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Get the latest JPEG frame from a browser camera. Requires authentication."""
     from fastapi.responses import Response
 
     session = _browser_sessions.get(session_id)
@@ -137,7 +168,12 @@ async def browser_camera_view(websocket: WebSocket, session_id: str):
     """
     WebSocket endpoint for VIEWING a browser camera stream.
     Sends JPEG frames at ~15fps to any connected viewer.
+
+    Requires a JWT via query parameter: ?token=<jwt>
     """
+    if await require_ws_token(websocket) is None:
+        return  # already closed with 4001
+
     await websocket.accept()
 
     session = _browser_sessions.get(session_id)

@@ -208,7 +208,16 @@ async def analysis_progress_stream(
     """
     WebSocket endpoint for real-time analysis progress updates.
     Sends JSON messages with progress percentage and status.
+
+    Requires a JWT via query parameter: ?token=<jwt>
+    The final message includes the analysis summary, which can name recognised
+    persons, so this is not merely progress telemetry.
     """
+    from app.core.security import require_ws_token
+
+    if await require_ws_token(websocket) is None:
+        return  # already closed with 4001
+
     await websocket.accept()
     logger.info(f"Analysis progress WebSocket connected: {job_id}")
 

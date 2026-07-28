@@ -272,24 +272,27 @@ class ApiClient {
   }
 
   // ── WebSocket ─────────────────────────────────────────────
-  connectLiveEvents(onMessage, onError) {
-    const wsUrl = this.baseUrl.replace('http', 'ws');
-    const ws = new WebSocket(`${wsUrl}/api/events/live`);
-    ws.onmessage = (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        onMessage(data);
-      } catch (e) {
-        console.error('Failed to parse WS message:', e);
-      }
-    };
-    ws.onerror = onError || console.error;
-    return ws;
+
+  /**
+   * Build an authenticated WebSocket URL.
+   *
+   * The server now REQUIRES ?token= on /api/events/live and
+   * /api/cameras/{id}/stream (it previously validated the token only when one
+   * happened to be present, so omitting it bypassed auth entirely).
+   *
+   * Browsers cannot set an Authorization header on a WebSocket handshake, so
+   * the JWT travels as a query parameter. Use TLS in production -- query
+   * strings are visible to proxies and land in access logs.
+   */
+  wsUrl(path) {
+    const base = this.baseUrl.replace(/^http/, 'ws');
+    const token = this.getToken();
+    const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+    return `${base}${path}${qs}`;
   }
 
   connectCameraStream(cameraId, onFrame, onError) {
-    const wsUrl = this.baseUrl.replace('http', 'ws');
-    const ws = new WebSocket(`${wsUrl}/api/cameras/${cameraId}/stream`);
+    const ws = new WebSocket(this.wsUrl(`/api/cameras/${cameraId}/stream`));
     ws.binaryType = 'arraybuffer';
     ws.onmessage = (event) => {
       // Binary JPEG frame received
@@ -317,8 +320,7 @@ class ApiClient {
    * Receives entry/exit/detection/unknown events from all cameras.
    */
   connectLiveEvents(onEvent, onError) {
-    const wsUrl = this.baseUrl.replace(/^http/, 'ws') + '/api/events/live';
-    const ws = new WebSocket(wsUrl);
+    const ws = new WebSocket(this.wsUrl('/api/events/live'));
 
     ws.onmessage = (event) => {
       try {
@@ -401,8 +403,7 @@ class ApiClient {
   }
 
   connectAnalysisStream(jobId, onMessage, onError) {
-    const wsUrl = this.baseUrl.replace(/^http/, 'ws');
-    const ws = new WebSocket(`${wsUrl}/api/video-analysis/${jobId}/stream`);
+    const ws = new WebSocket(this.wsUrl(`/api/video-analysis/${jobId}/stream`));
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);

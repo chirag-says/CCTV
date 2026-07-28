@@ -5,7 +5,7 @@ JWT token generation, verification, and password hashing utilities.
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
-from fastapi import HTTPException, status, Depends
+from fastapi import HTTPException, status, Depends, WebSocket
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from app.config import settings
 import logging
@@ -111,8 +111,35 @@ def verify_token(token: str) -> Dict[str, Any]:
     """
     Verify a JWT token string directly (used by WebSocket handlers
     where standard HTTP Bearer auth isn't available).
-    
+
     Raises JWTError or HTTPException on invalid/expired tokens.
     Returns the decoded payload on success.
     """
     return decode_access_token(token)
+
+
+async def require_ws_token(websocket: WebSocket) -> Optional[Dict[str, Any]]:
+    """
+    Authenticate a WebSocket handshake from its ?token= query parameter.
+
+    FastAPI's HTTP Bearer dependencies do not apply to WebSocket handshakes, so
+    the JWT is passed as a query parameter instead. This helper makes the check
+    MANDATORY -- a missing token is rejected exactly like an invalid one.
+
+    Previously each WS route validated the token only `if token:`, which meant
+    omitting it entirely bypassed authentication. Callers must treat a None
+    return as "connection already closed, return immediately".
+
+    Returns:
+        The decoded JWT payload, or None if the socket was rejected.
+    """
+    token = websocket.query_params.get("token")
+    if not token:
+        # Closed before accept() -> the handshake is refused outright.
+        await websocket.close(code=4001, reason="Authentication required")
+        return None
+    try:
+        return decode_access_token(token)
+    except Exception:
+        await websocket.close(code=4001, reason="Invalid or expired token")
+        return None

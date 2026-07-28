@@ -599,8 +599,9 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
             if (!mounted) return;
 
             try {
-                const wsUrl = API_BASE.replace(/^http/, 'ws');
-                ws = new WebSocket(`${wsUrl}/api/cameras/${camera.id}/stream`);
+                // Use the shared helper so the JWT is attached -- the server
+                // now rejects this socket with 4001 if ?token= is missing.
+                ws = new WebSocket(api.wsUrl(`/api/cameras/${camera.id}/stream`));
                 ws.binaryType = 'arraybuffer';
 
                 ws.onopen = () => {

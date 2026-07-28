@@ -190,8 +190,9 @@ export default function VideoAnalysisPage() {
 
             // Try WebSocket for real-time progress
             try {
-                const wsUrl = API_BASE.replace(/^http/, 'ws');
-                const ws = new WebSocket(`${wsUrl}/api/video-analysis/${jobId}/stream`);
+                // Use the shared helper so the JWT is attached -- the server
+                // now rejects this socket with 4001 if ?token= is missing.
+                const ws = new WebSocket(api.wsUrl(`/api/video-analysis/${jobId}/stream`));
                 wsRef.current = ws;
 
                 ws.onmessage = (event) => {
