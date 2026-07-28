@@ -739,7 +739,7 @@ class VisionPipeline:
             # Tier 2: Heavy load
             self._frame_skip_override = max(settings.FRAME_SKIP, 4)
             self._yolo_assist_min_interval = 3.0
-            self._jpeg_quality_override = 45
+            self._jpeg_quality_override = 65
             self._skip_low_priority = True
         elif n >= 5:
             # Tier 1: Moderate load

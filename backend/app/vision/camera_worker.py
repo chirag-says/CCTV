@@ -173,11 +173,12 @@ class CameraWorker:
             try:
                 with profiler.measure("jpeg_encode"):
                     # Resize for streaming (detection runs on full resolution)
-                    small = resize_frame(frame, max_width=960, max_height=540)
+                    # 1920×1080 retains much more detail from the 4MP source
+                    small = resize_frame(frame, max_width=1920, max_height=1080)
                     # Record raw frame size for compression ratio
                     profiler.record_raw_frame_size(small.nbytes)
                     # Use load-tier quality override if pipeline has one
-                    jpeg_q = getattr(self.pipeline, '_jpeg_quality_override', None) or 65
+                    jpeg_q = getattr(self.pipeline, '_jpeg_quality_override', None) or 80
                     jpeg_bytes = frame_to_jpeg_bytes(small, quality=jpeg_q)
                     self.pipeline._last_jpeg = jpeg_bytes
 
