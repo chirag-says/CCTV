@@ -207,6 +207,10 @@ class ByteTracker:
         self.track_buffer = track_buffer or settings.BYTETRACK_TRACK_BUFFER
         self.match_thresh = match_thresh or settings.BYTETRACK_MATCH_THRESH
 
+        # Grace period: how many detection-frames a tracked face can be
+        # absent before it moves to "lost". Configurable via settings.
+        self.tracked_grace = getattr(settings, 'BYTETRACK_TRACKED_GRACE', 2)
+
         # Track management
         self._tracked_stracks: List[STrack] = []  # Active tracks
         self._lost_stracks: List[STrack] = []  # Recently lost tracks
@@ -217,7 +221,8 @@ class ByteTracker:
 
         logger.info(
             f"ByteTracker initialized: thresh={self.track_thresh}, "
-            f"buffer={self.track_buffer}, match={self.match_thresh}"
+            f"buffer={self.track_buffer}, match={self.match_thresh}, "
+            f"grace={self.tracked_grace}"
         )
 
     def update(
@@ -245,7 +250,7 @@ class ByteTracker:
             # Move timed-out tracked stracks to lost
             new_tracked = []
             for track in self._tracked_stracks:
-                if self._frame_id - track.frame_id <= 2:
+                if self._frame_id - track.frame_id <= self.tracked_grace:
                     new_tracked.append(track)
                 else:
                     self._lost_stracks.append(track)
@@ -342,12 +347,54 @@ class ByteTracker:
                 carried_person_name = None
                 best_iou = 0.3  # Minimum IoU to consider a match
 
+                # ── Carry-over instrumentation (expanded) ────────
+                # Answers: Why was this candidate selected? Why only one?
+                # Was the old track genuinely far away, or was the pool empty?
+                best_candidate_info = None
+                candidates_checked = 0
+                candidates_with_id = 0
+                candidates_within_500px = []  # All candidates close enough to plausibly be the same person
+                total_lost = len(self._lost_stracks)
+                total_removed_checked = min(100, len(self._removed_stracks))
+
                 for old_track in (self._lost_stracks + self._removed_stracks[-100:]):
+                    # Count all tracks in the search window (even without person_id)
+                    if (self._frame_id - old_track.frame_id) <= self.track_buffer:
+                        if old_track.person_id:
+                            candidates_with_id += 1
+
                     if old_track.person_id and (self._frame_id - old_track.frame_id) <= self.track_buffer:
+                        candidates_checked += 1
                         iou_val = _iou_batch(
                             old_track.bbox.reshape(1, 4),
                             det_bbox.reshape(1, 4),
                         )[0, 0]
+
+                        # Centroid distance (for diagnostics)
+                        old_cx = (old_track.bbox[0] + old_track.bbox[2]) / 2
+                        old_cy = (old_track.bbox[1] + old_track.bbox[3]) / 2
+                        new_cx = (det_bbox[0] + det_bbox[2]) / 2
+                        new_cy = (det_bbox[1] + det_bbox[3]) / 2
+                        centroid_dist = ((old_cx - new_cx)**2 + (old_cy - new_cy)**2) ** 0.5
+
+                        candidate_info = {
+                            "track_id": old_track.track_id,
+                            "person_name": old_track.person_name,
+                            "iou": iou_val,
+                            "centroid_dist": centroid_dist,
+                            "old_bbox": old_track.bbox.tolist(),
+                            "velocity": old_track._velocity.tolist() if old_track._velocity is not None else None,
+                            "frames_lost": self._frame_id - old_track.frame_id,
+                        }
+
+                        # Collect all "nearby" candidates for the log
+                        if centroid_dist < 500:
+                            candidates_within_500px.append(candidate_info)
+
+                        # Track the best candidate overall
+                        if best_candidate_info is None or iou_val > best_candidate_info["iou"]:
+                            best_candidate_info = candidate_info
+
                         if iou_val > best_iou:
                             best_iou = iou_val
                             carried_person_id = old_track.person_id
@@ -374,10 +421,46 @@ class ByteTracker:
                 except Exception:
                     pass
 
+                # ── Carry-over diagnostic logging ─────────────────
                 if carried_person_id:
                     logger.debug(
                         f"ByteTrack: carried identity {carried_person_name} "
                         f"to new track {new_track.track_id} (IoU={best_iou:.2f})"
+                    )
+                elif candidates_checked > 0 and best_candidate_info:
+                    # Classify: genuinely new person vs candidate selection failure
+                    info = best_candidate_info
+                    nearby_count = len(candidates_within_500px)
+                    if nearby_count == 0:
+                        failure_class = "NEW_PERSON (no tracks within 500px)"
+                    elif info["iou"] > 0:
+                        failure_class = f"LOW_IOU (best={info['iou']:.3f}, need >0.3)"
+                    else:
+                        failure_class = "ZERO_OVERLAP"
+
+                    # Log pool state + best candidate + all nearby candidates
+                    nearby_summary = "; ".join(
+                        f"T{c['track_id']}({c['person_name']})@{c['centroid_dist']:.0f}px/iou={c['iou']:.3f}"
+                        for c in candidates_within_500px[:5]  # Cap at 5 to avoid log spam
+                    ) or "none"
+
+                    logger.info(
+                        f"ByteTrack CARRYOVER FAILED | "
+                        f"class={failure_class} | "
+                        f"new_track={new_track.track_id} det_bbox={det_bbox.tolist()} | "
+                        f"pool: lost={total_lost} removed_checked={total_removed_checked} "
+                        f"with_id={candidates_with_id} checked={candidates_checked} | "
+                        f"best: T{info['track_id']}({info['person_name']}) "
+                        f"iou={info['iou']:.3f} dist={info['centroid_dist']:.0f}px "
+                        f"frames_lost={info['frames_lost']} vel={info['velocity']} | "
+                        f"nearby(<500px): [{nearby_summary}]"
+                    )
+                elif candidates_checked == 0:
+                    # No candidates at all — log pool state for diagnosis
+                    logger.debug(
+                        f"ByteTrack: new track {new_track.track_id} — "
+                        f"no carry-over candidates (lost={total_lost}, "
+                        f"removed_checked={total_removed_checked}, with_id=0)"
                     )
 
         # Update state

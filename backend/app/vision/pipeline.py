@@ -127,7 +127,13 @@ class VisionPipeline:
         self._yolo_person_lock = threading.Lock()
         self._yolo_body_unknown_cache: Dict[str, dict] = {}  # Dedup for body-only unknowns
         self._last_yolo_assist_check = 0.0  # Throttle: last time we ran YOLO-assist
-        self._yolo_assist_interval = 1.5    # Run YOLO-assisted every 1.5 seconds for better distant detection
+        self._yolo_assist_min_interval = 1.0  # Minimum interval between YOLO-Assist runs
+
+        # ── Load-tier degradation state ──────────────────────────
+        self._active_face_count = 0         # Updated each detection frame
+        self._jpeg_quality_override = None  # None = use default
+        self._frame_skip_override = None    # None = use default
+        self._skip_low_priority = False     # Skip P3 work (attributes, suggestions)
 
         # ── Safety & Security Modules ────────────────────────────────────────────────────────
         # Attribute Recognition (gender + clothing)
@@ -398,8 +404,9 @@ class VisionPipeline:
             except Exception as e:
                 logger.debug(f"Hazard detection submission failed: {e}")
 
-        # Frame skip for performance
-        if self._frame_count % settings.FRAME_SKIP != 0:
+        # Frame skip for performance (load-tier override or config default)
+        effective_skip = self._frame_skip_override or settings.FRAME_SKIP
+        if self._frame_count % effective_skip != 0:
             # Draw previously cached boxes so they don't flicker
             for draw_args in self._last_face_draws:
                 self._draw_box(frame, *draw_args)
@@ -541,7 +548,15 @@ class VisionPipeline:
                         centroid=centroid,
                     )
 
-                    if self.attribute_recognizer:
+                    # ── Attribute extraction: only on track lock ─────
+                    # Gate on recognition_locked to avoid unnecessary
+                    # frame.copy() + DeepFace submission on every match.
+                    # AttributeRecognizer.maybe_extract already deduplicates
+                    # by track_id, but we save the copy + submission cost
+                    # by not calling it until the track is confidently locked.
+                    if (self.attribute_recognizer
+                            and track.recognition_locked
+                            and not self._skip_low_priority):
                         try:
                             self.attribute_recognizer.maybe_extract(
                                 track_id=result.person_id,
@@ -553,13 +568,15 @@ class VisionPipeline:
                             logger.debug(f"Attribute extraction error: {e}")
 
                     # ── Embedding Suggestion (throttled, diversity-gated) ──
-                    self._maybe_suggest_encoding(
-                        person_id=result.person_id,
-                        encoding=best_embedding,
-                        confidence=result.confidence,
-                        frame=clean_frame,
-                        location=location,
-                    )
+                    # Skipped under load degradation (P3 low-priority work)
+                    if not self._skip_low_priority:
+                        self._maybe_suggest_encoding(
+                            person_id=result.person_id,
+                            encoding=best_embedding,
+                            confidence=result.confidence,
+                            frame=clean_frame,
+                            location=location,
+                        )
                 else:
                     boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
                     self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid)
@@ -586,10 +603,11 @@ class VisionPipeline:
             for draw_args in boxes_to_draw:
                 self._draw_box(frame, *draw_args)
 
-        # YOLO-ASSISTED DETECTION (catch missed persons)
-        now_assist = time.time()
-        if now_assist - self._last_yolo_assist_check >= self._yolo_assist_interval:
-            self._last_yolo_assist_check = now_assist
+        # ── YOLO-ASSISTED DETECTION (adaptive trigger) ────────────
+        # Runs when detection needs help, not on a fixed timer.
+        # See §10 of the architecture plan.
+        if self._should_run_yolo_assist(active_tracks, face_locations):
+            self._last_yolo_assist_check = time.time()
             try:
                 yolo_persons = self._get_yolo_person_detections(clean_frame)
                 if yolo_persons:
@@ -600,6 +618,11 @@ class VisionPipeline:
                         )
             except Exception as e:
                 logger.debug(f"YOLO-assisted detection error: {e}")
+
+        # ── Load-tier degradation ─────────────────────────────────
+        # Adjust pipeline parameters based on current face count.
+        self._active_face_count = len(face_locations)
+        self._apply_load_degradation()
 
         self._run_safety_analytics()
         self._check_periodic_exits()
@@ -636,6 +659,100 @@ class VisionPipeline:
             # Not yet confident — shorter re-check interval
             return elapsed >= self._recognition_recheck_sec
 
+    def _should_run_yolo_assist(
+        self,
+        active_tracks: list,
+        face_locations: list,
+    ) -> bool:
+        """
+        Adaptive YOLO-Assist trigger — runs when detection needs help,
+        not on a fixed timer.
+
+        Conditions that trigger YOLO-Assist:
+        1. Tracks with no face match (person body visible, face not detected)
+        2. Tracker confidence drop (matched but degraded)
+        3. Prolonged occlusion recovery (lost and re-created track)
+        4. Person count mismatch (fewer faces than expected from trackers)
+
+        Always respects minimum interval to prevent spam.
+        """
+        now = time.time()
+
+        # Minimum interval gate — prevent spam
+        if now - self._last_yolo_assist_check < self._yolo_assist_min_interval:
+            return False
+
+        # Under heavy load, widen the minimum interval
+        if self._skip_low_priority:
+            if now - self._last_yolo_assist_check < 3.0:
+                return False
+
+        # Trigger 1: Tracks with no face match
+        # Person body visible but face not detected by SCRFD
+        unmatched_tracks = [
+            t for t in active_tracks
+            if t.person_id is None and t.tracklet_len > 5
+        ]
+        if unmatched_tracks:
+            return True
+
+        # Trigger 2: Low confidence tracks that haven't locked
+        low_confidence = [
+            t for t in active_tracks
+            if t.person_id and not t.recognition_locked
+            and t.tracklet_len > 10
+        ]
+        if low_confidence:
+            return True
+
+        # Trigger 3: Occlusion recovery — track was lost and re-created
+        recovered = [
+            t for t in active_tracks
+            if t.tracklet_len < 3 and t.person_id
+        ]
+        if recovered:
+            return True
+
+        # Trigger 4: Person count mismatch
+        # Tracker knows about more people than SCRFD found faces
+        tracker_count = len(self.tracker.get_person_centroids())
+        face_count = len(face_locations)
+        if tracker_count > face_count + 2:
+            return True
+
+        # No trigger condition met
+        return False
+
+    def _apply_load_degradation(self):
+        """
+        Adjust pipeline parameters based on active face count.
+        Implements graceful degradation under burst load.
+
+        Tiers:
+          0-4 faces → Normal operation
+          5-9 faces → Tier 1: defer low-priority work
+          10+ faces → Tier 2: increase frame skip, reduce JPEG quality
+        """
+        n = self._active_face_count
+
+        if n >= 10:
+            # Tier 2: Heavy load
+            self._frame_skip_override = max(settings.FRAME_SKIP, 4)
+            self._yolo_assist_min_interval = 3.0
+            self._jpeg_quality_override = 45
+            self._skip_low_priority = True
+        elif n >= 5:
+            # Tier 1: Moderate load
+            self._frame_skip_override = None  # Use default
+            self._yolo_assist_min_interval = 2.0
+            self._jpeg_quality_override = None
+            self._skip_low_priority = True
+        else:
+            # Normal operation
+            self._frame_skip_override = None
+            self._yolo_assist_min_interval = 1.0
+            self._jpeg_quality_override = None
+            self._skip_low_priority = False
 
     # Ã¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢ÂÃ¢â€¢Â
     #  Safety & Security Integration
@@ -1358,25 +1475,16 @@ class VisionPipeline:
             head_top, head_right, head_bottom, head_left = head_region
             head_crop = clean_frame[head_top:head_bottom, head_left:head_right].copy()
 
-            # Save snapshots
-            _, body_url = save_snapshot(
-                body_crop, f"unknown_body_{unknown_id}", subdirectory="unknowns", quality=95
-            )
-            _, head_url = save_snapshot(
-                head_crop, f"unknown_head_{unknown_id}", subdirectory="unknowns", quality=95
-            )
-            _, full_frame_url = save_snapshot(
-                clean_frame, f"fullframe_{unknown_id}", subdirectory="frames", quality=90
-            )
+            # Copy the full frame for snapshot saving (cheap ~1.5ms).
+            # Snapshot saving is deferred to the EventQueue consumer thread
+            # to avoid blocking the vision pipeline for ~64ms (3× save_snapshot).
+            full_frame_copy = clean_frame.copy()
 
             self._yolo_body_unknown_cache[unknown_id] = {
                 "centroid": centroid,
                 "count": 1,
                 "first_seen": now,
                 "last_seen": now,
-                "snapshot_path": body_url,
-                "head_path": head_url,
-                "full_frame_path": full_frame_url,
                 "label": unknown_label,
                 "confidence": person_confidence,
             }
@@ -1399,14 +1507,17 @@ class VisionPipeline:
                 f"{unknown_label} (YOLO conf={person_confidence:.0%})"
             )
 
-            # Emit unknown face event (using body snapshot)
+            # Enqueue for async processing (snapshot saving + DB + WS).
+            # Passes raw frame data to the EventQueue consumer thread which
+            # handles save_snapshot() — same pattern as _handle_unknown_face.
+            # This removes ~64ms of synchronous disk I/O from the critical path.
             if self.on_unknown:
                 self.on_unknown({
                     "unknown_id": unknown_id,
                     "camera_id": self.camera_id,
-                    "snapshot_path": body_url,
-                    "context_path": head_url,
-                    "full_frame_path": full_frame_url,
+                    "face_crop": body_crop,
+                    "context_crop": head_crop,
+                    "full_frame": full_frame_copy,
                     "encoding": None,  # No face encoding available
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "bounding_box": {

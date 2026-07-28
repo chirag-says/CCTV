@@ -21,6 +21,14 @@ logger = logging.getLogger(__name__)
 class CameraWorker:
     """
     Wraps a VisionPipeline and runs it in a dedicated thread.
+
+    Architecture (post-optimization):
+      Main thread:  capture → detect → track → recognize → [hand off frame]
+      JPEG thread:  [receive frame] → resize → encode → write _last_jpeg
+
+    The main loop no longer blocks on JPEG encoding (~28ms saved per frame).
+    A single-slot latest-frame-wins design ensures the encoder always works
+    on the most recent frame and never builds up a backlog.
     """
 
     def __init__(
@@ -42,11 +50,30 @@ class CameraWorker:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
+        # ── JPEG Encoder Thread State ─────────────────────────────
+        # Single-slot handoff: main loop writes the latest frame here,
+        # encoder thread reads and clears it. No FIFO queue — if the
+        # encoder falls behind, it skips to the newest frame.
+        self._jpeg_slot_frame = None       # Latest frame awaiting encode
+        self._jpeg_slot_lock = threading.Lock()
+        self._jpeg_slot_event = threading.Event()  # Signals encoder that a frame is ready
+        self._jpeg_thread: Optional[threading.Thread] = None
+
     def start(self):
-        """Start the camera worker in a background thread."""
+        """Start the camera worker and its JPEG encoder thread."""
         logger.info(f"Starting camera worker: {self.camera_id}")
         self.pipeline.start()
         self._stop_event.clear()
+
+        # Start the JPEG encoder thread BEFORE the main loop
+        self._jpeg_slot_event.clear()
+        self._jpeg_thread = threading.Thread(
+            target=self._jpeg_encoder_loop,
+            name=f"jpeg-{self.camera_id}",
+            daemon=True,
+        )
+        self._jpeg_thread.start()
+
         self._thread = threading.Thread(
             target=self._run_loop,
             name=f"camera-{self.camera_id}",
@@ -55,17 +82,27 @@ class CameraWorker:
         self._thread.start()
 
     def stop(self):
-        """Stop the camera worker."""
+        """Stop the camera worker and JPEG encoder thread."""
         logger.info(f"Stopping camera worker: {self.camera_id}")
         self._stop_event.set()
+        # Wake the JPEG thread so it can exit
+        self._jpeg_slot_event.set()
         self.pipeline.stop()
+
         if self._thread:
             self._thread.join(timeout=5)
             self._thread = None
+        if self._jpeg_thread:
+            self._jpeg_thread.join(timeout=3)
+            self._jpeg_thread = None
 
     def _run_loop(self):
-        """Main processing loop running in background thread."""
-        from app.utils.image_utils import resize_frame, frame_to_jpeg_bytes
+        """Main processing loop — detection, tracking, recognition.
+
+        JPEG encoding has been moved to _jpeg_encoder_loop() so this
+        loop is no longer blocked by imencode(). Frames are handed off
+        via a single-slot exchange (~0.01ms instead of ~28ms).
+        """
         from app.core.profiler import profiler
 
         logger.info(f"Camera worker loop started: {self.camera_id}")
@@ -79,20 +116,12 @@ class CameraWorker:
                     profiler.record_frame_received()
                     frame = self.pipeline.process_frame()
                     if frame is not None:
-                        # Pre-encode JPEG in THIS background thread (not the async loop!)
-                        # This is the key optimization: JPEG encoding is CPU-heavy
-                        # and must NOT run in the async event loop where it blocks everything.
-                        with profiler.measure("jpeg_encode"):
-                            # Resize for streaming (detection runs on full resolution)
-                            small = resize_frame(frame, max_width=960, max_height=540)
-                            # Record raw frame size for compression ratio
-                            profiler.record_raw_frame_size(small.nbytes)
-                            jpeg_bytes = frame_to_jpeg_bytes(small, quality=65)
-                            self.pipeline._last_jpeg = jpeg_bytes
-
-                        # Record WebSocket frame size for stats
-                        if jpeg_bytes:
-                            profiler.record_ws_send(len(jpeg_bytes), 0.0)
+                        # Hand frame to JPEG encoder thread (non-blocking).
+                        # Uses latest-frame-wins: overwrites any pending frame
+                        # so the encoder always works on the newest data.
+                        with self._jpeg_slot_lock:
+                            self._jpeg_slot_frame = frame
+                        self._jpeg_slot_event.set()  # Wake encoder
                     else:
                         profiler.record_frame_dropped()
 
@@ -111,6 +140,55 @@ class CameraWorker:
                 time.sleep(sleep_time)
 
         logger.info(f"Camera worker loop ended: {self.camera_id}")
+
+    def _jpeg_encoder_loop(self):
+        """Background thread: encodes frames to JPEG for WebSocket streaming.
+
+        Runs independently of the main processing loop. Picks up the latest
+        frame from the single-slot exchange, resizes it, encodes to JPEG,
+        and writes the result to pipeline._last_jpeg.
+
+        This thread is the ONLY writer of _last_jpeg after startup.
+        """
+        from app.utils.image_utils import resize_frame, frame_to_jpeg_bytes
+        from app.core.profiler import profiler
+
+        logger.info(f"JPEG encoder thread started: {self.camera_id}")
+
+        while not self._stop_event.is_set():
+            # Wait for a frame to be available (with timeout to check stop)
+            signaled = self._jpeg_slot_event.wait(timeout=0.1)
+            if not signaled:
+                continue  # Timeout — check stop flag and retry
+
+            # Grab the latest frame (clear the slot)
+            with self._jpeg_slot_lock:
+                frame = self._jpeg_slot_frame
+                self._jpeg_slot_frame = None
+            self._jpeg_slot_event.clear()
+
+            if frame is None:
+                continue
+
+            try:
+                with profiler.measure("jpeg_encode"):
+                    # Resize for streaming (detection runs on full resolution)
+                    small = resize_frame(frame, max_width=960, max_height=540)
+                    # Record raw frame size for compression ratio
+                    profiler.record_raw_frame_size(small.nbytes)
+                    # Use load-tier quality override if pipeline has one
+                    jpeg_q = getattr(self.pipeline, '_jpeg_quality_override', None) or 65
+                    jpeg_bytes = frame_to_jpeg_bytes(small, quality=jpeg_q)
+                    self.pipeline._last_jpeg = jpeg_bytes
+
+                # Record WebSocket frame size for stats
+                if jpeg_bytes:
+                    profiler.record_ws_send(len(jpeg_bytes), 0.0)
+
+            except Exception as e:
+                logger.debug(f"JPEG encode error ({self.camera_id}): {e}")
+
+        logger.info(f"JPEG encoder thread stopped: {self.camera_id}")
 
     @property
     def is_running(self) -> bool:

@@ -78,6 +78,7 @@ class Settings(BaseSettings):
     BYTETRACK_TRACK_THRESH: float = 0.5  # High-confidence detection threshold
     BYTETRACK_TRACK_BUFFER: int = 90  # Frames to keep lost tracks alive (~3s at 30fps, prevents track fragmentation)
     BYTETRACK_MATCH_THRESH: float = 0.8  # IoU threshold for matching
+    BYTETRACK_TRACKED_GRACE: int = 2  # Detection-frames before tracked→lost (increase to reduce fragmentation)
 
     # Recognition Cache (time-based, FPS-independent)
     # Once a track is confidently recognized, skip ArcFace until re-check
