@@ -156,8 +156,17 @@ def _process_pipeline_event(event: dict):
                 if k not in ("person_id", "camera_id", "event_type", "confidence", "snapshot_url", "subtype")
             }
             if person_id and not eq.is_known_person(person_id):
-                # Unknown person UUID — don't set FK, store in metadata instead
-                event_metadata["unknown_person_id"] = person_id
+                if str(person_id).startswith("anon:"):
+                    # A track handle, not an identity: a face too small to
+                    # embed. It counts toward presence but has no identity, so
+                    # recording the ByteTrack id would put an ephemeral internal
+                    # handle into the permanent event log.
+                    event_metadata["anonymous"] = True
+                else:
+                    # Stable unknown identity — no FK (no persons row), so it
+                    # lives in metadata. This id is now consistent across
+                    # restarts and cameras, so the same stranger is traceable.
+                    event_metadata["unknown_person_id"] = person_id
                 person_id = None
 
             # Create detection event
@@ -240,40 +249,65 @@ def _process_unknown_face(data: dict):
     4. Broadcasting via WebSocket
     """
     detection_type = data.get("detection_type", "face")
+
+    # ── Repeat sighting of an already-persisted identity ──
+    # Carries no crops: the row already has snapshots. Only the visit counters
+    # move. Previously every repeat wrote three JPEGs that were then orphaned
+    # when the dedup merged the sighting into the existing row.
+    if data.get("sighting_only"):
+        from datetime import datetime as _dt, timezone as _tz
+        from app.services.unknown_service import UnknownService
+        ts = (
+            _dt.fromisoformat(data["timestamp"]) if data.get("timestamp")
+            else _dt.now(_tz.utc)
+        )
+        if UnknownService.record_sighting(data["unknown_id"], data.get("camera_id", ""), ts):
+            logger.debug(
+                f"👤 Unknown {data['unknown_id'][:8]}… seen again on "
+                f"camera {data.get('camera_id')}"
+            )
+        return
+
     logger.info(
         f"👤 Unknown {detection_type} detected on camera {data.get('camera_id')}"
     )
 
-    # ── Step 1: Save snapshots if frame data was passed ──
-    # (Snapshot saving was moved out of the vision thread into the queue)
+    # ── Snapshots: DEFERRED until we know a row will be created ──
+    # These used to be written eagerly, before the dedup query below. When the
+    # dedup then merged the sighting into an existing row, all three JPEGs were
+    # orphaned on disk with nothing referencing them. Saving is now a closure
+    # invoked only on the create path.
     import time as _time
-    snapshot_path = data.get("snapshot_path", "")
-    context_path = data.get("context_path", "")
-    full_frame_path = data.get("full_frame_path", "")
+    _paths = {
+        "snapshot": data.get("snapshot_path", ""),
+        "context": data.get("context_path", ""),
+        "full_frame": data.get("full_frame_path", ""),
+    }
 
-    if data.get("face_crop") is not None:
+    def _save_snapshots():
+        """Write the three crops to disk. Only called when inserting a row."""
+        if data.get("face_crop") is None:
+            return
         _snap_start = _time.perf_counter()
         try:
             from app.utils.image_utils import save_snapshot
             unknown_id = data.get("unknown_id", "")
 
-            _, snapshot_path = save_snapshot(
+            _, _paths["snapshot"] = save_snapshot(
                 data["face_crop"], f"unknown_{unknown_id}",
                 subdirectory="unknowns", quality=95,
             )
             if data.get("context_crop") is not None:
-                _, context_path = save_snapshot(
+                _, _paths["context"] = save_snapshot(
                     data["context_crop"], f"context_{unknown_id}",
                     subdirectory="unknowns", quality=95,
                 )
             if data.get("full_frame") is not None:
-                _, full_frame_path = save_snapshot(
+                _, _paths["full_frame"] = save_snapshot(
                     data["full_frame"], f"fullframe_{unknown_id}",
                     subdirectory="frames", quality=90,
                 )
-            # Record snapshot save timing
-            _snap_elapsed = (_time.perf_counter() - _snap_start) * 1000
-            profiler.record_snapshot_save(_snap_elapsed)
+            profiler.record_snapshot_save((_time.perf_counter() - _snap_start) * 1000)
         except Exception as e:
             logger.error(f"Failed to save unknown snapshots: {e}")
 
@@ -358,21 +392,27 @@ def _process_unknown_face(data: dict):
                         )
 
             if matched_existing:
-                # Update existing entry — increment occurrence, update last_seen
+                # Another camera (or an earlier run) already has this person.
+                # Bump the visit counters and reuse their snapshots — no new
+                # files are written.
                 matched_existing.occurrence += 1
                 matched_existing.last_seen = ts
                 db.commit()
+                _paths["snapshot"] = matched_existing.snapshot_url or ""
+                _paths["full_frame"] = matched_existing.full_frame or ""
                 logger.info(
                     f"✅ Updated unknown face {matched_existing.id[:12]}... "
-                    f"occurrence={matched_existing.occurrence}"
+                    f"occurrence={matched_existing.occurrence} "
+                    f"(snapshots reused, none written)"
                 )
             else:
-                # Create new unknown face entry
+                # Genuinely new person — now it is worth the disk write.
+                _save_snapshots()
                 unknown = UnknownFace(
                     id=data.get("unknown_id", str(uuid4())),
                     camera_id=camera_id,
-                    snapshot_url=snapshot_path,
-                    full_frame=full_frame_path,
+                    snapshot_url=_paths["snapshot"],
+                    full_frame=_paths["full_frame"],
                     face_encoding=encoding_bytes,
                     occurrence=1,
                     first_seen=ts,
@@ -398,7 +438,7 @@ def _process_unknown_face(data: dict):
         "event_type": "unknown",
         "camera_id": data.get("camera_id", ""),
         "timestamp": data.get("timestamp", ""),
-        "snapshot_url": snapshot_path,
+        "snapshot_url": _paths["snapshot"],
         "detection_type": detection_type,
     })
 

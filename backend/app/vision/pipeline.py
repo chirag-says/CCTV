@@ -45,6 +45,7 @@ from app.vision.recognizer import FaceRecognizer, MatchResult
 from app.vision.tracker import PersonTracker
 from app.vision.bytetrack import ByteTracker, STrack, VehicleByteTracker, VehicleSTrack
 from app.vision.identity import IdentityLedger
+from app.vision.unknown_registry import UnknownRegistry
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Internal: Safety & Security Analytics Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 from app.vision.safety_analytics import (
@@ -128,6 +129,16 @@ class VisionPipeline:
         # detection frame against the live track set, so it stays bounded by
         # the number of concurrent faces.
         self._recovered_track_ids: set = set()
+
+        # Stable identities for unenrolled people, seeded from unknown_faces.
+        # Replaces the old _unknown_cache, which minted a fresh uuid4() per
+        # sighting session, was scanned linearly per face, and was never pruned.
+        self.unknown_registry = UnknownRegistry(
+            match_threshold=settings.UNKNOWN_SIMILARITY_THRESHOLD,
+            max_entries=settings.UNKNOWN_REGISTRY_MAX_ENTRIES,
+            sighting_cooldown=settings.UNKNOWN_SIGHTING_COOLDOWN_SEC,
+            refresh_interval=settings.UNKNOWN_REGISTRY_REFRESH_SEC,
+        )
 
         # Recognition cache: time-based re-check intervals (FPS-independent)
         self._recognition_lock_confidence = settings.RECOGNITION_LOCK_CONFIDENCE
@@ -235,7 +246,9 @@ class VisionPipeline:
         self._last_jpeg = None   # Pre-encoded JPEG bytes (ready-to-send, encoded in worker thread)
         self._last_exit_check = time.time()
         self._exit_check_interval = 5  # Check exits every 5 seconds (prevents premature exits)
-        self._unknown_cache: Dict[str, dict] = {}  # Temp unknown face dedup
+        # NOTE: _unknown_cache is gone -- replaced by self.unknown_registry.
+        # It minted a fresh uuid4() per sighting session, was scanned
+        # linearly per unknown face, and was never pruned.
         self._last_safety_check = time.time()
         self._safety_check_interval = 1.0  # Run crowd/loiter checks every 1s
         self._last_face_draws: List[Tuple] = [] # Cache for drawing face boxes on skipped frames
@@ -405,6 +418,15 @@ class VisionPipeline:
         # Auto-refresh face encodings from DB if cache is stale/empty
         self._auto_refresh_encodings()
 
+        # Keep the unknown registry in sync so identities created by ANOTHER
+        # camera (or before this process started) are recognised as the same
+        # person here. Self-throttling; a no-op on most frames.
+        try:
+            from app.services.unknown_service import UnknownService
+            self.unknown_registry.maybe_refresh(UnknownService.get_pending_encodings)
+        except Exception as e:
+            logger.debug(f"[{self.camera_id}] Unknown registry refresh skipped: {e}")
+
         # ── TRAFFIC MODE ────────────────────────────────────────────────────────────
         if self.pipeline_mode == "traffic":
             return self._process_frame_traffic(frame)
@@ -567,7 +589,13 @@ class VisionPipeline:
                 color = (0, 200, 0) if track.person_name else (255, 165, 0)
                 boxes_to_draw.append((location, label, color, 0.0))
                 self.tracker.on_detection(
-                    person_id=track.person_id or f"small_track_{track.track_id}",
+                    # `anon:` marks a TRACK HANDLE, not an identity. A face this
+                    # small has no usable embedding, so we can count it as
+                    # present without inventing an identity for it. The prefix
+                    # lets _process_pipeline_event drop it rather than filing a
+                    # ByteTrack id into detection_events.metadata_json, which is
+                    # what `small_track_{id}` used to do.
+                    person_id=track.person_id or f"anon:{self.camera_id}:{track.track_id}",
                     person_name=label,
                     camera_id=self.camera_id,
                     confidence=0.0,
@@ -1324,82 +1352,64 @@ class VisionPipeline:
         encoding: np.ndarray,
         centroid: Optional[Tuple[int, int]] = None,
     ):
-        """Handle an unrecognized face Ã¢â‚¬â€ deduplicate, track, and queue."""
-        # Check if this unknown is similar to any recently seen unknowns
-        similar_id = None
-        for uid, udata in self._unknown_cache.items():
-            distance = self.recognizer.compare_unknown_faces(
-                encoding, udata["encoding"]
-            )
-            if distance < settings.UNKNOWN_SIMILARITY_THRESHOLD:
-                similar_id = uid
-                break
+        """
+        Handle an unrecognised face: resolve to a STABLE identity, track, queue.
 
-        if similar_id:
-            # Update existing unknown
-            self._unknown_cache[similar_id]["count"] += 1
-            self._unknown_cache[similar_id]["last_seen"] = time.time()
+        The identity comes from UnknownRegistry, which is seeded from the
+        `unknown_faces` table. That is what makes the id survive a restart and
+        stay identical across cameras. Previously a fresh uuid4() was minted per
+        sighting session and the label came from a per-pipeline counter, so the
+        same stranger became a different "Unknown #1" every time.
+        """
+        unknown_id, unknown_label, is_new = self.unknown_registry.resolve(encoding)
+        if unknown_id is None:
+            return  # unusable (zero-norm) embedding
 
-            # Track this unknown person so they appear in "People Present"
-            unknown_label = self._unknown_cache[similar_id].get("label", "Unknown")
-            self.tracker.on_detection(
-                person_id=similar_id,
-                person_name=unknown_label,
-                camera_id=self.camera_id,
-                confidence=0.0,
-                centroid=centroid,
-            )
-        else:
-            # New unknown face
-            unknown_id = str(uuid4())
+        # Appears in "People Present" under the stable identity either way.
+        self.tracker.on_detection(
+            person_id=unknown_id,
+            person_name=unknown_label,
+            camera_id=self.camera_id,
+            confidence=0.0,
+            centroid=centroid,
+        )
 
-            # Assign a label like "Unknown #1", "Unknown #2", etc.
-            unknown_number = len(self._unknown_cache) + 1
-            unknown_label = f"Unknown #{unknown_number}"
+        if not self.on_unknown:
+            return
 
-            # Ã¢â€â‚¬Ã¢â€â‚¬ High-quality face crop with generous padding Ã¢â€â‚¬Ã¢â€â‚¬
-            # Copy frame data NOW (frame reference changes next iteration)
-            # These copies are fast (~0.5ms each) vs save_snapshot (~10-30ms each)
+        if is_new:
+            # First time anyone has seen this person. Copy the crops now: the
+            # frame buffer is reused on the next iteration. These copies are
+            # ~0.5ms each versus ~10-30ms for save_snapshot, which is why the
+            # disk write itself stays deferred to the EventQueue consumer.
             face_crop = self.detector.extract_face_crop(frame, location, padding=80).copy()
             context_crop = self._extract_context_crop(frame, location).copy()
             full_frame_copy = frame.copy()
 
-            # Ã¢â€â‚¬Ã¢â€â‚¬ Wider context crop (head + shoulders) for better identification Ã¢â€â‚¬Ã¢â€â‚¬
-
-            # Ã¢â€â‚¬Ã¢â€â‚¬ Full frame at good quality Ã¢â€â‚¬Ã¢â€â‚¬
-            self._unknown_cache[unknown_id] = {
+            self.on_unknown({
+                "unknown_id": unknown_id,
+                "camera_id": self.camera_id,
+                "face_crop": face_crop,
+                "context_crop": context_crop,
+                "full_frame": full_frame_copy,
                 "encoding": encoding,
-                "count": 1,
-                "first_seen": time.time(),
-                "last_seen": time.time(),
-                "label": unknown_label,
-            }
-
-            # Track this new unknown person so they appear in "People Present"
-            self.tracker.on_detection(
-                person_id=unknown_id,
-                person_name=unknown_label,
-                camera_id=self.camera_id,
-                confidence=0.0,
-                centroid=centroid,
-            )
-
-            # Enqueue for async processing (snapshot saving + DB + WS)
-            # on_unknown() now just enqueues to EventQueue — non-blocking
-            if self.on_unknown:
-                self.on_unknown({
-                    "unknown_id": unknown_id,
-                    "camera_id": self.camera_id,
-                    "face_crop": face_crop,
-                    "context_crop": context_crop,
-                    "full_frame": full_frame_copy,
-                    "encoding": encoding,
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                    "bounding_box": {
-                        "top": location[0], "right": location[1],
-                        "bottom": location[2], "left": location[3]
-                    },
-                })
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "bounding_box": {
+                    "top": location[0], "right": location[1],
+                    "bottom": location[2], "left": location[3]
+                },
+            })
+        elif self.unknown_registry.should_report_sighting(unknown_id):
+            # Known unknown, seen again. Report a SIGHTING so `occurrence`
+            # counts real visits, throttled by UNKNOWN_SIGHTING_COOLDOWN_SEC.
+            # No crops: the row already has snapshots, and writing three more
+            # JPEGs per repeat sighting was orphaning files on disk.
+            self.on_unknown({
+                "unknown_id": unknown_id,
+                "camera_id": self.camera_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "sighting_only": True,
+            })
 
     def _handle_entry_event(self, event: dict):
         """Callback when tracker confirms an entry."""
@@ -1805,7 +1815,7 @@ class VisionPipeline:
         else:
             # New body-only unknown person
             unknown_id = str(uuid4())
-            unknown_number = len(self._unknown_cache) + len(self._yolo_body_unknown_cache) + 1
+            unknown_number = len(self._yolo_body_unknown_cache) + 1
             unknown_label = f"Unknown #{unknown_number}"
 
             # Crop the person body from the clean frame
@@ -2141,12 +2151,12 @@ class VisionPipeline:
                 base["plate_recognizer"] = self.plate_recognizer.stats
             base["faces_in_cache"] = self.recognizer.known_count
             base["active_tracks"] = self.tracker.stats
-            base["unknown_cache_size"] = len(self._unknown_cache)
+            base["unknown_identities"] = self.unknown_registry.size
         else:
             # Face mode stats
             base["faces_in_cache"] = self.recognizer.known_count
             base["active_tracks"] = self.tracker.stats
-            base["unknown_cache_size"] = len(self._unknown_cache)
+            base["unknown_identities"] = self.unknown_registry.size
             if self.hazard_detector:
                 base["hazard_detector"] = self.hazard_detector.stats
 

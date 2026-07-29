@@ -132,6 +132,15 @@ class Settings(BaseSettings):
     # so candidate count is a usable ambiguity signal.
     IDENTITY_REQUIRE_UNAMBIGUOUS: bool = True
 
+    # ── Unknown Registry (Phase 2) ────────────────────────────
+    # Stable identities for unenrolled people. The registry is seeded from the
+    # unknown_faces table so an id survives a restart and is identical across
+    # cameras, instead of a fresh uuid4() per sighting session.
+    UNKNOWN_REGISTRY_MAX_ENTRIES: int = 500      # LRU cap (was unbounded)
+    UNKNOWN_REGISTRY_REFRESH_SEC: float = 60.0   # Reload pending unknowns every N sec
+    UNKNOWN_SIGHTING_COOLDOWN_SEC: float = 30.0  # Min gap between occurrence bumps,
+                                                  # so `occurrence` counts visits not frames
+
     # Async Event Queue
     EVENT_QUEUE_SIZE: int = 500                  # Max queued events (critical events bypass this limit)
 
