@@ -60,3 +60,6 @@ PyTurboJPEG>=1.7.0       # Fallback: requires libjpeg-turbo DLL installed separa
 # Rate Limiting
 slowapi>=0.1.9
 
+# Excel export (entry/exit reports)
+openpyxl>=3.1.0
+

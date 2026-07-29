@@ -2,7 +2,7 @@
 Analytics API Routes.
 """
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import Optional
 
 from app.services.analytics_service import AnalyticsService
@@ -74,66 +74,140 @@ async def generate_report(
 
 @router.get("/export")
 async def export_analytics(
-    format: str = Query("csv", description="Export format: csv or json"),
-    type: str = Query("events", description="Data type: events, movements, summary"),
+    format: str = Query("csv", description="Export format: csv, xlsx, or json"),
+    type: str = Query("entry_exit", description="Dataset: entry_exit, entries, exits, events"),
     start_date: Optional[str] = Query(None, description="Start date (YYYY-MM-DD)"),
     end_date: Optional[str] = Query(None, description="End date (YYYY-MM-DD)"),
-    limit: int = Query(1000, ge=1, le=10000),
+    camera_id: Optional[str] = Query(None),
+    person_id: Optional[str] = Query(None),
+    limit: int = Query(10000, ge=1, le=50000),
     current_user: dict = Depends(get_current_user),
 ):
-    """Export analytics data as CSV or JSON file download."""
+    """
+    Export entry/exit records as CSV, Excel (.xlsx), or JSON.
+
+    Rows are human-readable: person and camera are resolved to names, not the
+    raw UUIDs stored on detection_events.
+
+    `type` selects the dataset:
+        entry_exit  both entries and exits (default)
+        entries     entries only
+        exits       exits only
+        events      every event type, including alerts and unknowns
+    """
     import csv
     import io
+    import json
     from datetime import datetime
-    from fastapi.responses import StreamingResponse
+    from fastapi.responses import StreamingResponse, Response
 
-    # Get the data
-    data = AnalyticsService.get_movement_logs(
+    TYPE_FILTERS = {
+        "entry_exit": ["entry", "exit"],
+        "entries": ["entry"],
+        "exits": ["exit"],
+        "events": None,   # no filter
+    }
+    if type not in TYPE_FILTERS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid type '{type}'. Allowed: {', '.join(TYPE_FILTERS)}",
+        )
+    if format not in ("csv", "xlsx", "json"):
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid format '{format}'. Allowed: csv, xlsx, json",
+        )
+
+    event_types = TYPE_FILTERS[type]
+    if event_types is None:
+        event_types = ["entry", "exit", "unknown", "security_alert", "vehicle_entry"]
+
+    rows = AnalyticsService.get_entry_exit_export(
         start_date=start_date,
         end_date=end_date,
+        event_types=event_types,
+        camera_id=camera_id,
+        person_id=person_id,
         limit=limit,
-        offset=0,
     )
 
-    events = data.get("events", data.get("movements", []))
-    if not isinstance(events, list):
-        events = []
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    base = f"sentinel_{type}_{stamp}"
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    # Stable, human-ordered columns. Taken from the first row so the header is
+    # present even when there are no rows to write.
+    COLUMNS = [
+        "Date", "Time", "Event", "Person", "Role", "Department",
+        "Camera", "Location", "Confidence", "Duration (s)",
+        "Timestamp (UTC)", "Person ID", "Event ID",
+    ]
 
+    # ── CSV ───────────────────────────────────────────────────────
     if format == "csv":
-        output = io.StringIO()
-        if events:
-            # Get all unique keys from events
-            all_keys = set()
-            for event in events:
-                if isinstance(event, dict):
-                    all_keys.update(event.keys())
-            fieldnames = sorted(all_keys)
-
-            writer = csv.DictWriter(output, fieldnames=fieldnames, extrasaction='ignore')
-            writer.writeheader()
-            for event in events:
-                if isinstance(event, dict):
-                    writer.writerow(event)
-
-        output.seek(0)
-        return StreamingResponse(
-            iter([output.getvalue()]),
-            media_type="text/csv",
-            headers={
-                "Content-Disposition": f"attachment; filename=sentinel_{type}_{timestamp}.csv"
-            },
+        out = io.StringIO()
+        # utf-8-sig BOM so Excel opens accented names correctly on Windows
+        writer = csv.DictWriter(out, fieldnames=COLUMNS, extrasaction="ignore")
+        writer.writeheader()
+        for r in rows:
+            writer.writerow(r)
+        return Response(
+            content=out.getvalue().encode("utf-8-sig"),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{base}.csv"'},
         )
-    else:
-        # JSON format
-        import json
-        json_data = json.dumps({"exported_at": timestamp, "count": len(events), "data": events}, indent=2, default=str)
-        return StreamingResponse(
-            iter([json_data]),
-            media_type="application/json",
-            headers={
-                "Content-Disposition": f"attachment; filename=sentinel_{type}_{timestamp}.json"
-            },
+
+    # ── Excel ─────────────────────────────────────────────────────
+    if format == "xlsx":
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            raise HTTPException(
+                status_code=503,
+                detail="Excel export requires openpyxl. Install it with: pip install openpyxl",
+            )
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = type.replace("_", " ").title()[:31]  # Excel caps sheet names at 31
+
+        header_font = Font(bold=True, color="FFFFFF")
+        header_fill = PatternFill("solid", fgColor="4F46E5")
+        ws.append(COLUMNS)
+        for cell in ws[1]:
+            cell.font = header_font
+            cell.fill = header_fill
+            cell.alignment = Alignment(horizontal="center")
+
+        for r in rows:
+            ws.append([r.get(c, "") for c in COLUMNS])
+
+        # Width from the widest cell, capped so IDs don't blow the layout out
+        for i, col in enumerate(COLUMNS, start=1):
+            longest = max([len(col)] + [len(str(r.get(col, ""))) for r in rows[:500]])
+            ws.column_dimensions[get_column_letter(i)].width = min(longest + 2, 32)
+
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{max(len(rows) + 1, 1)}"
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        return Response(
+            content=buf.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{base}.xlsx"'},
         )
+
+    # ── JSON ──────────────────────────────────────────────────────
+    payload = json.dumps(
+        {"exported_at": stamp, "type": type, "count": len(rows), "data": rows},
+        indent=2, default=str,
+    )
+    return Response(
+        content=payload,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{base}.json"'},
+    )
 

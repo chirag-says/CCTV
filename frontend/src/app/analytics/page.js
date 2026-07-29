@@ -15,6 +15,12 @@ import api, { API_BASE } from '@/lib/api';
 import { useToast } from '@/lib/ToastContext';
 import { EntryIcon, ExitIcon, UserIcon, ClockIcon, AlertIcon } from '@/components/Icons';
 
+const EXPORT_FORMATS = [
+    { fmt: 'csv', label: 'CSV' },
+    { fmt: 'xlsx', label: 'Excel' },
+    { fmt: 'json', label: 'JSON' },
+];
+
 export default function AnalyticsPage() {
     const [report, setReport] = useState(null);
     const [peakTimes, setPeakTimes] = useState(null);
@@ -22,7 +28,57 @@ export default function AnalyticsPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [exporting, setExporting] = useState(false);
+    const [exportScope, setExportScope] = useState('entry_exit');
     const { showToast } = useToast();
+
+    /**
+     * Download an export. Uses fetch + blob rather than a plain link because
+     * the endpoint requires an Authorization header, which an <a href> cannot
+     * send. The filename comes from Content-Disposition so the server stays
+     * the single source of truth for naming.
+     */
+    async function downloadExport(fmt) {
+        setExporting(true);
+        try {
+            const token = api.getToken();
+            const url = `${API_BASE}/api/analytics/export`
+                + `?format=${fmt}&type=${exportScope}&limit=50000`;
+            const resp = await fetch(url, {
+                headers: token ? { Authorization: `Bearer ${token}` } : {},
+            });
+            if (!resp.ok) {
+                let detail = `Export failed (${resp.status})`;
+                try {
+                    const body = await resp.json();
+                    if (body?.detail) detail = body.detail;
+                } catch { /* non-JSON error body */ }
+                throw new Error(detail);
+            }
+
+            const disposition = resp.headers.get('Content-Disposition') || '';
+            const match = disposition.match(/filename="?([^"]+)"?/);
+            const filename = match ? match[1] : `sentinel_${exportScope}.${fmt}`;
+
+            const blob = await resp.blob();
+            if (blob.size === 0) {
+                showToast({ type: 'warning', message: 'No records matched — nothing to export' });
+                return;
+            }
+
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(a.href);
+            showToast({ type: 'success', message: `Downloaded ${filename}` });
+        } catch (e) {
+            showToast({ type: 'error', message: e.message || 'Export failed' });
+        } finally {
+            setExporting(false);
+        }
+    }
 
     useEffect(() => {
         loadAnalytics();
@@ -62,36 +118,29 @@ export default function AnalyticsPage() {
                                 {t.charAt(0).toUpperCase() + t.slice(1)}
                             </button>
                         ))}
-                        <div style={{ display: 'flex', gap: '6px', marginLeft: '8px', borderLeft: '1px solid var(--border-color)', paddingLeft: '8px' }}>
-                            {['csv', 'json'].map(fmt => (
+                        <div style={{ display: 'flex', gap: '6px', marginLeft: '8px', borderLeft: '1px solid var(--border-color)', paddingLeft: '8px', alignItems: 'center' }}>
+                            <select
+                                className="btn btn-sm btn-secondary"
+                                value={exportScope}
+                                onChange={(e) => setExportScope(e.target.value)}
+                                disabled={exporting}
+                                title="Which records to export"
+                                style={{ cursor: 'pointer' }}
+                            >
+                                <option value="entry_exit">Entry + Exit</option>
+                                <option value="entries">Entries only</option>
+                                <option value="exits">Exits only</option>
+                                <option value="events">All events</option>
+                            </select>
+                            {EXPORT_FORMATS.map(({ fmt, label }) => (
                                 <button
                                     key={fmt}
                                     className="btn btn-sm btn-secondary"
                                     disabled={exporting}
-                                    onClick={async () => {
-                                        setExporting(true);
-                                        try {
-                                            const token = api.getToken();
-                                            const url = `${API_BASE}/api/analytics/export?format=${fmt}&type=events&limit=5000`;
-                                            const resp = await fetch(url, {
-                                                headers: token ? { Authorization: `Bearer ${token}` } : {},
-                                            });
-                                            if (!resp.ok) throw new Error('Export failed');
-                                            const blob = await resp.blob();
-                                            const a = document.createElement('a');
-                                            a.href = URL.createObjectURL(blob);
-                                            a.download = `sentinel_analytics.${fmt}`;
-                                            a.click();
-                                            URL.revokeObjectURL(a.href);
-                                            showToast({ type: 'success', message: `Exported as ${fmt.toUpperCase()}` });
-                                        } catch (e) {
-                                            showToast({ type: 'error', message: e.message || 'Export failed' });
-                                        } finally {
-                                            setExporting(false);
-                                        }
-                                    }}
+                                    title={`Download ${exportScope.replace('_', ' + ')} as ${label}`}
+                                    onClick={() => downloadExport(fmt)}
                                 >
-                                    {exporting ? '...' : `⬇ ${fmt.toUpperCase()}`}
+                                    {exporting ? '...' : `⬇ ${label}`}
                                 </button>
                             ))}
                         </div>

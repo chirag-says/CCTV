@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy import func
 
 from app.db.session import SessionLocal
-from app.db.models import DetectionEvent, Person, UnknownFace, TrackingSession
+from app.db.models import Camera, DetectionEvent, Person, TrackingSession, UnknownFace
 from app.vision.camera_worker import camera_manager
 
 logger = logging.getLogger(__name__)
@@ -211,6 +211,99 @@ class AnalyticsService:
                 "data": [_event_to_dict(e) for e in events],
                 "total": total,
             }
+        finally:
+            db.close()
+
+    @staticmethod
+    def get_entry_exit_export(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        event_types: Optional[List[str]] = None,
+        camera_id: Optional[str] = None,
+        person_id: Optional[str] = None,
+        limit: int = 10000,
+    ) -> List[Dict[str, Any]]:
+        """
+        Flat, human-readable entry/exit rows for CSV / Excel export.
+
+        Deliberately NOT the same shape as get_movement_logs(). That returns raw
+        person_id / camera_id UUIDs, which are useless in a spreadsheet handed to
+        a security office. This resolves them to names via outer joins, so an
+        unmatched camera or a soft-deleted person still yields a usable row
+        rather than disappearing.
+
+        Unknown persons are represented by the id the FK guard stashed in
+        metadata_json.unknown_person_id, since detection_events.person_id is
+        NULL for them by design.
+
+        Returns:
+            List of ordered dicts, one per event, newest first.
+        """
+        db: Session = SessionLocal()
+        try:
+            types = event_types or ["entry", "exit"]
+            q = (
+                db.query(DetectionEvent, Person, Camera)
+                .outerjoin(Person, DetectionEvent.person_id == Person.id)
+                .outerjoin(Camera, DetectionEvent.camera_id == Camera.id)
+                .filter(DetectionEvent.event_type.in_(types))
+            )
+            if start_date:
+                q = q.filter(DetectionEvent.created_at >= start_date)
+            if end_date:
+                q = q.filter(DetectionEvent.created_at <= end_date)
+            if camera_id:
+                q = q.filter(DetectionEvent.camera_id == camera_id)
+            if person_id:
+                q = q.filter(DetectionEvent.person_id == person_id)
+
+            results = (
+                q.order_by(DetectionEvent.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+
+            rows: List[Dict[str, Any]] = []
+            for ev, person, cam in results:
+                meta = ev.metadata_json or {}
+                ts = ev.created_at
+
+                if person is not None:
+                    name = person.name
+                    role = person.role or ""
+                    dept = person.department or ""
+                elif meta.get("unknown_person_id"):
+                    name = "Unknown"
+                    role = "unknown"
+                    dept = ""
+                else:
+                    name = meta.get("person_name") or "Unknown"
+                    role = ""
+                    dept = ""
+
+                duration = meta.get("duration_sec")
+
+                rows.append({
+                    "Date": ts.strftime("%Y-%m-%d") if ts else "",
+                    "Time": ts.strftime("%H:%M:%S") if ts else "",
+                    "Event": (ev.event_type or "").upper(),
+                    "Person": name,
+                    "Role": role,
+                    "Department": dept,
+                    "Camera": (cam.name if cam else "") or ev.camera_id or "",
+                    "Location": (cam.location if cam else "") or "",
+                    "Confidence": round(ev.confidence or 0.0, 3),
+                    "Duration (s)": duration if duration is not None else "",
+                    "Timestamp (UTC)": ts.isoformat() if ts else "",
+                    "Person ID": ev.person_id or meta.get("unknown_person_id") or "",
+                    "Event ID": ev.id,
+                })
+
+            logger.info(
+                f"Entry/exit export: {len(rows)} rows "
+                f"(types={types}, range={start_date or 'all'}..{end_date or 'now'})"
+            )
+            return rows
         finally:
             db.close()
 
