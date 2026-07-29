@@ -44,6 +44,7 @@ from app.vision.detector import FaceDetector
 from app.vision.recognizer import FaceRecognizer, MatchResult
 from app.vision.tracker import PersonTracker
 from app.vision.bytetrack import ByteTracker, STrack, VehicleByteTracker, VehicleSTrack
+from app.vision.identity import IdentityLedger
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Internal: Safety & Security Analytics Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 from app.vision.safety_analytics import (
@@ -112,6 +113,15 @@ class VisionPipeline:
         # Maintains track IDs across frames, reducing the need to run
         # expensive ArcFace recognition on every single frame.
         self.byte_tracker = ByteTracker()
+
+        # Identity layer, sitting ABOVE the tracker. ByteTrack stays
+        # geometry-only; this owns the track_id -> identity binding.
+        # Milestone 1: observe-only (measures recovery headroom, assigns nothing).
+        self.identity_ledger = IdentityLedger(
+            retire_frames=settings.IDENTITY_RETIRE_FRAMES,
+            max_entries=settings.IDENTITY_LEDGER_MAX_ENTRIES,
+            max_centroid_distance=settings.IDENTITY_MAX_RECOVERY_DISTANCE_PX,
+        )
 
         # Recognition cache: time-based re-check intervals (FPS-independent)
         self._recognition_lock_confidence = settings.RECOGNITION_LOCK_CONFIDENCE
@@ -482,6 +492,12 @@ class VisionPipeline:
         with profiler.measure("bytetrack"):
             active_tracks = self.byte_tracker.update(bboxes_array, scores_array)
 
+        # ── Identity Ledger (Milestone 1: OBSERVE-ONLY) ──────────
+        # Runs on the tracker's OUTPUT, so ByteTrack stays geometry-only.
+        # Currently measures only: when a track is recreated, did a recoverable
+        # predecessor exist? It does not assign identity yet.
+        self._observe_identity_continuity(active_tracks)
+
         # Collect all face boxes to draw
         boxes_to_draw = []
 
@@ -565,6 +581,20 @@ class VisionPipeline:
                     )
 
                 if result.matched:
+                    # Identity swap detection: a single track flipping directly
+                    # from one KNOWN person to a different KNOWN person, without
+                    # passing through unknown. This is the metric that must not
+                    # regress once identity recovery is enabled in Milestone 2.
+                    if track.person_id and track.person_id != result.person_id:
+                        profiler.record_identity_swap(
+                            track.person_name or "?", result.person_name or "?",
+                            track.track_id,
+                        )
+                        logger.warning(
+                            f"[{self.camera_id}] IDENTITY SWAP on T{track.track_id}: "
+                            f"{track.person_name} -> {result.person_name} "
+                            f"(distance={result.distance:.4f}, margin={result.margin:.4f})"
+                        )
                     track.person_id = result.person_id
                     track.person_name = result.person_name
                     # Update recognition cache on the track
@@ -763,6 +793,50 @@ class VisionPipeline:
 
         self._last_frame = display_frame
         return display_frame
+
+    def _observe_identity_continuity(self, active_tracks: list):
+        """
+        Feed the tracker's output to the IdentityLedger and record metrics.
+
+        MILESTONE 1: observe-only. Assigns nothing, mutates nothing. It answers
+        the question the Phase 1 investigation could not answer statically:
+        when ByteTrack recreates a track, how often did a recoverable
+        predecessor actually exist, and how close was it?
+
+        That number is the ceiling on what identity recovery can reclaim.
+        """
+        try:
+            opportunities = self.identity_ledger.observe(active_tracks)
+        except Exception as e:
+            # Never let instrumentation break the pipeline.
+            logger.warning(f"[{self.camera_id}] Identity ledger error: {e}")
+            return
+
+        for opp in opportunities:
+            if opp.recoverable:
+                b = opp.best
+                profiler.record_track_created(
+                    recoverable=True,
+                    best_iou=b.iou,
+                    best_dist=b.centroid_distance,
+                    gap_frames=b.frames_since_retired,
+                )
+                logger.info(
+                    f"[{self.camera_id}] RECOVERABLE: new T{opp.track_id} could be "
+                    f"{b.person_name} (was T{b.retired.track_id}) — "
+                    f"iou={b.iou:.3f} dist={b.centroid_distance:.0f}px "
+                    f"gap={b.frames_since_retired}f "
+                    f"locked={b.retired.recognition_locked} "
+                    f"hist={len(b.retired.distance_history)} | "
+                    f"eligible={opp.n_eligible}/{opp.n_retired_total} "
+                    f"[MILESTONE 1: observed, NOT applied]"
+                )
+            else:
+                profiler.record_track_created(recoverable=False)
+                logger.debug(
+                    f"[{self.camera_id}] new T{opp.track_id} — no recoverable "
+                    f"predecessor (retired pool={opp.n_retired_total})"
+                )
 
     def _face_quality_for(self, frame: np.ndarray, location: tuple) -> float:
         """

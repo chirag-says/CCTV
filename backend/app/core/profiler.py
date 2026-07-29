@@ -98,6 +98,19 @@ class PerformanceProfiler:
         self._carryover_success = 0
         self._carryover_failed = 0
 
+        # ── Identity continuity (Phase 1) ─────────────────────────
+        # Measures how often ByteTrack recreates a track, and how often a
+        # recoverable predecessor existed at that moment. The gap between
+        # _tracks_created and _tracks_recoverable is the headroom an identity
+        # recovery layer can actually reclaim.
+        self._tracks_created = 0
+        self._tracks_recoverable = 0        # a plausible predecessor existed
+        self._recovery_best_iou: List[float] = []
+        self._recovery_best_dist: List[float] = []
+        self._recovery_gap_frames: List[int] = []
+        self._identity_swaps = 0            # person A -> person B on one track
+        self._swap_examples: List[str] = []
+
         # Event queue
         self._eq_wait_times: List[float] = []
         self._eq_processed = 0
@@ -269,6 +282,44 @@ class PerformanceProfiler:
             return
         with self._lock:
             self._carryover_failed += 1
+
+    # ── Identity Continuity (Phase 1) ─────────────────────────────
+
+    def record_track_created(self, recoverable: bool, best_iou: float = 0.0,
+                             best_dist: float = 0.0, gap_frames: int = 0):
+        """
+        Called once per newly created ByteTrack track.
+
+        Args:
+            recoverable: an eligible retired identity existed for this track
+            best_iou: IoU of the best candidate (0.0 if none)
+            best_dist: centroid distance in px of the best candidate
+            gap_frames: detection-frames between retirement and recreation
+        """
+        if not self._enabled:
+            return
+        with self._lock:
+            self._tracks_created += 1
+            if recoverable:
+                self._tracks_recoverable += 1
+                self._recovery_best_iou.append(best_iou)
+                self._recovery_best_dist.append(best_dist)
+                self._recovery_gap_frames.append(gap_frames)
+
+    def record_identity_swap(self, prev_name: str, new_name: str, track_id: int = -1):
+        """
+        Called when a single track's identity changes directly from one known
+        person to a different known person, without passing through unknown.
+
+        This is the metric that must NOT regress when identity recovery is
+        enabled: in an attendance record a swap is strictly worse than a gap.
+        """
+        if not self._enabled:
+            return
+        with self._lock:
+            self._identity_swaps += 1
+            if len(self._swap_examples) < 5:
+                self._swap_examples.append(f"T{track_id}: {prev_name} -> {new_name}")
 
     # ── Event Queue ───────────────────────────────────────────────
 
@@ -657,6 +708,45 @@ class PerformanceProfiler:
                 lines.append("")
                 lines.append(f"  Carry-over Success: {self._carryover_success}/{carryover_total} ({carry_pct:.0f}%)")
                 lines.append(f"  Carry-over Failed : {self._carryover_failed}/{carryover_total} ({100 - carry_pct:.0f}%)")
+
+        # ── Identity Continuity (Phase 1) ─────────────────────────
+        if self._tracks_created > 0:
+            recoverable_pct = self._tracks_recoverable / self._tracks_created * 100
+            rate = self._tracks_created / self._detection_frames if self._detection_frames else 0.0
+            lines.append("")
+            lines.append("  ── Identity Continuity ──")
+            lines.append(f"  Tracks Created   : {self._tracks_created}  ({rate:.2f}/detection-frame)")
+            lines.append(
+                f"  Recoverable      : {self._tracks_recoverable}/{self._tracks_created} "
+                f"({recoverable_pct:.0f}%)"
+            )
+            lines.append(
+                f"  Unrecoverable    : {self._tracks_created - self._tracks_recoverable} "
+                f"(genuinely new person, or predecessor expired)"
+            )
+            if self._recovery_best_iou:
+                lines.append(
+                    f"  Best cand. IoU   : avg {_avg(self._recovery_best_iou):.3f} | "
+                    f"p95 {_p95(self._recovery_best_iou):.3f} | max {_max(self._recovery_best_iou):.3f}"
+                )
+                lines.append(
+                    f"  Best cand. dist  : avg {_avg(self._recovery_best_dist):.0f}px | "
+                    f"p95 {_p95(self._recovery_best_dist):.0f}px"
+                )
+                lines.append(
+                    f"  Recovery gap     : avg {_avg(self._recovery_gap_frames):.1f} frames | "
+                    f"max {_max(self._recovery_gap_frames):.0f}"
+                )
+                # How many would a pure-IoU gate at 0.30 have caught?
+                would_catch = sum(1 for v in self._recovery_best_iou if v > 0.30)
+                lines.append(
+                    f"  IoU>0.30 would   : {would_catch}/{len(self._recovery_best_iou)} "
+                    f"({would_catch / len(self._recovery_best_iou) * 100:.0f}%) "
+                    f"<- why a geometric-only gate is insufficient"
+                )
+            lines.append(f"  Identity Swaps   : {self._identity_swaps}")
+            for ex in self._swap_examples:
+                lines.append(f"    ! {ex}")
 
         # ── Event Queue ──
         if self._eq_processed > 0 or self._eq_dropped > 0:

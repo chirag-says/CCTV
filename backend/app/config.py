@@ -106,6 +106,14 @@ class Settings(BaseSettings):
                                                   # e.g., balanced=0.62 → gray zone extends to 0.70
                                                   # Distances above gray ceiling = immediate unknown
 
+    # ── Identity Ledger (Phase 1) ─────────────────────────────
+    # The identity layer above ByteTrack. When the tracker recreates a track,
+    # the ledger decides whether it is a returning person or a new one.
+    # MILESTONE 1: these only affect measurement -- nothing is assigned yet.
+    IDENTITY_RETIRE_FRAMES: int = 60             # Detection-frames a vanished identity stays recoverable
+    IDENTITY_LEDGER_MAX_ENTRIES: int = 50        # Hard cap on the retirement buffer (bounded memory)
+    IDENTITY_MAX_RECOVERY_DISTANCE_PX: float = 400.0  # Beyond this, not a plausible predecessor
+
     # Async Event Queue
     EVENT_QUEUE_SIZE: int = 500                  # Max queued events (critical events bypass this limit)
 
