@@ -122,6 +122,12 @@ class VisionPipeline:
             max_entries=settings.IDENTITY_LEDGER_MAX_ENTRIES,
             max_centroid_distance=settings.IDENTITY_MAX_RECOVERY_DISTANCE_PX,
         )
+        # Tracks whose identity was recovered AND verified this frame. Used to
+        # suppress the `tracklet_len < 3` forced re-recognition, which would
+        # otherwise immediately redo the match we just made. Pruned every
+        # detection frame against the live track set, so it stays bounded by
+        # the number of concurrent faces.
+        self._recovered_track_ids: set = set()
 
         # Recognition cache: time-based re-check intervals (FPS-independent)
         self._recognition_lock_confidence = settings.RECOGNITION_LOCK_CONFIDENCE
@@ -529,6 +535,13 @@ class VisionPipeline:
                     best_iou = iou
                     best_embedding = embeddings[i]
 
+            # ── Identity recovery (Milestone 2) ───────────────────
+            # Runs BEFORE the recognition-cache decision so that a successfully
+            # recovered track is treated as already-identified and does not
+            # burn a forced ArcFace match on the frame it reappears.
+            if best_embedding is not None:
+                self._maybe_recover_identity(track, best_embedding)
+
             # ── Time-based recognition cache ──────────────────────
             # Only run ArcFace if the track needs re-recognition.
             # This is FPS-independent: uses wall-clock time, not frame counts.
@@ -812,6 +825,14 @@ class VisionPipeline:
             logger.warning(f"[{self.camera_id}] Identity ledger error: {e}")
             return
 
+        # Prune the recovered-track set: drop tracks that are gone, and tracks
+        # that have aged past the `tracklet_len < 3` window the flag exists to
+        # cover. Keeps the set bounded by concurrent face count.
+        live_ids = {t.track_id for t in active_tracks}
+        matured = {t.track_id for t in active_tracks if t.tracklet_len >= 3}
+        self._recovered_track_ids &= live_ids
+        self._recovered_track_ids -= matured
+
         for opp in opportunities:
             if opp.recoverable:
                 b = opp.best
@@ -837,6 +858,83 @@ class VisionPipeline:
                     f"[{self.camera_id}] new T{opp.track_id} — no recoverable "
                     f"predecessor (retired pool={opp.n_retired_total})"
                 )
+
+    def _maybe_recover_identity(self, track: STrack, embedding: np.ndarray) -> bool:
+        """
+        Attempt to restore a previously-known identity onto a freshly created track.
+
+        MILESTONE 2. Flow:
+
+            ledger proposes  ->  recogniser verifies  ->  ledger restores state
+
+        The ledger is NEVER the authority. It can only nominate a candidate;
+        FaceRecognizer.verify_against_person() decides, using stricter
+        thresholds than ordinary recognition. This bounds the identity-swap
+        risk by the recogniser that is already in production, rather than
+        introducing a second, divergent recognition path.
+
+        Returns:
+            True if an identity was verified and restored.
+        """
+        if not settings.IDENTITY_RECOVERY_ENABLED:
+            return False
+
+        proposal = self.identity_ledger.take_proposal(track.track_id)
+        if proposal is None or proposal.best is None:
+            return False
+
+        # Coexistence guard: ByteTrack's legacy carry-over is still present and
+        # untouched. It is measured at 0% success, but if it ever does fire we
+        # must not double-assign on top of it.
+        if track.person_id:
+            profiler.record_legacy_carryover_fired()
+            logger.warning(
+                f"[{self.camera_id}] Legacy ByteTrack carry-over fired on "
+                f"T{track.track_id} ({track.person_name}) — skipping ledger recovery"
+            )
+            return False
+
+        if settings.IDENTITY_REQUIRE_UNAMBIGUOUS and not proposal.unambiguous:
+            profiler.record_recovery_rejected("ambiguous")
+            logger.info(
+                f"[{self.camera_id}] RECOVERY DECLINED (ambiguous): T{track.track_id} "
+                f"had {proposal.n_eligible} eligible candidates — "
+                f"refusing to guess between them"
+            )
+            return False
+
+        cand = proposal.best
+        profiler.record_recovery_attempted()
+
+        result = self.recognizer.verify_against_person(
+            embedding, cand.retired.person_id,
+        )
+
+        if not result.matched:
+            profiler.record_recovery_rejected(result.rejection_reason or "unknown")
+            logger.info(
+                f"[{self.camera_id}] RECOVERY REJECTED: T{track.track_id} proposed as "
+                f"{cand.person_name} but verification failed "
+                f"({result.rejection_reason}, distance={result.distance:.4f}) — "
+                f"falling back to full recognition"
+            )
+            return False
+
+        self.identity_ledger.restore(
+            track, cand.retired,
+            verified_confidence=result.confidence,
+            lock_threshold=self._recognition_lock_confidence,
+        )
+        self._recovered_track_ids.add(track.track_id)
+        profiler.record_recovery_verified()
+        logger.info(
+            f"[{self.camera_id}] ✅ RECOVERED: T{track.track_id} = {track.person_name} "
+            f"(confidence={result.confidence:.3f}, margin={result.margin:.4f}, "
+            f"gap={cand.frames_since_retired}f, dist={cand.centroid_distance:.0f}px, "
+            f"locked={track.recognition_locked}, "
+            f"history={len(track._distance_history)} restored)"
+        )
+        return True
 
     def _face_quality_for(self, frame: np.ndarray, location: tuple) -> float:
         """
@@ -874,8 +972,15 @@ class VisionPipeline:
         if track.person_id is None:
             return True
 
-        # Track was just re-created (lost and found) — must re-verify
+        # Track was just re-created (lost and found) — must re-verify.
+        #
+        # EXCEPTION: if the identity ledger already recovered this track and the
+        # recogniser VERIFIED that identity this frame, re-running a full match
+        # would be redundant work on an answer we just computed. Skipping it is
+        # the cache-efficiency win of identity recovery.
         if track.tracklet_len < 3:
+            if track.track_id in self._recovered_track_ids:
+                return False
             return True
 
         now = time.time()

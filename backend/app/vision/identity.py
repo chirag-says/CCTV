@@ -120,6 +120,18 @@ class RecoveryOpportunity:
         """True if a plausible predecessor existed at all (any eligible candidate)."""
         return self.best is not None
 
+    @property
+    def unambiguous(self) -> bool:
+        """
+        True if exactly one retired identity was eligible.
+
+        Milestone 1 measured 1 eligible candidate for genuine recoveries and 2
+        for two people crossing. With >1 candidate the spatial evidence cannot
+        distinguish them, and proposing either would risk an identity swap --
+        which in an attendance record is strictly worse than a gap.
+        """
+        return self.n_eligible == 1
+
 
 class IdentityLedger:
     """
@@ -154,6 +166,10 @@ class IdentityLedger:
         self._retired: List[RetiredIdentity] = []
         self._last_seen: Dict[int, dict] = {}   # track_id -> snapshot fields
         self._frame_index = 0
+        # Proposals raised this frame, awaiting verification by the recogniser.
+        # Consumed exactly once via take_proposal() so a rejected proposal is
+        # never retried on the same track.
+        self._proposals: Dict[int, RecoveryOpportunity] = {}
 
     # ── Observation ───────────────────────────────────────────────────────
 
@@ -186,9 +202,13 @@ class IdentityLedger:
         # zeroes it and STrack.update() only increments on a subsequent match.
         # This is stateless, so it cannot drift out of sync with the tracker.
         opportunities: List[RecoveryOpportunity] = []
+        self._proposals.clear()
         for track in active_tracks:
             if track.track_id not in self._last_seen and track.tracklet_len == 0:
-                opportunities.append(self._score(track))
+                opp = self._score(track)
+                opportunities.append(opp)
+                if opp.recoverable:
+                    self._proposals[track.track_id] = opp
 
         # ── 3. Refresh snapshots of everything currently live ─────────
         for track in active_tracks:
@@ -272,6 +292,55 @@ class IdentityLedger:
             r for r in self._retired
             if (self._frame_index - r.retired_frame) <= self.retire_frames
         ]
+
+    # ── Proposal handoff ──────────────────────────────────────────────────
+
+    def take_proposal(self, track_id: int) -> Optional[RecoveryOpportunity]:
+        """
+        Consume this frame's recovery proposal for a track, if any.
+
+        Consumed once: a proposal the recogniser rejects is not retried on the
+        same track, so a persistent look-alike cannot be re-proposed every frame
+        until it eventually passes by chance.
+        """
+        return self._proposals.pop(track_id, None)
+
+    @staticmethod
+    def restore(track, retired: RetiredIdentity, verified_confidence: float,
+                lock_threshold: float):
+        """
+        Write a verified identity, plus its recognition state, back onto a track.
+
+        Restores the temporal context that ByteTrack's own carry-over dropped:
+        the rolling distance history (temporal rescue) and the fail streak
+        (hysteresis). Without these the track is protected by neither mechanism
+        on the frames right after reacquisition, which is exactly when a
+        borderline embedding is most likely.
+
+        Two fields are deliberately NOT inherited verbatim:
+
+          confidence  taken from the FRESH verification, not the stale
+                      snapshot, so it reflects a real current measurement.
+
+          locked      re-earned, not inherited: requires that the retired track
+                      was locked AND the fresh verification is itself strong
+                      enough to lock. Inheriting a lock on a borderline
+                      verification would suppress re-checks for seconds on an
+                      identity we are not actually confident about.
+        """
+        track.person_id = retired.person_id
+        track.person_name = retired.person_name
+        track.recognition_confidence = verified_confidence
+        track.recognition_time = time.time()
+        track.recognition_locked = (
+            retired.recognition_locked and verified_confidence >= lock_threshold
+        )
+        track.identity_fail_streak = retired.identity_fail_streak
+        track._distance_history = list(retired.distance_history)
+
+    def forget(self, person_id: str):
+        """Drop every retired entry for a person (e.g. after a verified swap)."""
+        self._retired = [r for r in self._retired if r.person_id != person_id]
 
     # ── Introspection ─────────────────────────────────────────────────────
 

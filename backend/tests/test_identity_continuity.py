@@ -222,7 +222,260 @@ def run_all(verbose=True):
     return rows
 
 
+# ── Milestone 2: propose -> verify -> restore ────────────────────────────
+
+DIM = 512
+
+
+def _unit(v):
+    return v / np.linalg.norm(v)
+
+
+def at_cosine(base, cos_target, rng):
+    """
+    Return a unit vector at EXACTLY `cos_target` cosine similarity to `base`.
+
+    Additive Gaussian noise is useless for this in high dimensions: at 512-d a
+    randn vector scaled by 0.3 already has norm ~6.8, so it swamps the unit
+    signal and the result is effectively random. Instead, project out the base
+    direction and recombine at the exact angle we want.
+    """
+    n = rng.randn(len(base))
+    n -= base * float(np.dot(n, base))      # orthogonalise against base
+    n = _unit(n)
+    return base * cos_target + n * float(np.sqrt(1.0 - cos_target ** 2))
+
+
+def _gallery():
+    """
+    Synthetic 3-person gallery:
+      A  the target
+      B  clearly different (stage-1 reject case)
+      C  a near-twin of A (stage-2 MARGIN reject case)
+    """
+    from app.vision.recognizer import FaceRecognizer
+    rng = np.random.RandomState(42)
+
+    base_a = _unit(rng.randn(DIM))
+    base_b = _unit(rng.randn(DIM))
+    base_c = at_cosine(base_a, 0.85, rng)     # near-twin of A
+
+    rows = []
+    for i in range(8):                        # A: 8 tight multi-pose embeddings
+        rows.append({"encoding_id": f"a{i}", "person_id": "p-a", "person_name": "Teacher A",
+                     "encoding": at_cosine(base_a, 0.98, rng), "quality": 0.9})
+    for i in range(4):
+        rows.append({"encoding_id": f"b{i}", "person_id": "p-b", "person_name": "Teacher B",
+                     "encoding": at_cosine(base_b, 0.98, rng), "quality": 0.9})
+    for i in range(4):
+        rows.append({"encoding_id": f"c{i}", "person_id": "p-c", "person_name": "Teacher C",
+                     "encoding": at_cosine(base_c, 0.98, rng), "quality": 0.9})
+
+    r = FaceRecognizer()
+    r.load_encodings(rows)
+    return r, base_a, base_b, base_c
+
+
+def run_verification_matrix(verbose=True):
+    """Exercise FaceRecognizer.verify_against_person across the decision space."""
+    from app.config import settings
+    rng = np.random.RandomState(7)
+    rec, base_a, base_b, base_c = _gallery()
+
+    # Equidistant between A and its near-twin C: close enough to pass the
+    # distance gate, but with almost no margin -> must fail at stage 2.
+    between_a_and_c = _unit(base_a + base_c)
+
+    # NOTE on "hard angle, twin in gallery": this is EXPECTED to be declined.
+    # Teacher C sits at cosine 0.85 from Teacher A, so a hard-angle capture of A
+    # is genuinely close to both. Declining to restore a *locked* identity there
+    # is the swap protection doing its job -- the track simply falls through to
+    # ordinary recognition, which applies its own margin check. The cost is a
+    # lower recovery rate in galleries containing similar-looking people, which
+    # is the correct trade for an attendance record.
+    cases = [
+        ("same person, clean",             at_cosine(base_a, 0.97, rng), "p-a", True),
+        ("same person, hard angle (no twin)", at_cosine(base_b, 0.70, rng), "p-b", True),
+        ("hard angle, twin in gallery",    at_cosine(base_a, 0.70, rng), "p-a", False),
+        ("same person, past threshold",    at_cosine(base_a, 0.30, rng), "p-a", False),
+        ("WRONG person proposed",          at_cosine(base_b, 0.97, rng), "p-a", False),
+        ("near-twin, ambiguous margin",    between_a_and_c,              "p-a", False),
+        ("stranger proposed as A",         _unit(rng.randn(DIM)),        "p-a", False),
+        ("person not in gallery",          base_a.copy(),                "p-zz", False),
+    ]
+
+    rows = []
+    for label, enc, pid, want in cases:
+        res = rec.verify_against_person(enc, pid)
+        rows.append({
+            "label": label, "want": want, "got": res.matched,
+            "dist": res.distance, "margin": res.margin,
+            "reason": res.rejection_reason or "-",
+            "ok": res.matched == want,
+        })
+
+    if verbose:
+        print()
+        print("=" * 100)
+        print("VERIFICATION MATRIX  (recogniser is the authority; ledger only proposes)")
+        print(f"  max_distance={settings.IDENTITY_VERIFY_MAX_DISTANCE}  "
+              f"min_margin={settings.IDENTITY_VERIFY_MIN_MARGIN}")
+        print("=" * 100)
+        print(f"{'case':<32} {'want':>6} {'got':>6} {'dist':>7} {'margin':>8}  {'reason':<34}")
+        print("-" * 100)
+        for x in rows:
+            print(f"{x['label']:<32} {str(x['want']):>6} {str(x['got']):>6} "
+                  f"{x['dist']:>7.4f} {x['margin']:>8.4f}  {x['reason']:<34}"
+                  f"{'PASS' if x['ok'] else 'FAIL'}")
+        print("=" * 100)
+    return rows
+
+
+# ── End-to-end: propose -> verify -> restore ─────────────────────────────
+
+class StubPipeline:
+    """
+    Minimal stand-in exposing exactly what _maybe_recover_identity touches.
+
+    Avoids constructing a real VisionPipeline (which would load SCRFD, YOLO,
+    DeepFace and friends) while still exercising the REAL method under test.
+    """
+    camera_id = "test-cam"
+
+    def __init__(self, ledger, recognizer):
+        self.identity_ledger = ledger
+        self.recognizer = recognizer
+        self._recovered_track_ids = set()
+        self._recognition_lock_confidence = 0.85
+
+    _maybe_recover_identity = None  # bound below
+
+
+def _bind_real_method():
+    from app.vision.pipeline import VisionPipeline
+    StubPipeline._maybe_recover_identity = VisionPipeline._maybe_recover_identity
+
+
+def run_end_to_end(verbose=True):
+    """
+    Full chain on a track ByteTrack recreated: the ledger proposes, the real
+    recogniser verifies, and the full recognition state is restored.
+    """
+    from app.vision.identity import IdentityLedger, RetiredIdentity
+    _bind_real_method()
+
+    rng = np.random.RandomState(11)
+    rec, base_a, base_b, _ = _gallery()
+    ledger = IdentityLedger()
+    pipe = StubPipeline(ledger, rec)
+
+    class FakeTrack:
+        def __init__(self, tid):
+            self.track_id = tid
+            self.bbox = np.array([300, 200, 400, 300], np.float32)
+            self.person_id = None
+            self.person_name = None
+            self.recognition_confidence = 0.0
+            self.recognition_time = 0.0
+            self.recognition_locked = False
+            self.identity_fail_streak = 0
+            self._distance_history = []
+            self.tracklet_len = 0
+
+    retired = RetiredIdentity(
+        track_id=1, person_id="p-a", person_name="Teacher A",
+        bbox=np.array([280, 195, 380, 295], np.float32),
+        retired_frame=1, retired_at=0.0,
+        recognition_confidence=0.94, recognition_locked=True,
+        identity_fail_streak=2, distance_history=[0.31, 0.28, 0.33],
+    )
+
+    rows = []
+    for label, enc, want in [
+        ("correct person reappears", at_cosine(base_a, 0.97, rng), True),
+        ("different person appears", at_cosine(base_b, 0.97, rng), False),
+    ]:
+        ledger._retired = [retired]
+        ledger._frame_index = 2
+        track = FakeTrack(99)
+        from app.vision.identity import RecoveryCandidate, RecoveryOpportunity
+        cand = RecoveryCandidate(retired=retired, iou=0.0, centroid_distance=25.0,
+                                 frames_since_retired=1, seconds_since_retired=0.1)
+        ledger._proposals = {99: RecoveryOpportunity(
+            track_id=99, bbox=track.bbox, best=cand, n_eligible=1, n_retired_total=1)}
+        pipe._recovered_track_ids.clear()
+
+        restored = pipe._maybe_recover_identity(track, enc)
+        rows.append({
+            "label": label, "want": want, "restored": restored,
+            "person": track.person_name,
+            "locked": track.recognition_locked,
+            "history": len(track._distance_history),
+            "streak": track.identity_fail_streak,
+            "ok": restored == want and (
+                (track.person_id == "p-a" and len(track._distance_history) == 3)
+                if want else track.person_id is None
+            ),
+        })
+
+    if verbose:
+        print()
+        print("=" * 100)
+        print("END-TO-END  ledger proposes -> recogniser verifies -> state restored")
+        print("=" * 100)
+        print(f"{'case':<30} {'want':>6} {'restored':>9} {'person':>12} "
+              f"{'locked':>7} {'hist':>5} {'streak':>7}")
+        print("-" * 100)
+        for x in rows:
+            print(f"{x['label']:<30} {str(x['want']):>6} {str(x['restored']):>9} "
+                  f"{str(x['person']):>12} {str(x['locked']):>7} {x['history']:>5} "
+                  f"{x['streak']:>7}   {'PASS' if x['ok'] else 'FAIL'}")
+        print("=" * 100)
+    return rows
+
+
 # ── pytest entry points ──────────────────────────────────────────────────
+
+def test_end_to_end_recovery():
+    for x in run_end_to_end(verbose=False):
+        assert x["ok"], f"{x['label']}: restored={x['restored']} want={x['want']}"
+
+
+def test_restore_brings_back_temporal_state():
+    """
+    The whole point of restoring: hysteresis and temporal rescue need the
+    distance history and fail streak back, not just the name. ByteTrack's own
+    carry-over copied only person_id/person_name.
+    """
+    rows = run_end_to_end(verbose=False)
+    good = [x for x in rows if x["want"]][0]
+    assert good["history"] == 3, "distance history was not restored"
+    assert good["streak"] == 2, "identity fail streak was not restored"
+    assert good["locked"] is True, "lock was not re-earned on a strong verification"
+
+def test_verification_matrix():
+    for x in run_verification_matrix(verbose=False):
+        assert x["ok"], f"{x['label']}: wanted matched={x['want']}, got {x['got']} ({x['reason']})"
+
+
+def test_verification_rejects_wrong_person_cheaply():
+    """A clearly wrong proposal must fail at stage 1, before the full search."""
+    rec, base_a, base_b, _ = _gallery()
+    res = rec.verify_against_person(_unit(base_b), "p-a")
+    assert not res.matched
+    assert res.rejection_reason == "verify_distance_exceeds_threshold", res.rejection_reason
+
+
+def test_verification_rejects_near_twin_on_margin():
+    """
+    The stage-2 path must actually be exercised: a vector equidistant between
+    two similar people passes the distance gate but must fail on margin.
+    Without this, a near-twin would silently inherit a locked identity.
+    """
+    rec, base_a, _, base_c = _gallery()
+    res = rec.verify_against_person(_unit(base_a + base_c), "p-a")
+    assert not res.matched, "near-twin was verified — identity swap risk"
+    assert res.rejection_reason == "verify_ambiguous_margin", res.rejection_reason
 
 def test_ledger_detects_recoverable_opportunities():
     for x in run_all(verbose=False):
@@ -254,4 +507,9 @@ def test_no_identity_swap_when_people_cross():
 
 if __name__ == "__main__":
     rows = run_all()
-    sys.exit(0 if all(x["ok"] for x in rows) else 1)
+    vrows = run_verification_matrix()
+    erows = run_end_to_end()
+    ok = all(x["ok"] for x in rows + vrows + erows)
+    print()
+    print("RESULT:", "ALL PASS" if ok else "FAILURES PRESENT")
+    sys.exit(0 if ok else 1)

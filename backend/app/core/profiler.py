@@ -111,6 +111,13 @@ class PerformanceProfiler:
         self._identity_swaps = 0            # person A -> person B on one track
         self._swap_examples: List[str] = []
 
+        # ── Identity recovery (Milestone 2) ───────────────────────
+        # ledger proposes -> recogniser verifies -> ledger restores
+        self._recovery_attempted = 0
+        self._recovery_verified = 0
+        self._recovery_rejected: Dict[str, int] = defaultdict(int)
+        self._legacy_carryover_fired = 0   # old ByteTrack path; expected 0
+
         # Event queue
         self._eq_wait_times: List[float] = []
         self._eq_processed = 0
@@ -320,6 +327,40 @@ class PerformanceProfiler:
             self._identity_swaps += 1
             if len(self._swap_examples) < 5:
                 self._swap_examples.append(f"T{track_id}: {prev_name} -> {new_name}")
+
+    def record_recovery_attempted(self):
+        """A ledger proposal was sent to the recogniser for verification."""
+        if not self._enabled:
+            return
+        with self._lock:
+            self._recovery_attempted += 1
+
+    def record_recovery_verified(self):
+        """The recogniser confirmed a proposal and full state was restored."""
+        if not self._enabled:
+            return
+        with self._lock:
+            self._recovery_verified += 1
+
+    def record_recovery_rejected(self, reason: str):
+        """
+        A proposal was declined. Reasons:
+          ambiguous                          >1 eligible candidate
+          verify_distance_exceeds_threshold  stage-1 cheap reject
+          verify_ambiguous_margin            stage-2 runner-up too close
+          verify_person_not_in_gallery       person was deleted meanwhile
+        """
+        if not self._enabled:
+            return
+        with self._lock:
+            self._recovery_rejected[reason] += 1
+
+    def record_legacy_carryover_fired(self):
+        """Old in-tracker carry-over produced an identity. Expected to be 0."""
+        if not self._enabled:
+            return
+        with self._lock:
+            self._legacy_carryover_fired += 1
 
     # ── Event Queue ───────────────────────────────────────────────
 
@@ -747,6 +788,32 @@ class PerformanceProfiler:
             lines.append(f"  Identity Swaps   : {self._identity_swaps}")
             for ex in self._swap_examples:
                 lines.append(f"    ! {ex}")
+
+            # ── Recovery outcomes (Milestone 2) ───────────────────
+            if self._recovery_attempted or self._recovery_rejected:
+                verified_pct = (
+                    self._recovery_verified / self._recovery_attempted * 100
+                    if self._recovery_attempted else 0.0
+                )
+                lines.append("")
+                lines.append("  Identity Recovery (ledger proposes, recogniser verifies)")
+                lines.append(f"    Attempted      : {self._recovery_attempted}")
+                lines.append(
+                    f"    Verified       : {self._recovery_verified} ({verified_pct:.0f}% of attempts)"
+                )
+                if self._tracks_recoverable:
+                    end_to_end = self._recovery_verified / self._tracks_recoverable * 100
+                    lines.append(
+                        f"    Recovery Rate  : {self._recovery_verified}/{self._tracks_recoverable} "
+                        f"({end_to_end:.0f}% of recoverable recreations)  <- headline metric"
+                    )
+                for reason, count in sorted(self._recovery_rejected.items(), key=lambda x: -x[1]):
+                    lines.append(f"    rejected: {reason:<34s} {count}")
+            if self._legacy_carryover_fired:
+                lines.append(
+                    f"    ! legacy ByteTrack carry-over fired {self._legacy_carryover_fired}x "
+                    f"(expected 0 — investigate)"
+                )
 
         # ── Event Queue ──
         if self._eq_processed > 0 or self._eq_dropped > 0:

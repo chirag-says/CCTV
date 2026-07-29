@@ -446,6 +446,144 @@ class FaceRecognizer:
                     in_gray_zone=is_gray,
                 )
 
+    def verify_against_person(
+        self,
+        face_encoding: np.ndarray,
+        person_id: str,
+        face_quality: float = 0.5,
+        max_distance: Optional[float] = None,
+        min_margin: Optional[float] = None,
+    ) -> MatchResult:
+        """
+        Verify that an embedding belongs to ONE specific person (1-to-few).
+
+        Used by the Identity Ledger to confirm a proposed identity recovery.
+        The ledger proposes; this method decides. Recognition authority stays
+        here so there is exactly one implementation of the cosine/threshold/
+        margin rules.
+
+        Two-stage by design:
+
+          Stage 1 (cheap reject)  compare against ONLY this person's embeddings.
+                                  If the best distance already exceeds the
+                                  threshold, return immediately -- a bad
+                                  proposal costs k dot products, not N.
+
+          Stage 2 (margin check)  only if stage 1 passed. A margin check is
+                                  meaningless without knowing the runner-up
+                                  across the WHOLE gallery, so this stage does
+                                  a full search and requires that the proposed
+                                  person is genuinely the closest, by a clear
+                                  gap. Without this, verification would happily
+                                  confirm a proposal for someone who merely
+                                  looks similar.
+
+        Thresholds default to the stricter IDENTITY_VERIFY_* settings rather
+        than the ordinary recognition thresholds.
+
+        Returns:
+            MatchResult. `matched` True only if both stages pass.
+            `rejection_reason` distinguishes the failure mode for metrics.
+        """
+        thresh = max_distance if max_distance is not None else settings.IDENTITY_VERIFY_MAX_DISTANCE
+        margin_req = min_margin if min_margin is not None else settings.IDENTITY_VERIFY_MIN_MARGIN
+
+        with self._lock:
+            indices = self._person_index.get(person_id)
+            if not indices:
+                return MatchResult(
+                    matched=False, encoding=face_encoding,
+                    rejection_reason="verify_person_not_in_gallery",
+                )
+
+            norm = np.linalg.norm(face_encoding)
+            if norm <= 0:
+                return MatchResult(
+                    matched=False, encoding=face_encoding,
+                    rejection_reason="zero_norm_embedding",
+                )
+            query = face_encoding / norm
+
+            # ── Stage 1: 1-to-few against the proposed person only ──
+            best_sim = -1.0
+            for idx in indices:
+                sim = float(np.dot(self._known_faces[idx].encoding, query))
+                if sim > best_sim:
+                    best_sim = sim
+            cand_distance = 1.0 - best_sim
+
+            if cand_distance > thresh:
+                logger.debug(
+                    f"VERIFY REJECT (stage 1): {person_id[:8]}… "
+                    f"distance={cand_distance:.4f} > {thresh} "
+                    f"({len(indices)} embeddings compared)"
+                )
+                return MatchResult(
+                    matched=False,
+                    confidence=round(max(0.0, best_sim), 3),
+                    distance=round(cand_distance, 4),
+                    encoding=face_encoding,
+                    rejection_reason="verify_distance_exceeds_threshold",
+                )
+
+            # ── Stage 2: is anyone else closer, and by how much? ────
+            # Full search is required for a meaningful margin. It is one
+            # matrix-vector product, so it is cheap relative to the embedding
+            # we already computed -- the saving in stage 1 is on REJECTS.
+            raw = self._backend.search(query, top_k=self._backend.size)
+            person_best: Dict[str, float] = {}
+            for idx, similarity in raw:
+                pid = self._known_faces[idx].person_id
+                if pid not in person_best or similarity > person_best[pid]:
+                    person_best[pid] = similarity
+
+            others = [(pid, s) for pid, s in person_best.items() if pid != person_id]
+            if others:
+                runner_pid, runner_sim = max(others, key=lambda kv: kv[1])
+                runner_distance = 1.0 - runner_sim
+                margin = runner_distance - cand_distance
+            else:
+                runner_pid, margin = None, float("inf")
+
+            if margin < margin_req:
+                runner_name = next(
+                    (f.person_name for f in self._known_faces if f.person_id == runner_pid),
+                    "?",
+                )
+                logger.info(
+                    f"❌ VERIFY REJECT (margin): proposed {person_id[:8]}… "
+                    f"distance={cand_distance:.4f} but {runner_name} is at "
+                    f"{1.0 - person_best[runner_pid]:.4f}, margin={margin:.4f} < {margin_req}"
+                )
+                return MatchResult(
+                    matched=False,
+                    confidence=round(max(0.0, best_sim), 3),
+                    distance=round(cand_distance, 4),
+                    margin=round(margin, 4),
+                    encoding=face_encoding,
+                    rejection_reason="verify_ambiguous_margin",
+                )
+
+            name = next(
+                (f.person_name for f in self._known_faces if f.person_id == person_id),
+                None,
+            )
+            logger.info(
+                f"✅ VERIFIED: {name} (distance={cand_distance:.4f} <= {thresh}, "
+                f"margin={margin:.4f} >= {margin_req}, "
+                f"{len(indices)} candidate embeddings)"
+            )
+            return MatchResult(
+                matched=True,
+                person_id=person_id,
+                person_name=name,
+                confidence=round(max(0.0, best_sim), 3),
+                distance=round(cand_distance, 4),
+                margin=round(min(margin, 9.99), 4),
+                encoding=face_encoding,
+                quality_tier="verified",
+            )
+
     def recognize_faces_batch(
         self,
         face_encodings: List[np.ndarray],

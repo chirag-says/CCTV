@@ -114,6 +114,24 @@ class Settings(BaseSettings):
     IDENTITY_LEDGER_MAX_ENTRIES: int = 50        # Hard cap on the retirement buffer (bounded memory)
     IDENTITY_MAX_RECOVERY_DISTANCE_PX: float = 400.0  # Beyond this, not a plausible predecessor
 
+    # ── Identity Recovery (Milestone 2) ───────────────────────
+    # The ledger PROPOSES a recovered identity; FaceRecognizer VERIFIES it.
+    # The ledger is never the authority — it cannot assign an identity the
+    # recogniser would not independently agree with.
+    IDENTITY_RECOVERY_ENABLED: bool = True
+
+    # Verification is deliberately STRICTER than ordinary recognition. A false
+    # accept here restores a confident, locked identity onto the wrong person,
+    # which is worse than an ordinary false accept: the identity lock then
+    # suppresses re-checks for RECOGNITION_FULL_RECHECK_SEC.
+    IDENTITY_VERIFY_MAX_DISTANCE: float = 0.55   # vs FACE_MATCH_BALANCED 0.62
+    IDENTITY_VERIFY_MIN_MARGIN: float = 0.12     # vs FACE_MATCH_MIN_MARGIN 0.10
+
+    # Only propose when exactly one retired identity is eligible. Milestone 1
+    # measured 1 candidate for genuine recoveries and 2 for crossing people,
+    # so candidate count is a usable ambiguity signal.
+    IDENTITY_REQUIRE_UNAMBIGUOUS: bool = True
+
     # Async Event Queue
     EVENT_QUEUE_SIZE: int = 500                  # Max queued events (critical events bypass this limit)
 
