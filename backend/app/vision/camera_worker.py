@@ -198,6 +198,11 @@ class CameraWorker:
     def status(self) -> dict:
         return self.pipeline.status
 
+    @property
+    def stream_health(self):
+        """Proxy to pipeline's stream health monitor for WebSocket/status access."""
+        return self.pipeline.stream_health
+
 
 class CameraManager:
     """

@@ -120,6 +120,11 @@ export default function PersonDetailPage() {
     // Replacement modal state
     const [replaceModal, setReplaceModal] = useState(null);
 
+    // Delete person state
+    const [showDeleteModal, setShowDeleteModal] = useState(false);
+    const [deleteConfirmName, setDeleteConfirmName] = useState('');
+    const [deleting, setDeleting] = useState(false);
+
     const loadData = useCallback(async () => {
         try {
             setLoading(true);
@@ -182,6 +187,21 @@ export default function PersonDetailPage() {
             loadData();
         } catch (e) {
             alert(e.message);
+        }
+    }
+
+    async function handleDeletePerson(hard = false) {
+        setDeleting(true);
+        try {
+            if (hard) {
+                await api.hardDeletePerson(personId);
+            } else {
+                await api.deletePerson(personId);
+            }
+            router.push('/persons');
+        } catch (e) {
+            alert(e.message);
+            setDeleting(false);
         }
     }
 
@@ -274,6 +294,27 @@ export default function PersonDetailPage() {
                             </div>
                         </div>
 
+                        {/* Actions */}
+                        <div style={{ display: 'flex', gap: '8px', alignItems: 'flex-start' }}>
+                            <button
+                                className="btn btn-sm"
+                                onClick={() => setShowDeleteModal(true)}
+                                style={{
+                                    background: 'rgba(239, 68, 68, 0.1)',
+                                    color: 'var(--danger)',
+                                    border: '1px solid rgba(239, 68, 68, 0.3)',
+                                    display: 'flex', alignItems: 'center', gap: '6px',
+                                    padding: '8px 14px', borderRadius: 'var(--radius-sm)',
+                                    cursor: 'pointer', fontSize: '0.8rem', fontWeight: 600,
+                                    transition: 'var(--transition-fast)',
+                                }}
+                                onMouseEnter={e => { e.target.style.background = 'rgba(239, 68, 68, 0.2)'; }}
+                                onMouseLeave={e => { e.target.style.background = 'rgba(239, 68, 68, 0.1)'; }}
+                            >
+                                <TrashIcon size={14} /> Delete Person
+                            </button>
+                        </div>
+
                         {/* Stats */}
                         <div style={{ display: 'flex', gap: '24px', flexWrap: 'wrap' }}>
                             <div style={{ textAlign: 'center' }}>
@@ -329,6 +370,118 @@ export default function PersonDetailPage() {
                     </div>
                 </div>
             </div>
+
+            {/* ── Delete Confirmation Modal ─────────────────── */}
+            {showDeleteModal && (
+                <div style={{
+                    position: 'fixed', inset: 0, zIndex: 1000,
+                    background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                }} onClick={() => !deleting && setShowDeleteModal(false)}>
+                    <div style={{
+                        background: 'var(--bg-secondary)', borderRadius: 'var(--radius-lg)',
+                        padding: '28px', maxWidth: '440px', width: '90%',
+                        border: '1px solid var(--border-color)',
+                        boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+                    }} onClick={e => e.stopPropagation()}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '20px' }}>
+                            <div style={{
+                                width: '40px', height: '40px', borderRadius: '50%',
+                                background: 'rgba(239, 68, 68, 0.15)', display: 'flex',
+                                alignItems: 'center', justifyContent: 'center', color: 'var(--danger)',
+                            }}>
+                                <TrashIcon size={20} />
+                            </div>
+                            <div>
+                                <h3 style={{ margin: 0, color: 'var(--text-primary)', fontSize: '1.1rem' }}>
+                                    Delete {person.name}?
+                                </h3>
+                                <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.8rem' }}>
+                                    Choose how to remove this person
+                                </p>
+                            </div>
+                        </div>
+
+                        {/* Option 1: Deactivate */}
+                        <button
+                            disabled={deleting}
+                            onClick={() => handleDeletePerson(false)}
+                            style={{
+                                width: '100%', padding: '14px 16px', marginBottom: '10px',
+                                background: 'var(--bg-tertiary)', border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-sm)', cursor: deleting ? 'wait' : 'pointer',
+                                textAlign: 'left', color: 'var(--text-primary)',
+                                transition: 'var(--transition-fast)',
+                            }}
+                            onMouseEnter={e => { if (!deleting) e.target.style.borderColor = 'var(--warning)'; }}
+                            onMouseLeave={e => { e.target.style.borderColor = 'var(--border-color)'; }}
+                        >
+                            <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '4px' }}>
+                                ⏸ Deactivate
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+                                Hides from recognition but keeps all data. Can be reactivated later.
+                            </div>
+                        </button>
+
+                        {/* Option 2: Permanent Delete */}
+                        <div style={{
+                            padding: '14px 16px', background: 'rgba(239, 68, 68, 0.05)',
+                            border: '1px solid rgba(239, 68, 68, 0.2)', borderRadius: 'var(--radius-sm)',
+                        }}>
+                            <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '4px', color: 'var(--danger)' }}>
+                                🗑 Permanently Delete
+                            </div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                                Removes person, all encodings, events, and tracking history. This cannot be undone.
+                            </div>
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                                <input
+                                    type="text"
+                                    placeholder={`Type "${person.name}" to confirm`}
+                                    value={deleteConfirmName}
+                                    onChange={e => setDeleteConfirmName(e.target.value)}
+                                    style={{
+                                        flex: 1, padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+                                        border: '1px solid var(--border-color)', background: 'var(--bg-primary)',
+                                        color: 'var(--text-primary)', fontSize: '0.85rem',
+                                        outline: 'none',
+                                    }}
+                                />
+                                <button
+                                    disabled={deleteConfirmName !== person.name || deleting}
+                                    onClick={() => handleDeletePerson(true)}
+                                    style={{
+                                        padding: '8px 16px', borderRadius: 'var(--radius-sm)',
+                                        background: deleteConfirmName === person.name ? 'var(--danger)' : 'var(--bg-tertiary)',
+                                        color: deleteConfirmName === person.name ? 'white' : 'var(--text-muted)',
+                                        border: 'none', fontWeight: 600, fontSize: '0.8rem',
+                                        cursor: deleteConfirmName === person.name && !deleting ? 'pointer' : 'not-allowed',
+                                        transition: 'var(--transition-fast)',
+                                        opacity: deleting ? 0.6 : 1,
+                                    }}
+                                >
+                                    {deleting ? 'Deleting...' : 'Delete Forever'}
+                                </button>
+                            </div>
+                        </div>
+
+                        {/* Cancel */}
+                        <button
+                            onClick={() => { setShowDeleteModal(false); setDeleteConfirmName(''); }}
+                            disabled={deleting}
+                            style={{
+                                width: '100%', padding: '10px', marginTop: '12px',
+                                background: 'none', border: '1px solid var(--border-color)',
+                                borderRadius: 'var(--radius-sm)', color: 'var(--text-secondary)',
+                                cursor: 'pointer', fontSize: '0.85rem',
+                            }}
+                        >
+                            Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* ── Tab Navigation ─────────────────────────────── */}
             <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '0' }}>

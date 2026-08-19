@@ -117,6 +117,10 @@ class ApiClient {
     return this.request(`/api/persons/${id}`, { method: 'DELETE' });
   }
 
+  async hardDeletePerson(id) {
+    return this.request(`/api/persons/${id}?hard=true`, { method: 'DELETE' });
+  }
+
   async uploadFaceEncoding(personId, file) {
     const formData = new FormData();
     formData.append('file', file);
@@ -426,6 +430,77 @@ class ApiClient {
   async search(query, type = 'all', limit = 20) {
     const params = new URLSearchParams({ q: query, type, limit: String(limit) });
     return this.request(`/api/search?${params}`);
+  }
+
+  // ── System Health ──────────────────────────────────────
+  async getSystemHealth() {
+    return this.request('/api/system-health');
+  }
+
+  // ── AI Identity Review ─────────────────────────────────
+  async getIdentityReviewDashboard() {
+    return this.request('/api/identity-review/dashboard');
+  }
+
+  async getIdentityReviewCandidates(status = 'pending', limit = 20, offset = 0) {
+    const params = new URLSearchParams({ status, limit: String(limit), offset: String(offset) });
+    return this.request(`/api/identity-review/candidates?${params}`);
+  }
+
+  async getIdentityReviewCandidate(id) {
+    return this.request(`/api/identity-review/candidates/${id}`);
+  }
+
+  async approveCandidate(id) {
+    return this.request(`/api/identity-review/candidates/${id}/approve`, { method: 'POST' });
+  }
+
+  async rejectCandidate(id) {
+    return this.request(`/api/identity-review/candidates/${id}/reject`, { method: 'POST' });
+  }
+
+  async skipCandidate(id) {
+    return this.request(`/api/identity-review/candidates/${id}/skip`, { method: 'POST' });
+  }
+
+  async getIdentityReviewClusters(status = 'active', limit = 20, offset = 0) {
+    const params = new URLSearchParams({ status, limit: String(limit), offset: String(offset) });
+    return this.request(`/api/identity-review/clusters?${params}`);
+  }
+
+  async getIdentityReviewCluster(id) {
+    return this.request(`/api/identity-review/clusters/${id}`);
+  }
+
+  async ignoreCluster(id, reason = '') {
+    return this.request(`/api/identity-review/clusters/${id}/ignore`, {
+      method: 'POST', body: JSON.stringify({ reason }),
+    });
+  }
+
+  async createPersonFromCluster(id, data) {
+    return this.request(`/api/identity-review/clusters/${id}/create-person`, {
+      method: 'POST', body: JSON.stringify(data),
+    });
+  }
+
+  async getGalleryUpdates(status = null, limit = 20, offset = 0) {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    if (status) params.set('status', status);
+    return this.request(`/api/identity-review/gallery-updates?${params}`);
+  }
+
+  async applyGalleryUpdate(id) {
+    return this.request(`/api/identity-review/gallery-updates/${id}/apply`, { method: 'POST' });
+  }
+
+  async rollbackGalleryUpdate(id) {
+    return this.request(`/api/identity-review/gallery-updates/${id}/rollback`, { method: 'POST' });
+  }
+
+  async getIdentityReviewActivity(limit = 50, offset = 0) {
+    const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+    return this.request(`/api/identity-review/activity?${params}`);
   }
 }
 

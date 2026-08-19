@@ -70,11 +70,86 @@ async def update_person(
 @router.delete("/{person_id}")
 async def delete_person(
     person_id: str,
+    hard: bool = Query(False, description="Permanently delete person and all data (irreversible)"),
     current_user: dict = Depends(get_current_user),
 ):
-    """Soft-delete a person."""
-    PersonService.delete_person(person_id)
-    return {"message": f"Person {person_id} deleted"}
+    """
+    Delete a person.
+
+    - Default (hard=false): Soft-delete — sets is_active=False, person remains in DB.
+    - hard=true: Permanently removes person, all encodings, suggestions,
+      events, and tracking sessions. Reloads recognizer. IRREVERSIBLE.
+    """
+    if hard:
+        from app.db.session import SessionLocal
+        from app.db.models import (
+            Person, FaceEncoding, SuggestedEncoding,
+            DetectionEvent, TrackingSession,
+        )
+
+        db = SessionLocal()
+        try:
+            person = db.query(Person).filter(Person.id == person_id).first()
+            if not person:
+                raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
+
+            person_name = person.name
+
+            # Delete all related data (order matters due to FK constraints)
+            db.query(SuggestedEncoding).filter(
+                SuggestedEncoding.person_id == person_id
+            ).delete(synchronize_session=False)
+
+            db.query(FaceEncoding).filter(
+                FaceEncoding.person_id == person_id
+            ).delete(synchronize_session=False)
+
+            db.query(DetectionEvent).filter(
+                DetectionEvent.person_id == person_id
+            ).delete(synchronize_session=False)
+
+            db.query(TrackingSession).filter(
+                TrackingSession.person_id == person_id
+            ).delete(synchronize_session=False)
+
+            db.delete(person)
+
+            # Bump encoding version so pipelines reload
+            from app.services.person_service import PersonService as PS
+            current_version = PS._get_or_create_version(db)
+            PS._set_version(db, current_version + 1)
+
+            db.commit()
+
+            # Reload recognizer cache immediately
+            try:
+                all_encodings = PersonService.get_all_encodings()
+                camera_manager.load_encodings_all(all_encodings)
+            except Exception:
+                pass
+
+            # Remove from event queue FK guard
+            try:
+                from app.core.event_queue import get_event_queue
+                get_event_queue().remove_person_id(person_id)
+            except Exception:
+                pass
+
+            return {
+                "message": f"Person '{person_name}' permanently deleted",
+                "person_id": person_id,
+                "hard_delete": True,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"Hard delete failed: {str(e)}")
+        finally:
+            db.close()
+    else:
+        PersonService.delete_person(person_id)
+        return {"message": f"Person {person_id} deactivated", "person_id": person_id, "hard_delete": False}
 
 
 @router.post("/{person_id}/encodings")

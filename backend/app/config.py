@@ -141,6 +141,35 @@ class Settings(BaseSettings):
     UNKNOWN_SIGHTING_COOLDOWN_SEC: float = 30.0  # Min gap between occurrence bumps,
                                                   # so `occurrence` counts visits not frames
 
+    # ── Unknown Re-identification (Phase 3) ───────────────────
+    # An unknown identity keeps several views and matches best-of-K, mirroring
+    # the enrolled gallery. With a single frozen view, a stranger first seen
+    # frontally minted a SECOND id the moment they turned -- measured as 4,129
+    # of 4,452 pending unknowns sitting at occurrence=1.
+    UNKNOWN_MAX_VIEWS: int = 5                   # Embeddings retained per unknown
+    UNKNOWN_LEARN_MIN_DISTANCE: float = 0.30     # A matched sighting becomes a new
+                                                  # view only if it is at least this
+                                                  # far from every view already held
+
+    # Body-only detections (person seen, face undetectable) have no embedding,
+    # so they can never be deduped, re-identified, or enrolled. Persisting them
+    # produced 38% of the unknown_faces table as permanent unmergeable clutter.
+    # They are still detected, tracked, and drawn -- just not given an identity
+    # row. Set true to restore the previous behaviour.
+    PERSIST_BODY_ONLY_UNKNOWNS: bool = False
+
+    # ── Unknown Maturation Gate ────────────────────────────────
+    # A track must remain unrecognised for this many seconds before
+    # an unknown snapshot is persisted. Prevents premature unknowns
+    # when recognition hasn't stabilised yet (e.g. the very first frame
+    # a face appears, before hysteresis / temporal voting can act).
+    # Time-based (not frame-based) so behaviour is FPS-independent.
+    UNKNOWN_MATURATION_SEC: float = 0.5
+
+    # Shadow Gallery (background validation)
+    SHADOW_GALLERY_INTERVAL_MIN: int = 30    # How often to re-validate (minutes)
+    SHADOW_GALLERY_ENABLED: bool = True      # Auto-start shadow gallery on boot
+
     # Async Event Queue
     EVENT_QUEUE_SIZE: int = 500                  # Max queued events (critical events bypass this limit)
 
@@ -252,6 +281,50 @@ class Settings(BaseSettings):
     REID_GALLERY_MAX_SIZE: int = 500      # Max tracked persons before LRU eviction
     REID_SIGHTING_COOLDOWN: float = 5.0   # Min seconds between sightings per person/camera
     REID_FRAME_INTERVAL: int = 10         # Extract ReID features every N frames (performance)
+
+    # ── Stream Health & Auto-Recovery ─────────────────────────
+    STREAM_STALE_TIMEOUT_SEC: float = 10.0       # No fresh frame for this long → STALE
+    STREAM_RECONNECT_INITIAL_SEC: float = 2.0    # First reconnect wait
+    STREAM_RECONNECT_MAX_SEC: float = 60.0       # Max backoff ceiling
+    STREAM_RECONNECT_BACKOFF: float = 2.0        # Exponential backoff multiplier
+    STREAM_FROZEN_HASH_TIMEOUT_SEC: float = 15.0 # Identical frame hash for this long → STALE
+    STREAM_MAX_RECONNECT_ATTEMPTS: int = 100     # Give up after N attempts → OFFLINE
+
+    # ── AI Identity Review (Background Learning) ─────────────
+    ENABLE_IDENTITY_REVIEW: bool = False          # Master switch
+    IDENTITY_REVIEW_INTERVAL_SEC: int = 300       # Run clustering every 5 min
+    IDENTITY_REVIEW_MIN_CLUSTER_SIZE: int = 3     # Min images to form a cluster
+    IDENTITY_REVIEW_TOP_K: int = 5                # Candidate persons per cluster
+    IDENTITY_REVIEW_CLUSTER_THRESHOLD: float = 0.55  # Agglomerative clustering distance threshold
+    IDENTITY_REVIEW_VLM_PROVIDER: str = "ollama"  # ollama/openai/disabled
+    IDENTITY_REVIEW_VLM_MODEL: str = "gpt-4o"     # Only used when provider=openai
+    IDENTITY_REVIEW_VLM_API_KEY: str = ""          # Only used when provider=openai
+    IDENTITY_REVIEW_REQUIRE_MULTI_FRAME: bool = True  # Require seen across multiple frames
+
+    # Three-Tier Candidate Pipeline
+    # Safety-valve review window: candidates outside this range are auto-rejected
+    # or auto-queued. Change these without rewriting logic.
+    IDENTITY_REVIEW_REVIEW_MIN: float = 0.40     # Below this → reject immediately
+    IDENTITY_REVIEW_REVIEW_MAX: float = 0.98     # Above this → auto-queue without VLM
+    # Tier thresholds (within the review window):
+    IDENTITY_REVIEW_TIER_HIGH: float = 0.85      # >= this → skip VLM, create candidate directly
+    IDENTITY_REVIEW_TIER_LOW: float = 0.40       # >= this → send to VLM for verification
+    #                                              < TIER_LOW → reject (must equal REVIEW_MIN)
+    # VLM budget & fairness
+    IDENTITY_REVIEW_VLM_MAX_PER_CYCLE: int = 30  # Max VLM evaluations per worker cycle
+    IDENTITY_REVIEW_MAX_CLUSTERS_PER_PERSON: int = 3  # Per-person fairness cap per cycle
+
+    # ── Ollama Local VLM ──────────────────────────────────────
+    OLLAMA_HOST: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "qwen2.5vl:7b"
+    OLLAMA_TIMEOUT_SEC: float = 120.0             # VLM inference timeout (seconds)
+
+    # ── Gallery Optimizer ─────────────────────────────────────
+    GALLERY_OPT_MIN_FACE_PX: int = 60             # Skip crops smaller than this
+    GALLERY_OPT_MIN_BLUR_SCORE: float = 40.0      # Skip blurry crops
+    GALLERY_OPT_MIN_DET_SCORE: float = 0.45       # Skip low-confidence detections
+    GALLERY_OPT_OUTLIER_FACTOR: float = 1.5       # Cluster outlier threshold (× median distance)
+    GALLERY_OPT_VLM_CACHE_TTL_HOURS: int = 168    # Cache VLM results for 7 days
 
     @property
     def cors_origins_list(self) -> List[str]:

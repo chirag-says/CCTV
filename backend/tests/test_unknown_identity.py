@@ -10,6 +10,7 @@ so "who was that person" is answerable from the event log.
 
 import os
 import sys
+import time
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -128,6 +129,173 @@ def test_convergence_when_another_camera_won_the_race():
     assert uid == canonical, "did not converge on the canonical id"
     assert label == make_label(canonical)
     assert reg.get(local_id) is None, "stale local id still resident"
+
+
+# ── Re-identification: one person, one identity, across poses ────────────
+
+def test_pose_change_does_not_mint_a_second_identity():
+    """
+    PREVENTS: the duplicate-unknown defect measured on the live DB, where 4,129
+    of 4,452 pending unknowns sat at occurrence=1. A single frozen embedding
+    could not match the same person from a different angle, so the registry
+    minted a new id and the DB dedup -- comparing against that same frozen
+    vector -- agreed it was a new person.
+    """
+    rng = _rng()
+    frontal = _unit(rng.randn(DIM))
+    reg = UnknownRegistry(match_threshold=0.70, max_views=5, learn_min_distance=0.30)
+
+    first_id, _, is_new = reg.resolve(frontal)
+    assert is_new
+
+    # Turning away: each view is reachable from the last, but the final one is
+    # beyond the match threshold from the original frontal capture.
+    profile = at_cosine(frontal, 0.55, rng)          # distance 0.45 from frontal
+    far_profile = _unit(frontal * 0.15 + profile * 0.95)
+
+    uid, _, is_new = reg.resolve(profile)
+    assert not is_new and uid == first_id, "profile view minted a second identity"
+
+    uid, _, is_new = reg.resolve(far_profile)
+    assert not is_new and uid == first_id, (
+        "third view minted a second identity -- the learned profile view "
+        "should have bridged the gap from frontal"
+    )
+
+    assert reg.get(first_id).view_count >= 2, "no view was learned"
+
+
+def test_redundant_views_are_not_stored():
+    """
+    PREVENTS: a person loitering in front of a camera filling every view slot
+    with the same angle, which costs search time and covers nothing new.
+    """
+    rng = _rng()
+    base = _unit(rng.randn(DIM))
+    reg = UnknownRegistry(max_views=5, learn_min_distance=0.30)
+
+    uid, _, _ = reg.resolve(base)
+    for _ in range(50):
+        reg.resolve(at_cosine(base, 0.99, rng))      # distance 0.01 — same pose
+
+    assert reg.get(uid).view_count == 1, (
+        f"stored {reg.get(uid).view_count} near-identical views"
+    )
+
+
+def test_views_per_identity_are_capped():
+    """PREVENTS: unbounded memory per identity over a long run."""
+    rng = _rng()
+    base = _unit(rng.randn(DIM))
+    reg = UnknownRegistry(match_threshold=0.70, max_views=3, learn_min_distance=0.10)
+
+    uid, _, _ = reg.resolve(base)
+    for cos in (0.85, 0.80, 0.75, 0.72, 0.70, 0.68):
+        reg.resolve(at_cosine(base, cos, rng))
+
+    assert reg.get(uid).view_count <= 3, reg.get(uid).view_count
+
+
+def test_distinct_people_still_separate_after_learning_views():
+    """
+    PREVENTS: re-identification over-merging. Learning extra views widens what
+    an identity matches, so the guarantee that two strangers stay distinct has
+    to be re-established, not assumed.
+    """
+    rng = _rng()
+    a_base = _unit(rng.randn(DIM))
+    b_base = _unit(rng.randn(DIM))
+    reg = UnknownRegistry(match_threshold=0.70, max_views=5, learn_min_distance=0.30)
+
+    a_id, _, _ = reg.resolve(a_base)
+    for cos in (0.60, 0.55, 0.50):
+        reg.resolve(at_cosine(a_base, cos, rng))
+
+    b_id, _, is_new = reg.resolve(b_base)
+    assert is_new and b_id != a_id, "second stranger absorbed into the first identity"
+
+    # And A must still resolve to A, not to the newcomer.
+    again, _, _ = reg.resolve(at_cosine(a_base, 0.95, rng))
+    assert again == a_id
+
+
+# ── Persistence feedback ─────────────────────────────────────────────────
+
+def test_canonical_id_from_another_thread_is_applied_on_drain():
+    """
+    PREVENTS: the convergence path staying dead. The consumer thread learns the
+    canonical row id but must not touch the registry's structures, so it queues
+    the result and the camera thread applies it.
+    """
+    rng = _rng()
+    base = _unit(rng.randn(DIM))
+    reg = UnknownRegistry()
+
+    local_id, _, _ = reg.resolve(base)
+    reg.submit_persistence_result(local_id, "canonical-row-id")
+
+    # Nothing applied until the owning thread drains.
+    assert reg.get(local_id) is not None
+    assert reg.drain_persistence_results() == 1
+
+    uid, label, is_new = reg.resolve(at_cosine(base, 0.96, rng))
+    assert not is_new and uid == "canonical-row-id"
+    assert label == make_label("canonical-row-id")
+
+
+def test_converging_onto_a_resident_id_keeps_the_views():
+    """
+    PREVENTS: losing pose coverage on convergence. Both ids are the same person,
+    so the loser's views are exactly the extra angles the survivor wants.
+    """
+    rng = _rng()
+    a_base = _unit(rng.randn(DIM))
+    reg = UnknownRegistry(match_threshold=0.40, max_views=5, learn_min_distance=0.10)
+
+    winner, _, _ = reg.resolve(a_base)
+    loser, _, is_new = reg.resolve(at_cosine(a_base, 0.30, rng))
+    assert is_new and loser != winner
+
+    reg.mark_persisted(loser, canonical_id=winner)
+
+    assert reg.get(loser) is None
+    assert reg.get(winner).view_count >= 2, "views discarded on convergence"
+
+
+def test_persisted_flag_is_actually_set_in_the_normal_path():
+    """
+    PREVENTS: the eviction cap becoming unenforceable. _evict() only removes
+    persisted entries, so if nothing is ever marked persisted the registry
+    grows for the life of the camera regardless of max_entries.
+    """
+    rng = _rng()
+    reg = UnknownRegistry(max_entries=10)
+    uid, _, _ = reg.resolve(_unit(rng.randn(DIM)))
+
+    assert reg.get(uid).persisted is False
+    reg.submit_persistence_result(uid, uid)      # same id: a plain insert
+    reg.drain_persistence_results()
+    assert reg.get(uid).persisted is True
+
+
+def test_stale_unpersisted_entries_eventually_become_evictable():
+    """
+    PREVENTS: a stalled consumer turning eviction protection into a memory leak.
+    Protection that never expires is not protection.
+    """
+    rng = _rng()
+    reg = UnknownRegistry(max_entries=5, sighting_cooldown=0.0)
+    for _ in range(30):
+        reg.resolve(_unit(rng.randn(DIM)))
+
+    # Nothing was ever persisted; age every entry past the grace period.
+    stale = time.time() - 10_000
+    for ident in reg._identities.values():
+        ident.first_seen = stale
+        ident.last_seen = stale
+
+    reg.resolve(_unit(rng.randn(DIM)))           # triggers _evict()
+    assert reg.size <= 5 + 1, f"registry stuck at {reg.size} with a dead consumer"
 
 
 # ── Throttling and bounds ────────────────────────────────────────────────

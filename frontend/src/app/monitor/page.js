@@ -564,6 +564,7 @@ export default function MonitorPage() {
 function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDetectEnabled = false, onAiStats }) {
     const imgRef = useRef(null);
     const [streamStatus, setStreamStatus] = useState('connecting');
+    const [staleInfo, setStaleInfo] = useState(null);  // { stream_state, stale_since, reconnect_attempts, last_frame_age }
 
     useEffect(() => {
         if (camera.status !== 'online') {
@@ -618,7 +619,26 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
 
                 ws.onmessage = (event) => {
                     if (!mounted) return;
-                    // Create blob URL from binary JPEG data
+
+                    // Handle JSON text messages (stream_stale notifications)
+                    if (typeof event.data === 'string') {
+                        try {
+                            const msg = JSON.parse(event.data);
+                            if (msg.type === 'stream_stale') {
+                                setStaleInfo(msg);
+                                setStreamStatus('stream_frozen');
+                                return;
+                            }
+                        } catch (e) {
+                            // Not JSON, ignore
+                        }
+                        return;
+                    }
+
+                    // Binary JPEG frame — stream is healthy again
+                    if (staleInfo) {
+                        setStaleInfo(null);
+                    }
                     const blob = new Blob([event.data], { type: 'image/jpeg' });
                     // If there's already a pending frame we haven't rendered, revoke it
                     if (pendingUrl) {
@@ -676,8 +696,11 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                 {camera.status === 'online' ? (
                     <>
                         <div className="live-indicator">
-                            <span className="live-indicator-dot"></span>
-                            {streamStatus === 'streaming' ? 'LIVE' : streamStatus === 'connecting' ? 'CONNECTING' : 'RECONNECTING'}
+                            <span className={`live-indicator-dot${streamStatus === 'stream_frozen' ? ' frozen' : ''}`}></span>
+                            {streamStatus === 'streaming' ? 'LIVE' 
+                                : streamStatus === 'stream_frozen' ? (staleInfo?.stream_state === 'OFFLINE' ? 'OFFLINE' : 'FROZEN')
+                                : streamStatus === 'connecting' ? 'CONNECTING' 
+                                : 'RECONNECTING'}
                             {aiDetectEnabled && streamStatus === 'streaming' && (
                                 <span style={{
                                     marginLeft: '6px',
@@ -713,7 +736,36 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                             />
                         )}
 
-                        {streamStatus !== 'streaming' && (
+                        {streamStatus === 'stream_frozen' && (
+                            <div className="stream-frozen-overlay">
+                                <div className="stream-frozen-icon">
+                                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                                        <line x1="12" y1="9" x2="12" y2="13" />
+                                        <line x1="12" y1="17" x2="12.01" y2="17" />
+                                    </svg>
+                                </div>
+                                <div className="stream-frozen-title">
+                                    {staleInfo?.stream_state === 'OFFLINE' ? 'STREAM OFFLINE' : 'STREAM FROZEN'}
+                                </div>
+                                <div className="stream-frozen-detail">
+                                    {staleInfo?.stream_state === 'RECONNECTING' 
+                                        ? `Attempting reconnection... #${staleInfo.reconnect_attempts || 0}`
+                                        : staleInfo?.stream_state === 'OFFLINE'
+                                        ? 'Max reconnect attempts exceeded'
+                                        : 'No new frames received'}
+                                </div>
+                                {staleInfo?.last_frame_age && (
+                                    <div className="stream-frozen-age">
+                                        Last frame: {staleInfo.last_frame_age >= 60 
+                                            ? `${Math.floor(staleInfo.last_frame_age / 60)}m ${Math.round(staleInfo.last_frame_age % 60)}s ago`
+                                            : `${Math.round(staleInfo.last_frame_age)}s ago`}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {streamStatus !== 'streaming' && streamStatus !== 'stream_frozen' && (
                             <div className="live-feed-placeholder">
                                 <div style={{ animation: 'pulse 2s ease-in-out infinite', display: 'flex' }}>
                                     <VideoCameraIcon size={32} />

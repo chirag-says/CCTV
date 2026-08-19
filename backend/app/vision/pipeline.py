@@ -59,6 +59,7 @@ from app.vision.hazard_detector import HazardDetector
 from app.vision.anpr import PlateRecognizer
 from app.vision.traffic import TrafficMonitor
 from app.vision.reid import get_reid_tracker, ReIDTracker
+from app.vision.stream_health import StreamHealthMonitor, StreamState
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Internal: Utilities Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 from app.utils.image_utils import frame_to_jpeg_bytes, save_snapshot
@@ -138,6 +139,8 @@ class VisionPipeline:
             max_entries=settings.UNKNOWN_REGISTRY_MAX_ENTRIES,
             sighting_cooldown=settings.UNKNOWN_SIGHTING_COOLDOWN_SEC,
             refresh_interval=settings.UNKNOWN_REGISTRY_REFRESH_SEC,
+            max_views=settings.UNKNOWN_MAX_VIEWS,
+            learn_min_distance=settings.UNKNOWN_LEARN_MIN_DISTANCE,
         )
 
         # Recognition cache: time-based re-check intervals (FPS-independent)
@@ -161,6 +164,13 @@ class VisionPipeline:
         self._jpeg_quality_override = None  # None = use default
         self._frame_skip_override = None    # None = use default
         self._skip_low_priority = False     # Skip P3 work (attributes, suggestions)
+
+        # ── Unknown Maturation Gate ──────────────────────────────────────────────────────────
+        # A track must remain unrecognised for UNKNOWN_MATURATION_SEC before
+        # the unknown snapshot is persisted. Prevents premature unknowns when
+        # recognition hasn't stabilised yet.  Maps track_id → time.monotonic()
+        # of the first frame where the track was seen as unknown.
+        self._unknown_maturation: Dict[int, float] = {}
 
         # ── Safety & Security Modules ────────────────────────────────────────────────────────
         # Attribute Recognition (gender + clothing)
@@ -278,6 +288,14 @@ class VisionPipeline:
         self._grabber_thread: Optional[threading.Thread] = None
         self._grabber_stop = threading.Event()
 
+        # ── Stream Health Monitor ─────────────────────────────────────────
+        # Detects frozen/dead streams and manages auto-reconnection.
+        # Runs inside the grabber thread — never blocks the main pipeline.
+        self.stream_health = StreamHealthMonitor(
+            camera_id=camera_id,
+            on_event=on_event,
+        )
+
         # Performance metrics
         self._fps = 0.0
         self._last_fps_time = time.time()
@@ -287,7 +305,13 @@ class VisionPipeline:
         # Normal enrollment triggers instant reload via camera_manager.load_encodings_all()
         self._last_encoding_refresh = 0.0  # Force immediate check on first face detection
         self._encoding_refresh_interval = 300.0  # Safety-net re-check every 5 minutes
-        self._encoding_db_count = 0  # Track DB count to detect new additions
+        # How many rows are loaded is asked of the recognizer, not tracked here:
+        # CameraManager.start_camera() loads the cached gallery into this
+        # pipeline before the first frame, and a counter owned by the pipeline
+        # cannot see that. It started at 0, so the first check always disagreed
+        # with the DB and reloaded a gallery that was already resident --
+        # visible in the logs as two "Loaded N face encodings" lines
+        # (version=1, version=2) seconds apart at every camera start.
 
         # Embedding suggestion cooldown: per-person throttle
         self._suggestion_cooldowns: Dict[str, float] = {}  # person_id → last_suggestion_time
@@ -299,18 +323,65 @@ class VisionPipeline:
         Background thread: continuously reads frames from cv2.VideoCapture.
         Always overwrites _grabbed_frame with the latest frame so that
         process_frame() never reads a stale buffered frame.
+
+        Also acts as a watchdog:
+        - Detects read failures and frozen streams (identical frame hash)
+        - Transitions stream_health through LIVE → STALE → RECONNECTING
+        - Reconnects with exponential backoff
+        - Clears _last_jpeg on STALE so WebSocket never serves stale images
         """
         while not self._grabber_stop.is_set():
+            # ── Reconnection Logic ────────────────────────────────
+            if self.stream_health.should_reconnect():
+                self.stream_health.on_reconnect_attempt()
+                try:
+                    if self._capture:
+                        self._capture.release()
+                        self._capture = None
+                    source = (
+                        int(self.stream_source)
+                        if self.stream_source.isdigit()
+                        else self.stream_source
+                    )
+                    self._capture = cv2.VideoCapture(source)
+                    if self._capture.isOpened():
+                        self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        self._capture.set(cv2.CAP_PROP_FPS, 30)
+                        self.stream_health.on_reconnect_success()
+                    else:
+                        logger.warning(
+                            f"[{self.camera_id}] Reconnect failed: "
+                            f"capture could not open"
+                        )
+                        if self._capture:
+                            self._capture.release()
+                            self._capture = None
+                except Exception as e:
+                    logger.error(
+                        f"[{self.camera_id}] Reconnect error: {e}"
+                    )
+                continue
+
             if not self._capture or not self._capture.isOpened():
                 time.sleep(0.01)
+                self.stream_health.check_staleness()
                 continue
+
             ret, frame = self._capture.read()
             if ret:
-                with self._grab_lock:
-                    self._grabbed_frame = frame
+                is_new = self.stream_health.on_frame_read(frame)
+                if is_new:
+                    with self._grab_lock:
+                        self._grabbed_frame = frame
             else:
+                self.stream_health.on_read_failure()
                 # Brief pause on read failure to avoid busy-spin
                 time.sleep(0.005)
+
+            # ── Clear stale JPEG when stream dies ─────────────────
+            # MANDATORY: no stale image should ever remain visible.
+            if self.stream_health.state != StreamState.LIVE:
+                self._last_jpeg = None
 
     def start(self):
         """Start the video capture."""
@@ -344,6 +415,7 @@ class VisionPipeline:
             self._grabber_thread.start()
 
             self._running = True
+            self.stream_health.reset()
             logger.info(f"Camera {self.camera_id} started: {self.stream_source}")
 
         except Exception as e:
@@ -424,6 +496,9 @@ class VisionPipeline:
         try:
             from app.services.unknown_service import UnknownService
             self.unknown_registry.maybe_refresh(UnknownService.get_pending_encodings)
+            # Apply canonical row ids the EventQueue consumer reported back.
+            # Cheap: an empty queue drain, on all but a handful of frames.
+            self.unknown_registry.drain_persistence_results()
         except Exception as e:
             logger.debug(f"[{self.camera_id}] Unknown registry refresh skipped: {e}")
 
@@ -643,6 +718,8 @@ class VisionPipeline:
                     track.recognition_time = time.time()
                     track.reset_fail_streak()
                     track.record_distance(result.distance)
+                    # Clear maturation gate — identity settled to known
+                    self._unknown_maturation.pop(track.track_id, None)
                     if result.confidence >= self._recognition_lock_confidence:
                         track.recognition_locked = True
 
@@ -755,7 +832,7 @@ class VisionPipeline:
                             track.recognition_locked = False
                             track.identity_fail_streak = 0
                             boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
-                            self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid)
+                            self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid, track_id=track.track_id)
                     else:
                         # Definitive failure (distance far above threshold, or
                         # no previous identity) — immediate unknown
@@ -770,7 +847,7 @@ class VisionPipeline:
                             track.recognition_locked = False
                             track.identity_fail_streak = 0
                         boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
-                        self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid)
+                        self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid, track_id=track.track_id)
             elif not needs_recognition and track.person_id and track.person_name:
                 # Reuse existing identity from ByteTrack cache (skip ArcFace)
                 profiler.record_cache_hit()
@@ -1140,14 +1217,14 @@ class VisionPipeline:
             from app.services.person_service import PersonService
             encodings = PersonService.get_all_encodings()
             db_count = len(encodings)
+            loaded_count = self.recognizer.source_count
 
-            if db_count > 0 and db_count != self._encoding_db_count:
+            if db_count > 0 and db_count != loaded_count:
                 # DB has encodings that aren't loaded yet (or count changed)
                 self.recognizer.load_encodings(encodings)
-                self._encoding_db_count = db_count
                 logger.info(
                     f"[{self.camera_id}] Auto-refreshed {db_count} face encodings from DB "
-                    f"(was {self.recognizer.known_count} before refresh)"
+                    f"(was {loaded_count} before refresh)"
                 )
         except Exception as e:
             logger.debug(f"[{self.camera_id}] Auto-refresh encodings failed: {e}")
@@ -1167,9 +1244,18 @@ class VisionPipeline:
             centroids = self.tracker.get_person_centroids()
             names = self.tracker.get_person_names()
 
-            # Crowd Detection
+            # Crowd Detection — only count actively-detected persons
+            # Exclude stale tracks that are still in active_tracks but
+            # haven't been seen recently (waiting for exit_threshold).
             if self.crowd_detector and len(centroids) >= 2:
-                self.crowd_detector.update(centroids, self.camera_id)
+                recent_centroids = {}
+                active_tracks_snapshot = self.tracker.get_active_track_times()
+                for pid, centroid in centroids.items():
+                    last_det = active_tracks_snapshot.get(pid, 0)
+                    if now - last_det < 2.0:  # Only count if seen in last 2 seconds
+                        recent_centroids[pid] = centroid
+                if len(recent_centroids) >= 2:
+                    self.crowd_detector.update(recent_centroids, self.camera_id)
 
             # Loitering Detection
             if self.loitering_detector and centroids:
@@ -1351,6 +1437,7 @@ class VisionPipeline:
         location: tuple,
         encoding: np.ndarray,
         centroid: Optional[Tuple[int, int]] = None,
+        track_id: Optional[int] = None,
     ):
         """
         Handle an unrecognised face: resolve to a STABLE identity, track, queue.
@@ -1360,6 +1447,11 @@ class VisionPipeline:
         stay identical across cameras. Previously a fresh uuid4() was minted per
         sighting session and the label came from a per-pipeline counter, so the
         same stranger became a different "Unknown #1" every time.
+
+        Time-based maturation gate (UNKNOWN_MATURATION_SEC):
+          - A track must remain unrecognised for 500ms before persisting.
+          - Prevents premature unknowns when recognition hasn't stabilised.
+          - FPS-independent: uses wall-clock time, not frame count.
         """
         unknown_id, unknown_label, is_new = self.unknown_registry.resolve(encoding)
         if unknown_id is None:
@@ -1376,6 +1468,22 @@ class VisionPipeline:
 
         if not self.on_unknown:
             return
+
+        # ── Time-based maturation gate ──────────────────────────────
+        # Only applies when we have a track_id (ByteTrack-managed faces).
+        # Non-tracked call sites (YOLO-assist, hybrid) pass track_id=None
+        # and bypass the gate.
+        if track_id is not None and is_new:
+            now = time.monotonic()
+            if track_id not in self._unknown_maturation:
+                # First unknown frame for this track — start the timer
+                self._unknown_maturation[track_id] = now
+                return  # don't persist yet
+            elapsed = now - self._unknown_maturation[track_id]
+            if elapsed < settings.UNKNOWN_MATURATION_SEC:
+                return  # still maturing — identity hasn't stabilised
+            # Maturation complete — remove from dict, proceed to persist
+            self._unknown_maturation.pop(track_id, None)
 
         if is_new:
             # First time anyone has seen this person. Copy the crops now: the
@@ -1773,10 +1881,23 @@ class VisionPipeline:
     ):
         """
         Handle a person detected by YOLO whose face could NOT be detected.
-        Creates a body-only unknown person snapshot and tracks them.
 
-        Uses centroid-based dedup to avoid spamming unknowns for the
-        same body detection across frames.
+        These are tracked for presence and occupancy, and drawn on the live
+        view, but they do NOT create an identity row by default.
+
+        WHY NOT: a body-only detection has no face embedding. It cannot be
+        deduplicated (the consumer's dedup is keyed on the embedding and skips
+        rows without one), cannot be re-identified on a later visit, and cannot
+        be enrolled from the review page -- there is no face to enroll. Every
+        such row is therefore permanent, unmergeable clutter.
+
+        Measured on the live database before this change: 1,714 of 4,532
+        unknown_faces rows (38%) had no encoding, and the 60-second cache below
+        meant one person standing in view generated a fresh row, three JPEGs,
+        and a new "Unknown #N" label every minute.
+
+        Set PERSIST_BODY_ONLY_UNKNOWNS=true to restore the old behaviour; the
+        detection itself is unchanged either way.
         """
         pb = person_det["bbox"]
         person_confidence = person_det.get("confidence", 0.0)
@@ -1818,22 +1939,24 @@ class VisionPipeline:
             unknown_number = len(self._yolo_body_unknown_cache) + 1
             unknown_label = f"Unknown #{unknown_number}"
 
-            # Crop the person body from the clean frame
-            h, w = clean_frame.shape[:2]
-            body_crop = clean_frame[
-                max(0, pb["y1"]):min(h, pb["y2"]),
-                max(0, pb["x1"]):min(w, pb["x2"]),
-            ].copy()
+            # Crops are only worth their copy cost if a row will be written.
+            body_crop = head_crop = full_frame_copy = None
+            if settings.PERSIST_BODY_ONLY_UNKNOWNS:
+                h, w = clean_frame.shape[:2]
+                body_crop = clean_frame[
+                    max(0, pb["y1"]):min(h, pb["y2"]),
+                    max(0, pb["x1"]):min(w, pb["x2"]),
+                ].copy()
 
-            # Also extract head region for a better snapshot
-            head_region = self.detector.estimate_head_region(pb, clean_frame.shape)
-            head_top, head_right, head_bottom, head_left = head_region
-            head_crop = clean_frame[head_top:head_bottom, head_left:head_right].copy()
+                # Also extract head region for a better snapshot
+                head_region = self.detector.estimate_head_region(pb, clean_frame.shape)
+                head_top, head_right, head_bottom, head_left = head_region
+                head_crop = clean_frame[head_top:head_bottom, head_left:head_right].copy()
 
-            # Copy the full frame for snapshot saving (cheap ~1.5ms).
-            # Snapshot saving is deferred to the EventQueue consumer thread
-            # to avoid blocking the vision pipeline for ~64ms (3× save_snapshot).
-            full_frame_copy = clean_frame.copy()
+                # Copy the full frame for snapshot saving (cheap ~1.5ms).
+                # Snapshot saving is deferred to the EventQueue consumer thread
+                # to avoid blocking the vision pipeline for ~64ms (3× save_snapshot).
+                full_frame_copy = clean_frame.copy()
 
             self._yolo_body_unknown_cache[unknown_id] = {
                 "centroid": centroid,
@@ -1866,7 +1989,7 @@ class VisionPipeline:
             # Passes raw frame data to the EventQueue consumer thread which
             # handles save_snapshot() — same pattern as _handle_unknown_face.
             # This removes ~64ms of synchronous disk I/O from the critical path.
-            if self.on_unknown:
+            if self.on_unknown and settings.PERSIST_BODY_ONLY_UNKNOWNS:
                 self.on_unknown({
                     "unknown_id": unknown_id,
                     "camera_id": self.camera_id,
@@ -2135,6 +2258,7 @@ class VisionPipeline:
             "fps": self.fps,
             "frames_processed": self._frame_count,
             "pipeline_mode": self.pipeline_mode,
+            "stream_health": self.stream_health.status,
         }
 
         if self.pipeline_mode == "traffic":
@@ -2152,11 +2276,13 @@ class VisionPipeline:
             base["faces_in_cache"] = self.recognizer.known_count
             base["active_tracks"] = self.tracker.stats
             base["unknown_identities"] = self.unknown_registry.size
+            base["unknown_registry"] = self.unknown_registry.stats()
         else:
             # Face mode stats
             base["faces_in_cache"] = self.recognizer.known_count
             base["active_tracks"] = self.tracker.stats
             base["unknown_identities"] = self.unknown_registry.size
+            base["unknown_registry"] = self.unknown_registry.stats()
             if self.hazard_detector:
                 base["hazard_detector"] = self.hazard_detector.stats
 

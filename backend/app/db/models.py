@@ -225,3 +225,100 @@ class SuggestedEncoding(Base):
 
     # Relationships
     person = relationship("Person", back_populates="suggested_encodings")
+
+
+# ── Unknown Clusters (AI Identity Review) ────────────────────────
+class UnknownCluster(Base):
+    __tablename__ = "unknown_clusters"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    representative_snapshot = Column(String(500), nullable=True)
+    representative_face_id = Column(String(36), nullable=True)
+    embedding_centroid = Column(LargeBinary, nullable=True)
+    member_count = Column(Integer, default=0)
+    first_seen = Column(DateTime(timezone=True), nullable=True)
+    last_seen = Column(DateTime(timezone=True), nullable=True)
+    status = Column(String(20), default="active", index=True)  # active/reviewed/merged/ignored
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    # Relationships
+    candidates = relationship("IdentityReviewCandidate", back_populates="cluster", lazy="dynamic")
+
+
+# ── Identity Review Candidates ───────────────────────────────────
+class IdentityReviewCandidate(Base):
+    __tablename__ = "identity_review_candidates"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    cluster_id = Column(String(36), ForeignKey("unknown_clusters.id", ondelete="CASCADE"), nullable=False, index=True)
+    person_id = Column(String(36), ForeignKey("persons.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    # Similarity scores
+    embedding_similarity = Column(Float, nullable=True)
+    verifier_similarity = Column(Float, nullable=True)
+    vlm_confidence = Column(Float, nullable=True)
+    image_quality_score = Column(Float, nullable=True)
+    pose_quality_score = Column(Float, nullable=True)
+    cluster_consistency = Column(Float, nullable=True)
+    overall_score = Column(Float, nullable=True)
+
+    # AI analysis
+    vlm_explanation = Column(Text, nullable=True)
+    recommended_action = Column(String(20), default="review")  # approve/reject/review
+
+    # Gallery Optimizer enrichment
+    gallery_improvement_value = Column(String(20), nullable=True)    # none/low/medium/high
+    gallery_improvement_reason = Column(String(255), nullable=True)  # "New Extreme Left profile"
+    coverage_before = Column(Float, nullable=True)                   # e.g. 63.0
+    coverage_after = Column(Float, nullable=True)                    # e.g. 74.0
+    vlm_detected_pose = Column(String(20), nullable=True)            # extreme_left
+    vlm_quality_assessment = Column(String(20), nullable=True)       # good/fair/poor
+    review_priority = Column(String(20), default="low")              # critical/high/medium/low
+
+    # Review status
+    status = Column(String(20), default="pending", index=True)  # pending/approved/rejected/skipped
+    reviewed_by = Column(String(36), nullable=True)
+    reviewed_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    # Relationships
+    cluster = relationship("UnknownCluster", back_populates="candidates")
+    person = relationship("Person")
+
+
+# ── Gallery Updates (Approved Learning Events) ───────────────────
+class GalleryUpdate(Base):
+    __tablename__ = "gallery_updates"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    person_id = Column(String(36), ForeignKey("persons.id", ondelete="CASCADE"), nullable=False, index=True)
+    candidate_id = Column(String(36), ForeignKey("identity_review_candidates.id", ondelete="SET NULL"), nullable=True)
+    cluster_id = Column(String(36), ForeignKey("unknown_clusters.id", ondelete="SET NULL"), nullable=True)
+    encoding_data = Column(LargeBinary, nullable=True)
+    snapshot_url = Column(String(500), nullable=True)
+    pose_bucket = Column(String(20), nullable=True)
+    quality = Column(Float, nullable=True)
+    action = Column(String(20), default="append")  # append/replace
+    replaced_encoding_id = Column(String(36), nullable=True)
+    gallery_version = Column(Integer, nullable=True)              # Per-person version for ordered rollback
+    status = Column(String(20), default="pending", index=True)  # pending/applied/rolled_back
+    applied_at = Column(DateTime(timezone=True), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    # Relationships
+    person = relationship("Person")
+    candidate = relationship("IdentityReviewCandidate")
+
+
+# ── Identity Review Activity (Audit Trail) ───────────────────────
+class IdentityReviewActivity(Base):
+    __tablename__ = "identity_review_activity"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    candidate_id = Column(String(36), nullable=True, index=True)
+    cluster_id = Column(String(36), nullable=True)
+    action = Column(String(50), nullable=False)  # approved/rejected/skipped/merged_cluster/created_person/ignored_forever
+    actor = Column(String(36), nullable=True)
+    details = Column(JSON, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)

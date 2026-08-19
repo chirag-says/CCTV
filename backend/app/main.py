@@ -238,6 +238,32 @@ def _process_pipeline_event(event: dict):
             pass
 
 
+def _report_canonical_unknown_id(
+    camera_id: str, local_id: str, canonical_id: str
+):
+    """
+    Hand the authoritative row id back to the pipeline that reported the face.
+
+    Runs on the EventQueue consumer thread, so it must not touch the registry's
+    structures directly — submit_persistence_result() only enqueues, and the
+    camera thread applies it. Best-effort by design: a camera that stopped
+    between the sighting and the write has nothing to update, which is not an
+    error.
+    """
+    if not camera_id or not local_id:
+        return
+    try:
+        from app.vision.camera_worker import camera_manager
+
+        worker = camera_manager._workers.get(camera_id)
+        if worker is not None:
+            worker.pipeline.unknown_registry.submit_persistence_result(
+                local_id, canonical_id
+            )
+    except Exception as e:
+        logger.debug(f"Could not report canonical unknown id to {camera_id}: {e}")
+
+
 def _process_unknown_face(data: dict):
     """
     Actual handler for unknown face events. Runs in EventQueue consumer thread.
@@ -273,10 +299,9 @@ def _process_unknown_face(data: dict):
     )
 
     # ── Snapshots: DEFERRED until we know a row will be created ──
-    # These used to be written eagerly, before the dedup query below. When the
-    # dedup then merged the sighting into an existing row, all three JPEGs were
-    # orphaned on disk with nothing referencing them. Saving is now a closure
-    # invoked only on the create path.
+    # Face crop is written synchronously (its URL goes into the DB row).
+    # Context and full_frame are submitted to the async SnapshotWorker
+    # as CRITICAL priority (never dropped), freeing the EventQueue thread.
     import time as _time
     _paths = {
         "snapshot": data.get("snapshot_path", ""),
@@ -285,27 +310,40 @@ def _process_unknown_face(data: dict):
     }
 
     def _save_snapshots():
-        """Write the three crops to disk. Only called when inserting a row."""
+        """Write face crop synchronously, submit rest to async worker."""
         if data.get("face_crop") is None:
             return
         _snap_start = _time.perf_counter()
         try:
             from app.utils.image_utils import save_snapshot
+            from app.services.snapshot_worker import get_snapshot_worker, SnapshotPriority
             unknown_id = data.get("unknown_id", "")
 
+            # Face crop: SYNCHRONOUS — URL is needed for the DB row
             _, _paths["snapshot"] = save_snapshot(
                 data["face_crop"], f"unknown_{unknown_id}",
                 subdirectory="unknowns", quality=95,
             )
+
+            # Context + full_frame: ASYNC via SnapshotWorker (CRITICAL = never dropped)
+            worker = get_snapshot_worker()
             if data.get("context_crop") is not None:
-                _, _paths["context"] = save_snapshot(
+                def _on_context(fp, url):
+                    _paths["context"] = url
+                worker.submit(
                     data["context_crop"], f"context_{unknown_id}",
                     subdirectory="unknowns", quality=95,
+                    priority=SnapshotPriority.CRITICAL,
+                    callback=_on_context,
                 )
             if data.get("full_frame") is not None:
-                _, _paths["full_frame"] = save_snapshot(
+                def _on_fullframe(fp, url):
+                    _paths["full_frame"] = url
+                worker.submit(
                     data["full_frame"], f"fullframe_{unknown_id}",
                     subdirectory="frames", quality=90,
+                    priority=SnapshotPriority.CRITICAL,
+                    callback=_on_fullframe,
                 )
             profiler.record_snapshot_save((_time.perf_counter() - _snap_start) * 1000)
         except Exception as e:
@@ -400,6 +438,15 @@ def _process_unknown_face(data: dict):
                 db.commit()
                 _paths["snapshot"] = matched_existing.snapshot_url or ""
                 _paths["full_frame"] = matched_existing.full_frame or ""
+                # Tell the originating pipeline which row actually won, so its
+                # registry re-keys onto it. Without this the pipeline keeps
+                # reporting a local id that has no row, and the two cameras
+                # never converge on one identity for the same person.
+                _report_canonical_unknown_id(
+                    data.get("camera_id", ""),
+                    data.get("unknown_id", ""),
+                    matched_existing.id,
+                )
                 logger.info(
                     f"✅ Updated unknown face {matched_existing.id[:12]}... "
                     f"occurrence={matched_existing.occurrence} "
@@ -422,7 +469,23 @@ def _process_unknown_face(data: dict):
                 )
                 db.add(unknown)
                 db.commit()
+                # Same id, but the pipeline still needs to know the row exists:
+                # until it does, the entry stays unpersisted and is protected
+                # from eviction, which is what let the registry outgrow its cap.
+                _report_canonical_unknown_id(
+                    data.get("camera_id", ""), unknown.id, unknown.id
+                )
                 logger.info(f"✅ New unknown face persisted: {unknown.id[:12]}...")
+
+            # Broadcast AFTER save + commit — correct operation order
+            # (save → fsync → DB commit → broadcast)
+            _process_pipeline_event({
+                "event_type": "unknown",
+                "camera_id": data.get("camera_id", ""),
+                "timestamp": data.get("timestamp", ""),
+                "snapshot_url": _paths["snapshot"] or None,
+                "detection_type": detection_type,
+            })
 
         except Exception as e:
             db.rollback()
@@ -432,15 +495,6 @@ def _process_unknown_face(data: dict):
 
     except Exception as e:
         logger.error(f"Failed to persist unknown face: {e}")
-
-    # Broadcast unknown event via WebSocket
-    _process_pipeline_event({
-        "event_type": "unknown",
-        "camera_id": data.get("camera_id", ""),
-        "timestamp": data.get("timestamp", ""),
-        "snapshot_url": _paths["snapshot"],
-        "detection_type": detection_type,
-    })
 
 
 # ── Application Lifespan ─────────────────────────────────────
@@ -494,6 +548,28 @@ async def lifespan(app: FastAPI):
     logger.info(f"📖 Docs: http://{settings.HOST}:{settings.PORT}/docs")
     logger.info("📷 Cameras will start when triggered from the dashboard")
 
+    # ── Start AI Identity Review Worker (if enabled) ──────────
+    _identity_review_worker = None
+    if settings.ENABLE_IDENTITY_REVIEW:
+        try:
+            from app.services.identity_review_worker import get_identity_review_worker
+            _identity_review_worker = get_identity_review_worker()
+            _identity_review_worker.start()
+        except Exception as e:
+            logger.warning(f"⚠️  Identity Review Worker failed to start: {e}")
+    else:
+        logger.info("ℹ️  AI Identity Review disabled (ENABLE_IDENTITY_REVIEW=false)")
+
+    # ── Start Shadow Gallery (background validation) ──────────
+    _shadow_gallery = None
+    if settings.SHADOW_GALLERY_ENABLED:
+        try:
+            from app.services.shadow_gallery import get_shadow_gallery
+            _shadow_gallery = get_shadow_gallery()
+            _shadow_gallery.start()
+        except Exception as e:
+            logger.warning(f"⚠️  Shadow Gallery failed to start: {e}")
+
     # ── Print Startup Summary ─────────────────────────────────
     from app.core.profiler import PerformanceProfiler
     PerformanceProfiler.print_startup_summary()
@@ -502,6 +578,16 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("🛑 Shutting down...")
+    if _shadow_gallery:
+        _shadow_gallery.stop()
+    if _identity_review_worker:
+        _identity_review_worker.stop()
+    # Stop snapshot worker
+    try:
+        from app.services.snapshot_worker import get_snapshot_worker
+        get_snapshot_worker().stop()
+    except Exception:
+        pass
     camera_manager.stop_all()
     eq.stop()  # Drain remaining events before exit
     logger.info("✅ All cameras stopped. Event queue drained. Goodbye!")
@@ -553,6 +639,8 @@ from app.routes import auth, persons, cameras, events, unknown_faces, analytics,
 from app.routes import browser_camera
 from app.routes import share_camera_page
 from app.routes import reid as reid_route
+from app.routes import identity_review
+from app.routes import system_health
 
 app.include_router(auth.router)
 app.include_router(persons.router)
@@ -567,6 +655,8 @@ app.include_router(retention.router)
 app.include_router(browser_camera.router)
 app.include_router(share_camera_page.router)
 app.include_router(reid_route.router)
+app.include_router(identity_review.router)
+app.include_router(system_health.router)
 
 
 # ── Health Check ──────────────────────────────────────────────

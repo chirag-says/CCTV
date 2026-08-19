@@ -80,8 +80,25 @@ def save_snapshot(
         filename = f"{name}.jpg"
         filepath = os.path.join(base_dir, filename)
 
-        encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
-        cv2.imwrite(filepath, image, encode_params)
+        # Use simplejpeg when available (3.5× faster than cv2.imwrite)
+        if _simplejpeg_available:
+            # simplejpeg expects RGB; our images are BGR
+            rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            jpeg_bytes = _simplejpeg.encode_jpeg(rgb, quality=quality, colorspace='RGB')
+            with open(filepath, 'wb') as f:
+                f.write(jpeg_bytes)
+                f.flush()
+                os.fsync(f.fileno())  # Guarantee flush before DB commit
+        else:
+            encode_params = [cv2.IMWRITE_JPEG_QUALITY, quality]
+            cv2.imwrite(filepath, image, encode_params)
+            # fsync after cv2.imwrite to guarantee flush
+            try:
+                fd = os.open(filepath, os.O_RDONLY)
+                os.fsync(fd)
+                os.close(fd)
+            except OSError:
+                pass  # Best-effort on Windows
 
         url_parts = ["snapshots"]
         if subdirectory:

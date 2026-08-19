@@ -26,11 +26,32 @@ embedding to a CANONICAL id — the same id the `unknown_faces` row uses. The
 label is derived from that id, so it is stable across restarts and identical on
 every camera.
 
+RE-IDENTIFICATION (Phase 3)
+---------------------------
+An identity holds SEVERAL embeddings, not one, and matches best-of-K -- the
+same rule the enrolled face gallery uses.
+
+The single-embedding version froze whatever view happened to arrive first. A
+stranger first seen frontally then turning to profile exceeded the match
+threshold against that one frozen frontal vector, so the registry minted a
+second id and the consumer's DB dedup (comparing against the same one stored
+vector) agreed it was a new person. One human became many rows. Measured on the
+live database before this change: 4,129 of 4,452 pending unknowns had
+occurrence=1, i.e. dedup was effectively not working.
+
+Views are added only when a sighting matched but was not trivially close --
+that is the definition of a view the identity does not already cover. Near
+duplicates are rejected, so K stays small and each slot earns its place.
+
 Threading: one instance per VisionPipeline, touched only from that pipeline's
-camera thread. No locking, by the same convention as IdentityLedger.
+camera thread -- with one exception. The EventQueue consumer learns the
+CANONICAL row id after the fact and must report it back; it does that through
+submit_persistence_result(), a queue, which the camera thread drains. The hot
+path stays lock-free.
 """
 
 import logging
+import queue
 import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
@@ -58,7 +79,7 @@ def make_label(unknown_id: str) -> str:
 class UnknownIdentity:
     """One unenrolled person, keyed by the id of their `unknown_faces` row."""
     unknown_id: str
-    encoding: np.ndarray          # L2-normalised
+    encodings: List[np.ndarray]   # L2-normalised views of this person, best-of-K
     label: str
     first_seen: float
     last_seen: float
@@ -69,6 +90,18 @@ class UnknownIdentity:
     @property
     def age(self) -> float:
         return time.time() - self.last_seen
+
+    @property
+    def encoding(self) -> np.ndarray:
+        """
+        The first view ever seen. This is what gets written to the DB row, so
+        it must stay stable: the consumer's dedup and a restart both key off it.
+        """
+        return self.encodings[0]
+
+    @property
+    def view_count(self) -> int:
+        return len(self.encodings)
 
 
 class UnknownRegistry:
@@ -87,6 +120,8 @@ class UnknownRegistry:
         max_entries: int = 500,
         sighting_cooldown: float = 30.0,
         refresh_interval: float = 60.0,
+        max_views: int = 5,
+        learn_min_distance: float = 0.30,
     ):
         """
         Args:
@@ -98,27 +133,59 @@ class UnknownRegistry:
                 sightings of the same person, so `occurrence` counts visits
                 rather than frames.
             refresh_interval: seconds between reloads of pending unknowns.
+            max_views: embeddings retained per identity. Small on purpose --
+                this is a short-lived re-identification cache, not a gallery,
+                and every extra view costs a row in the search matrix for every
+                stranger who ever walked past.
+            learn_min_distance: a matched sighting is only kept as a new view if
+                it is at least this far from every view already held. Closer
+                than this it is the same pose again and adds nothing but cost.
         """
         self.match_threshold = match_threshold
         self.max_entries = max_entries
         self.sighting_cooldown = sighting_cooldown
         self.refresh_interval = refresh_interval
+        self.max_views = max(1, max_views)
+        self.learn_min_distance = learn_min_distance
 
         self._identities: Dict[str, UnknownIdentity] = {}
-        self._matrix: Optional[np.ndarray] = None   # (N, D) stacked encodings
-        self._ids: List[str] = []                   # row order of _matrix
+        self._matrix: Optional[np.ndarray] = None   # (V, D) stacked views
+        self._ids: List[str] = []                   # owner id per matrix row
         self._dirty = True
         self._last_refresh = 0.0
+
+        # Canonical ids reported back by the EventQueue consumer thread.
+        self._persistence_inbox: "queue.SimpleQueue[Tuple[str, Optional[str]]]" = (
+            queue.SimpleQueue()
+        )
+
+        # Counters for the overnight validation report.
+        self.stat_resolved = 0
+        self.stat_minted = 0
+        self.stat_matched = 0
+        self.stat_views_learned = 0
+        self.stat_converged = 0
+        self.stat_evicted = 0
 
     # ── Index ─────────────────────────────────────────────────────────────
 
     def _rebuild(self):
-        """Rebuild the search matrix. Cheap; called only when membership changes."""
+        """
+        Rebuild the search matrix. One row per VIEW, not per identity, with
+        _ids[row] naming the owner -- so a single matvec scores every view and
+        argmin gives best-of-K across the whole registry at once.
+        """
         if not self._identities:
             self._matrix, self._ids = None, []
         else:
-            self._ids = list(self._identities.keys())
-            self._matrix = np.vstack([self._identities[i].encoding for i in self._ids])
+            rows: List[np.ndarray] = []
+            owners: List[str] = []
+            for uid, ident in self._identities.items():
+                for view in ident.encodings:
+                    rows.append(view)
+                    owners.append(uid)
+            self._matrix = np.vstack(rows)
+            self._ids = owners
         self._dirty = False
 
     @staticmethod
@@ -143,31 +210,70 @@ class UnknownRegistry:
         if q is None:
             return None, None, False
 
+        self.stat_resolved += 1
+
         if self._dirty:
             self._rebuild()
 
-        # Vectorised: one matvec instead of the per-entry Python loop this
-        # replaces, so cost stays flat as the registry fills.
+        # Vectorised: one matvec scores every view of every identity, so cost
+        # stays flat as the registry fills and best-of-K comes free.
         if self._matrix is not None and len(self._ids):
             distances = 1.0 - (self._matrix @ q)
             best = int(np.argmin(distances))
-            if float(distances[best]) < self.match_threshold:
+            best_distance = float(distances[best])
+            if best_distance < self.match_threshold:
                 uid = self._ids[best]
                 ident = self._identities[uid]
                 ident.last_seen = time.time()
                 ident.occurrence += 1
+                self.stat_matched += 1
+                self._maybe_learn_view(ident, q, distances)
                 return uid, ident.label, False
 
         uid = str(uuid4())
         label = make_label(uid)
         now = time.time()
         self._identities[uid] = UnknownIdentity(
-            unknown_id=uid, encoding=q, label=label,
+            unknown_id=uid, encodings=[q], label=label,
             first_seen=now, last_seen=now, occurrence=1, persisted=False,
         )
         self._dirty = True
+        self.stat_minted += 1
         self._evict()
         return uid, label, True
+
+    def _maybe_learn_view(
+        self, ident: UnknownIdentity, q: np.ndarray, distances: np.ndarray
+    ):
+        """
+        Keep this sighting as an additional view if it covers new ground.
+
+        The gate is the distance to the identity's CLOSEST existing view. Below
+        learn_min_distance it is the same angle again -- redundant, and storing
+        it would push out a view that actually differs. Above it, this is a pose
+        or lighting the identity cannot currently match, which is exactly the
+        gap that used to cause a duplicate id to be minted.
+
+        Never grows past max_views, so a person loitering all night costs a
+        fixed amount of memory and search time.
+        """
+        if ident.view_count >= self.max_views:
+            return
+
+        own = min(
+            float(distances[i]) for i, owner in enumerate(self._ids)
+            if owner == ident.unknown_id
+        )
+        if own < self.learn_min_distance:
+            return
+
+        ident.encodings.append(q)
+        self._dirty = True
+        self.stat_views_learned += 1
+        logger.debug(
+            f"Unknown {ident.unknown_id[:8]}… learned view {ident.view_count} "
+            f"(distance {own:.4f} from nearest existing view)"
+        )
 
     def should_report_sighting(self, unknown_id: str) -> bool:
         """
@@ -184,11 +290,40 @@ class UnknownRegistry:
         ident.last_reported = now
         return True
 
+    def submit_persistence_result(
+        self, unknown_id: str, canonical_id: Optional[str] = None
+    ):
+        """
+        Report a DB write result from ANOTHER thread (the EventQueue consumer).
+
+        Thread-safe by being a queue append and nothing else. The camera thread
+        applies it in drain_persistence_results(), so the search structures are
+        still only ever mutated from one thread.
+        """
+        self._persistence_inbox.put((unknown_id, canonical_id))
+
+    def drain_persistence_results(self) -> int:
+        """Apply queued canonical ids. Camera thread only. Returns count applied."""
+        applied = 0
+        while True:
+            try:
+                unknown_id, canonical_id = self._persistence_inbox.get_nowait()
+            except queue.Empty:
+                break
+            self.mark_persisted(unknown_id, canonical_id)
+            applied += 1
+        return applied
+
     def mark_persisted(self, unknown_id: str, canonical_id: Optional[str] = None):
         """
         Confirm a DB row exists. If the consumer deduped this sighting into a
         DIFFERENT pre-existing row (another camera saw them first), re-key the
         local entry onto that canonical id so both cameras converge.
+
+        Until this was actually wired up it was dead code, with two effects:
+        convergence never happened, and -- because _evict() only ever removes
+        persisted entries -- nothing minted locally was evictable, so the
+        registry grew without bound for the life of the camera despite its cap.
         """
         ident = self._identities.get(unknown_id)
         if ident is None:
@@ -199,11 +334,23 @@ class UnknownRegistry:
                 f"{canonical_id[:8]}… (another camera saw them first)"
             )
             self._identities.pop(unknown_id, None)
-            if canonical_id not in self._identities:
+            existing = self._identities.get(canonical_id)
+            if existing is None:
                 ident.unknown_id = canonical_id
                 ident.label = make_label(canonical_id)
                 ident.persisted = True
                 self._identities[canonical_id] = ident
+            else:
+                # Both ids are resident: fold this one's views into the winner
+                # rather than discarding them. They are the same person, so the
+                # views are exactly the extra coverage the survivor wants.
+                for view in ident.encodings:
+                    if existing.view_count >= self.max_views:
+                        break
+                    existing.encodings.append(view)
+                existing.occurrence += ident.occurrence
+                existing.first_seen = min(existing.first_seen, ident.first_seen)
+            self.stat_converged += 1
             self._dirty = True
         else:
             ident.persisted = True
@@ -251,7 +398,7 @@ class UnknownRegistry:
                 continue
             self._identities[uid] = UnknownIdentity(
                 unknown_id=uid,
-                encoding=arr,
+                encodings=[arr],
                 label=make_label(uid),
                 first_seen=row.get("first_seen", now),
                 last_seen=row.get("last_seen", now),
@@ -272,15 +419,54 @@ class UnknownRegistry:
     # ── Housekeeping ──────────────────────────────────────────────────────
 
     def _evict(self):
-        """LRU eviction by last_seen. Unpersisted entries are never evicted."""
+        """
+        LRU eviction by last_seen.
+
+        Unpersisted entries are protected so an identity cannot be lost before
+        its DB row is written -- but only for a grace period. Without the
+        grace, a stalled or failed consumer would leave every entry
+        unpersisted, `evictable` empty, and the cap unenforceable; the registry
+        would then grow for the life of the camera. Protection that cannot
+        expire is not protection, it is a leak.
+        """
         if len(self._identities) <= self.max_entries:
             return
-        evictable = [i for i in self._identities.values() if i.persisted]
+
+        now = time.time()
+        grace = max(self.sighting_cooldown * 4, 60.0)
+        evictable = [
+            i for i in self._identities.values()
+            if i.persisted or (now - i.first_seen) > grace
+        ]
         evictable.sort(key=lambda i: i.last_seen)
+
         overflow = len(self._identities) - self.max_entries
         for ident in evictable[:overflow]:
             self._identities.pop(ident.unknown_id, None)
+            self.stat_evicted += 1
+
+        if len(self._identities) > self.max_entries:
+            logger.warning(
+                f"UnknownRegistry over cap: {len(self._identities)} resident vs "
+                f"{self.max_entries} max, only {len(evictable)} evictable. "
+                f"Is the event queue consumer keeping up?"
+            )
         self._dirty = True
+
+    def stats(self) -> Dict[str, int]:
+        """Aggregate counters for the validation report. Cheap; no allocation."""
+        views = sum(i.view_count for i in self._identities.values())
+        return {
+            "resident": len(self._identities),
+            "views": views,
+            "persisted": sum(1 for i in self._identities.values() if i.persisted),
+            "resolved": self.stat_resolved,
+            "minted": self.stat_minted,
+            "matched": self.stat_matched,
+            "views_learned": self.stat_views_learned,
+            "converged": self.stat_converged,
+            "evicted": self.stat_evicted,
+        }
 
     @property
     def size(self) -> int:

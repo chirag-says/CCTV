@@ -314,6 +314,20 @@ class PersonTracker:
                 if track.last_centroid is not None
             }
 
+    def get_active_track_times(self) -> Dict[str, float]:
+        """
+        Get last detection time for all active tracks.
+        Used by the gathering detector to filter stale tracks.
+
+        Returns:
+            {person_id: last_seen_unix_timestamp}
+        """
+        with self._lock:
+            return {
+                pid: track.last_seen
+                for pid, track in self._active_tracks.items()
+            }
+
     def get_person_names(self) -> Dict[str, str]:
         """Get {person_id: person_name} for all active tracks."""
         with self._lock:

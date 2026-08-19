@@ -21,6 +21,7 @@ import {
     TrafficIcon,
     VideoUploadIcon,
     ReIDIcon,
+    AIReviewIcon,
 } from './Icons';
 
 function SunIcon({ size = 18 }) {
@@ -63,6 +64,7 @@ const navItems = [
             { href: '/persons', icon: UsersIcon, label: 'Persons', id: 'nav-persons' },
             { href: '/cameras', icon: CameraIcon, label: 'Cameras', id: 'nav-cameras' },
             { href: '/unknown-faces', icon: UnknownFaceIcon, label: 'Unknown Faces', id: 'nav-unknown', badge: true },
+            { href: '/identity-review', icon: AIReviewIcon, label: 'AI Identity Review', id: 'nav-identity-review' },
         ],
     },
     {
@@ -84,6 +86,7 @@ const navItems = [
         items: [
             { href: '/events', icon: EventLogIcon, label: 'Events Log', id: 'nav-events' },
             { href: '/analytics', icon: AnalyticsIcon, label: 'Analytics', id: 'nav-analytics' },
+            { href: '/system-health', icon: ShieldIcon, label: 'System Health', id: 'nav-system-health' },
         ],
     },
 ];

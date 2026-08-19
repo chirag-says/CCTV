@@ -209,6 +209,11 @@ async def camera_feed(
     if not worker or not worker.pipeline:
         return Response(content=b"", status_code=204)
 
+    # Never return stale JPEG — return 204 if stream is not LIVE
+    from app.vision.stream_health import StreamState
+    if worker.stream_health.state != StreamState.LIVE:
+        return Response(content=b"", status_code=204)
+
     # Use the pre-encoded JPEG from the worker thread
     jpeg = worker.pipeline._last_jpeg
     
@@ -258,8 +263,28 @@ async def camera_stream(
 
             # Priority 1: AI-processed frame from pipeline (has bounding boxes)
             worker = camera_manager._workers.get(camera_id)
-            if worker and worker.pipeline and worker.pipeline._last_jpeg:
-                jpeg_bytes = worker.pipeline._last_jpeg
+            if worker and worker.pipeline:
+                # Check stream health — send JSON stale notification instead of JPEG
+                from app.vision.stream_health import StreamState
+                health = worker.stream_health
+                if health.state != StreamState.LIVE:
+                    try:
+                        import json
+                        stale_msg = json.dumps({
+                            "type": "stream_stale",
+                            "stream_state": health.state.value,
+                            "stale_since": health.stale_since.isoformat() if health.stale_since else None,
+                            "reconnect_attempts": health.reconnect_attempts,
+                            "last_frame_age": round(health.last_frame_age, 1),
+                        })
+                        await websocket.send_text(stale_msg)
+                    except Exception:
+                        break
+                    await asyncio.sleep(1.0)  # Slower poll during stale
+                    continue
+
+                if worker.pipeline._last_jpeg:
+                    jpeg_bytes = worker.pipeline._last_jpeg
             else:
                 # Priority 2: Raw frame from browser camera session
                 from app.routes.browser_camera import _browser_sessions

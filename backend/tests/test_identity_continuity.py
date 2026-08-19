@@ -477,6 +477,27 @@ def test_verification_rejects_near_twin_on_margin():
     assert not res.matched, "near-twin was verified — identity swap risk"
     assert res.rejection_reason == "verify_ambiguous_margin", res.rejection_reason
 
+def test_recognizer_reports_what_it_loaded():
+    """
+    PREVENTS: the double gallery load at camera start. CameraManager loads the
+    cached gallery into a new pipeline, then the pipeline's own safety-net
+    refresh compared the DB count against a counter it kept itself -- which was
+    still 0 -- and reloaded the identical gallery. Callers must be able to ask
+    the recognizer what it already has.
+    """
+    rec, _, _, _ = _gallery()
+    assert rec.source_count == 16, rec.source_count
+
+    # A row the recognizer cannot use must still count against the source, or a
+    # DB-count comparison never converges and reloads on every single check.
+    rec.load_encodings([
+        {"encoding_id": "bad", "person_id": "p-x", "person_name": "X",
+         "encoding": np.ones(8, dtype=np.float32), "quality": 1.0},
+    ])
+    assert rec.known_count == 0, "unusable encoding was loaded"
+    assert rec.source_count == 1, "unusable row lost from the source count"
+
+
 def test_ledger_detects_recoverable_opportunities():
     for x in run_all(verbose=False):
         if x["want_opp"]:

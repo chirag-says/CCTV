@@ -383,3 +383,15 @@ export const ReIDIcon = (props) => (
         <path d="M23 11h-6" />
     </Icon>
 );
+
+export const AIReviewIcon = (props) => (
+    <Icon {...props}>
+        <path d="M12 2a4 4 0 0 1 4 4c0 1.95-1.4 3.57-3.25 3.92L12 10v2" />
+        <path d="M12 16v2" />
+        <circle cx="12" cy="14" r="2" />
+        <path d="M8 6a4 4 0 0 0-4 4v1a2 2 0 0 0 2 2" />
+        <path d="M16 6a4 4 0 0 1 4 4v1a2 2 0 0 1-2 2" />
+        <path d="M9 20a6 6 0 0 1 6 0" />
+        <path d="M6 20a9 9 0 0 1 12 0" />
+    </Icon>
+);

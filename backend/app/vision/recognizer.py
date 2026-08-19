@@ -109,6 +109,13 @@ class FaceRecognizer:
         self._encoding_count = 0
         self._cache_version = 0
 
+        # Number of DB rows this cache was built from. Distinct from
+        # _encoding_count, which counts rows that survived deserialization.
+        # Callers poll the DB row count to decide whether a reload is needed, so
+        # comparing against _encoding_count would reload forever whenever a row
+        # is unreadable. See the `source_count` property.
+        self._source_count = 0
+
         # Per-person index: person_id → list of indices in _known_faces
         self._person_index: Dict[str, List[int]] = {}
 
@@ -205,6 +212,7 @@ class FaceRecognizer:
                 )
 
             self._encoding_count = len(self._known_faces)
+            self._source_count = len(encodings_data)
             self._cache_version += 1
 
             # Log per-person encoding counts
@@ -238,6 +246,7 @@ class FaceRecognizer:
             self._backend.add(face.encoding, face.person_id, face.encoding_id, face.quality)
 
             self._encoding_count += 1
+            self._source_count += 1
             self._cache_version += 1
             logger.info(
                 f"Added encoding for {face.person_name} "
@@ -248,6 +257,9 @@ class FaceRecognizer:
     def remove_person_encodings(self, person_id: str):
         """Remove all encodings for a person from cache."""
         with self._lock:
+            removed = sum(
+                1 for f in self._known_faces if f.person_id == person_id
+            )
             indices_to_keep = [
                 i for i, f in enumerate(self._known_faces)
                 if f.person_id != person_id
@@ -276,6 +288,7 @@ class FaceRecognizer:
                 )
 
             self._encoding_count = len(self._known_faces)
+            self._source_count = max(0, self._source_count - removed)
             self._cache_version += 1
 
     def _get_adaptive_threshold(self, face_quality: float = 0.5) -> Tuple[float, str]:
@@ -774,6 +787,18 @@ class FaceRecognizer:
     @property
     def cache_version(self) -> int:
         return self._cache_version
+
+    @property
+    def source_count(self) -> int:
+        """
+        How many database rows this cache represents.
+
+        The recogniser -- not its callers -- is the authority on what it has
+        loaded. A pipeline that tracked this itself could not see loads done by
+        CameraManager on its behalf, and would redundantly reload a gallery it
+        already had.
+        """
+        return self._source_count
 
     @property
     def person_encoding_counts(self) -> Dict[str, int]:

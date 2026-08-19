@@ -967,3 +967,74 @@ def _create_profiler() -> PerformanceProfiler:
 
 
 profiler = _create_profiler()
+
+# Add singleton accessor to the class
+PerformanceProfiler._singleton = profiler
+
+@classmethod
+def _get_instance(cls):
+    """Get the singleton profiler instance."""
+    return cls._singleton
+
+PerformanceProfiler.get_instance = _get_instance
+
+
+def _get_health_stats(self) -> dict:
+    """
+    Return a structured dict of all pipeline metrics for the dashboard API.
+    Thread-safe snapshot of current profiler state.
+    """
+    with self._lock:
+        elapsed = time.perf_counter() - self._report_start_time
+        fps = self._total_frames / elapsed if elapsed > 0 else 0
+
+        # Timing averages
+        def avg(stage):
+            vals = self._timings.get(stage, [])
+            return sum(vals) / len(vals) if vals else 0
+
+        # Recognition stats
+        total_rec = self._recognition_calls + self._cache_hits
+        matched = total_rec - (self._tracks_recreated or 0)  # approximation
+
+        # Snapshot timing
+        snap_avg = sum(self._snapshot_times) / len(self._snapshot_times) if self._snapshot_times else 0
+
+        return {
+            "recognition": {
+                "total_recognitions": total_rec,
+                "matched": self._recognition_calls,
+                "unknown": self._tracks_recreated,
+                "gray_zone": 0,  # not tracked separately yet
+                "avg_latency_ms": avg("arcface_inference") or avg("recognition"),
+                "cache_hit_pct": (
+                    self._cache_hits / (self._recognition_calls + self._cache_hits) * 100
+                    if (self._recognition_calls + self._cache_hits) else 0
+                ),
+                "cache_hits": self._cache_hits,
+                "cache_saves": self._recognition_calls,
+            },
+            "timing": {
+                "fps": fps,
+                "scrfd_ms": avg("scrfd_inference") or avg("face_detection"),
+                "arcface_ms": avg("arcface_inference") or avg("recognition"),
+                "jpeg_ms": avg("jpeg_encoding") or avg("mjpeg_encode"),
+                "snapshot_ms": snap_avg,
+                "snapshot_queue": self._snapshot_queue_len,
+            },
+            "tracking": {
+                "active_tracks": self._tracks_seen,
+                "total_entries": self._tracks_created,
+                "total_exits": 0,  # tracked by tracker, not profiler
+            },
+            "recovery": {
+                "attempted": self._recovery_attempted,
+                "verified": self._recovery_verified,
+                "identity_swaps": self._identity_swaps,
+                "rejections": dict(self._recovery_rejected),
+            },
+            "gpu": self._get_gpu_stats() or {},
+            "cpu": self._get_cpu_stats() or {},
+        }
+
+PerformanceProfiler.get_health_stats = _get_health_stats
