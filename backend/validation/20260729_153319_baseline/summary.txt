@@ -1,0 +1,26 @@
+==============================================================================
+SENTINELAI VALIDATION SNAPSHOT
+==============================================================================
+Captured: 2026-07-29T10:03:19.448826+00:00
+
+ENROLLED
+  Persons (active): 20 of 20
+  Face encodings:   72
+  Gallery health:   10 high-risk persons, 2 split identities, 67.2% LOO recognition
+
+UNKNOWN IDENTITIES
+  Total rows:       4548
+  By status:        dismissed=37, enrolled=43, pending=4468
+  Without encoding: 1723  (cannot be deduped or enrolled)
+  Created in 24h:   1465
+  Seen exactly once: 4141 of 4468 pending (92.7%)  [POOR]
+      A high rate means one real person is producing many identities.
+
+EVENTS
+  Total:            11097
+  Last 24h:         2993
+  By type:          entry=1612, exit=1485, security_alert=1403, unknown=6597
+
+CAMERAS (live)
+  Not reachable: HTTP Error 401: Unauthorized
+==============================================================================

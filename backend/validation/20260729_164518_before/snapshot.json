@@ -1,0 +1,60 @@
+{
+  "captured_at": "2026-07-29T11:15:19.220972+00:00",
+  "persons": {
+    "total": 20,
+    "active": 20,
+    "encodings": 72
+  },
+  "unknown_faces": {
+    "total": 4572,
+    "by_status": {
+      "pending": 4492,
+      "dismissed": 37,
+      "enrolled": 43
+    },
+    "with_encoding": 2849,
+    "without_encoding": 1723,
+    "pending_occurrence_1": 4151,
+    "pending_singleton_rate": 0.924087266251113,
+    "occurrence_histogram": {
+      "1": 4151,
+      "2": 249,
+      "3": 49,
+      "4": 19,
+      "5": 9,
+      "6": 5,
+      "7": 2,
+      "8": 2,
+      "9": 2,
+      "10": 1,
+      "11": 1,
+      "20": 1,
+      "26": 1
+    },
+    "created_last_24h": 1489
+  },
+  "detection_events": {
+    "total": 11174,
+    "by_type": {
+      "security_alert": 1420,
+      "unknown": 6624,
+      "exit": 1499,
+      "entry": 1631
+    },
+    "last_24h": 3070
+  },
+  "cameras": {
+    "unavailable": "HTTP Error 401: Unauthorized"
+  },
+  "gallery": {
+    "persons": 20,
+    "embeddings": 72,
+    "skipped": 0,
+    "unmeasurable": 5,
+    "misidentified": 7,
+    "recognise_rate": 0.6716417910447762,
+    "verify_rate": 0.5522388059701493,
+    "high_risk_persons": 10,
+    "split_identities": 2
+  }
+}

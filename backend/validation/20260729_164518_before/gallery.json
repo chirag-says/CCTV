@@ -1,0 +1,739 @@
+{
+  "thresholds": {
+    "match_distance": 0.62,
+    "match_margin": 0.1,
+    "verify_distance": 0.55,
+    "verify_margin": 0.12,
+    "duplicate_distance": 0.15
+  },
+  "summary": {
+    "persons": 20,
+    "embeddings": 72,
+    "skipped": 0,
+    "unmeasurable": 5,
+    "misidentified": 7,
+    "recognise_rate": 0.6716417910447762,
+    "verify_rate": 0.5522388059701493,
+    "high_risk_persons": 10,
+    "split_identities": 2
+  },
+  "name_collisions": [
+    {
+      "name": "security 2",
+      "person_ids": [
+        "34d3733a-9c7e-47d7-b11d-3fc0081ade73",
+        "9ab755db-65d7-4dc2-b4a2-1099ccec259d"
+      ],
+      "embedding_counts": [
+        1,
+        10
+      ],
+      "min_distance": 0.5721986293792725,
+      "likely_same_person": true
+    },
+    {
+      "name": "security 1",
+      "person_ids": [
+        "7dfe374f-b5dd-46db-90a7-3f3ef963a4ff",
+        "8ce5274e-af51-4f67-a8c7-f7265367a4ae",
+        "f764106b-d64e-4799-9092-d5099de0ded8"
+      ],
+      "embedding_counts": [
+        1,
+        1,
+        1
+      ],
+      "min_distance": 0.5992885828018188,
+      "likely_same_person": true
+    }
+  ],
+  "persons": [
+    {
+      "person_id": "081cca6f-0a02-4d54-ba7f-8d571c1d0460",
+      "person_name": "lab",
+      "embedding_count": 4,
+      "intra_mean": 0.7909827828407288,
+      "intra_max": 1.0322279930114746,
+      "nearest_person_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "nearest_person_name": "security 2",
+      "nearest_distance": 0.6428426504135132,
+      "worst_margin": -0.2042330503463745,
+      "median_margin": 0.132482647895813,
+      "misidentified_count": 1,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": 0.75,
+      "verify_rate": 0.0,
+      "risk": "high",
+      "reasons": [
+        "1 embedding(s) match another person better than this one (closest: security 2 at 0.6428)",
+        "worst margin -0.2042 < recognition minimum 0.1 -- rejected as ambiguous vs security 2",
+        "1 embedding(s) do not match any other embedding of the same person (distance > 0.62) -- possible mislabel or extreme pose/lighting outlier",
+        "only 4 embeddings (target 10)"
+      ],
+      "recommendation": "review and remove the contaminated embedding(s) -- likely a wrong-person capture enrolled under this identity; add captures that separate this person from security 2 (different pose, lighting, distance); inspect the outlier embedding(s); re-capture under normal conditions; enroll 6 more varied captures",
+      "contaminated_encoding_ids": [
+        "14074a2f-ca01-48a2-bbd9-d5268ee1ab9c"
+      ]
+    },
+    {
+      "person_id": "00e71e75-29dc-44f1-8b09-bcb1d8187f08",
+      "person_name": "un",
+      "embedding_count": 3,
+      "intra_mean": 0.9844183325767517,
+      "intra_max": 1.0318955183029175,
+      "nearest_person_id": "0a7ccc08-e207-41fa-97db-da6f64d71813",
+      "nearest_person_name": "abhiraj",
+      "nearest_distance": 0.8001696467399597,
+      "worst_margin": -0.1832306981086731,
+      "median_margin": -0.1301562786102295,
+      "misidentified_count": 3,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8000000000000002,
+      "quality_min": 0.8,
+      "recognise_rate": 0.0,
+      "verify_rate": 0.0,
+      "risk": "high",
+      "reasons": [
+        "3 embedding(s) match another person better than this one (closest: abhiraj at 0.8002)",
+        "worst margin -0.1832 < recognition minimum 0.1 -- rejected as ambiguous vs abhiraj",
+        "3 embedding(s) do not match any other embedding of the same person (distance > 0.62) -- possible mislabel or extreme pose/lighting outlier",
+        "only 3 embeddings (target 10)"
+      ],
+      "recommendation": "review and remove the contaminated embedding(s) -- likely a wrong-person capture enrolled under this identity; add captures that separate this person from abhiraj (different pose, lighting, distance); inspect the outlier embedding(s); re-capture under normal conditions; enroll 7 more varied captures",
+      "contaminated_encoding_ids": [
+        "8e3ec888-99bd-4eed-bf8b-55cd13cd2f7c",
+        "3ba27da1-1fbf-45a3-991e-2a346b3b3f21",
+        "cd2fcbf8-a8ad-4652-a2a0-968e55dd0352"
+      ]
+    },
+    {
+      "person_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "person_name": "secutiry 3",
+      "embedding_count": 8,
+      "intra_mean": 0.7591561079025269,
+      "intra_max": 0.9250330924987793,
+      "nearest_person_id": "f764106b-d64e-4799-9092-d5099de0ded8",
+      "nearest_person_name": "security 1",
+      "nearest_distance": 0.5103175640106201,
+      "worst_margin": -0.0457991361618042,
+      "median_margin": 0.05407559871673584,
+      "misidentified_count": 2,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": 0.125,
+      "verify_rate": 0.0,
+      "risk": "high",
+      "reasons": [
+        "2 embedding(s) match another person better than this one (closest: security 1 at 0.5103)",
+        "worst margin -0.0458 < recognition minimum 0.1 -- rejected as ambiguous vs security 1",
+        "1 embedding(s) do not match any other embedding of the same person (distance > 0.62) -- possible mislabel or extreme pose/lighting outlier"
+      ],
+      "recommendation": "review and remove the contaminated embedding(s) -- likely a wrong-person capture enrolled under this identity; add captures that separate this person from security 1 (different pose, lighting, distance); inspect the outlier embedding(s); re-capture under normal conditions",
+      "contaminated_encoding_ids": [
+        "effb222b-c634-4c36-8723-8beaecac5245",
+        "7cbde6d0-77e9-4b6d-ac11-55912ec810fd"
+      ]
+    },
+    {
+      "person_id": "4dd29a64-50f4-4e55-a646-33c91eb44d67",
+      "person_name": "security 4",
+      "embedding_count": 2,
+      "intra_mean": 0.6100508570671082,
+      "intra_max": 0.6100508570671082,
+      "nearest_person_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "nearest_person_name": "secutiry 3",
+      "nearest_distance": 0.6072690486907959,
+      "worst_margin": -0.002781808376312256,
+      "median_margin": 0.012856662273406982,
+      "misidentified_count": 1,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": 0.0,
+      "verify_rate": 0.0,
+      "risk": "high",
+      "reasons": [
+        "1 embedding(s) match another person better than this one (closest: secutiry 3 at 0.6073)",
+        "worst margin -0.0028 < recognition minimum 0.1 -- rejected as ambiguous vs secutiry 3",
+        "only 2 embeddings (target 10)"
+      ],
+      "recommendation": "review and remove the contaminated embedding(s) -- likely a wrong-person capture enrolled under this identity; add captures that separate this person from secutiry 3 (different pose, lighting, distance); enroll 8 more varied captures",
+      "contaminated_encoding_ids": [
+        "4372699a-0c66-4cef-aa10-13b20d31a33e"
+      ]
+    },
+    {
+      "person_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "person_name": "security 2",
+      "embedding_count": 10,
+      "intra_mean": 0.7145103216171265,
+      "intra_max": 0.8729571104049683,
+      "nearest_person_id": "34d3733a-9c7e-47d7-b11d-3fc0081ade73",
+      "nearest_person_name": "security 2",
+      "nearest_distance": 0.5721986293792725,
+      "worst_margin": 0.018192172050476074,
+      "median_margin": 0.12202823162078857,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": 0.6,
+      "verify_rate": 0.2,
+      "risk": "high",
+      "reasons": [
+        "enrolled 2 times under the name 'security 2' (records hold 1/10 embeddings; closest pair 0.5722)",
+        "worst margin 0.0182 < recognition minimum 0.1 -- rejected as ambiguous vs security 2",
+        "1 embedding(s) do not match any other embedding of the same person (distance > 0.62) -- possible mislabel or extreme pose/lighting outlier"
+      ],
+      "recommendation": "MERGE these 2 records into one person -- the recogniser is being asked to tell someone apart from themselves, which no threshold can do; add captures that separate this person from security 2 (different pose, lighting, distance); inspect the outlier embedding(s); re-capture under normal conditions",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "4ace3c26-01e8-4076-ae5b-a36535f1d395",
+      "person_name": "chirag",
+      "embedding_count": 1,
+      "intra_mean": null,
+      "intra_max": null,
+      "nearest_person_id": "081cca6f-0a02-4d54-ba7f-8d571c1d0460",
+      "nearest_person_name": "lab",
+      "nearest_distance": 0.8397895097732544,
+      "worst_margin": null,
+      "median_margin": null,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": null,
+      "verify_rate": null,
+      "risk": "high",
+      "reasons": [
+        "only 1 embedding -- self-consistency cannot be measured"
+      ],
+      "recommendation": "enroll 9 more captures",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "7dfe374f-b5dd-46db-90a7-3f3ef963a4ff",
+      "person_name": "security 1",
+      "embedding_count": 1,
+      "intra_mean": null,
+      "intra_max": null,
+      "nearest_person_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "nearest_person_name": "secutiry 3",
+      "nearest_distance": 0.5196007490158081,
+      "worst_margin": null,
+      "median_margin": null,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": null,
+      "verify_rate": null,
+      "risk": "high",
+      "reasons": [
+        "enrolled 3 times under the name 'security 1' (records hold 1/1/1 embeddings; closest pair 0.5993)",
+        "only 1 embedding -- self-consistency cannot be measured"
+      ],
+      "recommendation": "MERGE these 3 records into one person -- the recogniser is being asked to tell someone apart from themselves, which no threshold can do; enroll 9 more captures",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "8ce5274e-af51-4f67-a8c7-f7265367a4ae",
+      "person_name": "security 1",
+      "embedding_count": 1,
+      "intra_mean": null,
+      "intra_max": null,
+      "nearest_person_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "nearest_person_name": "secutiry 3",
+      "nearest_distance": 0.5176931023597717,
+      "worst_margin": null,
+      "median_margin": null,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": null,
+      "verify_rate": null,
+      "risk": "high",
+      "reasons": [
+        "enrolled 3 times under the name 'security 1' (records hold 1/1/1 embeddings; closest pair 0.5993)",
+        "only 1 embedding -- self-consistency cannot be measured"
+      ],
+      "recommendation": "MERGE these 3 records into one person -- the recogniser is being asked to tell someone apart from themselves, which no threshold can do; enroll 9 more captures",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "f764106b-d64e-4799-9092-d5099de0ded8",
+      "person_name": "security 1",
+      "embedding_count": 1,
+      "intra_mean": null,
+      "intra_max": null,
+      "nearest_person_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "nearest_person_name": "secutiry 3",
+      "nearest_distance": 0.5103175640106201,
+      "worst_margin": null,
+      "median_margin": null,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": null,
+      "verify_rate": null,
+      "risk": "high",
+      "reasons": [
+        "enrolled 3 times under the name 'security 1' (records hold 1/1/1 embeddings; closest pair 0.5993)",
+        "only 1 embedding -- self-consistency cannot be measured"
+      ],
+      "recommendation": "MERGE these 3 records into one person -- the recogniser is being asked to tell someone apart from themselves, which no threshold can do; enroll 9 more captures",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "34d3733a-9c7e-47d7-b11d-3fc0081ade73",
+      "person_name": "security 2",
+      "embedding_count": 1,
+      "intra_mean": null,
+      "intra_max": null,
+      "nearest_person_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "nearest_person_name": "security 2",
+      "nearest_distance": 0.5721986293792725,
+      "worst_margin": null,
+      "median_margin": null,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": null,
+      "verify_rate": null,
+      "risk": "high",
+      "reasons": [
+        "enrolled 2 times under the name 'security 2' (records hold 1/10 embeddings; closest pair 0.5722)",
+        "only 1 embedding -- self-consistency cannot be measured"
+      ],
+      "recommendation": "MERGE these 2 records into one person -- the recogniser is being asked to tell someone apart from themselves, which no threshold can do; enroll 9 more captures",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "27476949-2eca-4615-b85c-8f2e870d6938",
+      "person_name": "test",
+      "embedding_count": 2,
+      "intra_mean": 0.6697041988372803,
+      "intra_max": 0.6697041988372803,
+      "nearest_person_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "nearest_person_name": "secutiry 3",
+      "nearest_distance": 0.7985935211181641,
+      "worst_margin": 0.1288893222808838,
+      "median_margin": 0.13076114654541016,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": 0.0,
+      "verify_rate": 0.0,
+      "risk": "medium",
+      "reasons": [
+        "2 embedding(s) do not match any other embedding of the same person (distance > 0.62) -- possible mislabel or extreme pose/lighting outlier",
+        "only 2 embeddings (target 10)"
+      ],
+      "recommendation": "inspect the outlier embedding(s); re-capture under normal conditions; enroll 8 more varied captures",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "4084dab8-68d6-494b-b6ab-2bbf557d0d5a",
+      "person_name": "aadi",
+      "embedding_count": 2,
+      "intra_mean": 0.6361263990402222,
+      "intra_max": 0.6361263990402222,
+      "nearest_person_id": "081cca6f-0a02-4d54-ba7f-8d571c1d0460",
+      "nearest_person_name": "lab",
+      "nearest_distance": 0.7728966474533081,
+      "worst_margin": 0.13677024841308594,
+      "median_margin": 0.1578722894191742,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": 0.0,
+      "verify_rate": 0.0,
+      "risk": "medium",
+      "reasons": [
+        "2 embedding(s) do not match any other embedding of the same person (distance > 0.62) -- possible mislabel or extreme pose/lighting outlier",
+        "only 2 embeddings (target 10)"
+      ],
+      "recommendation": "inspect the outlier embedding(s); re-capture under normal conditions; enroll 8 more varied captures",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "bd1fcd50-e51e-44a7-9c85-0ba261347299",
+      "person_name": "ishan",
+      "embedding_count": 6,
+      "intra_mean": 0.6876305937767029,
+      "intra_max": 0.9165076017379761,
+      "nearest_person_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "nearest_person_name": "security 2",
+      "nearest_distance": 0.7875209450721741,
+      "worst_margin": 0.17484164237976074,
+      "median_margin": 0.28526538610458374,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.7999999999999999,
+      "quality_min": 0.8,
+      "recognise_rate": 0.8333333333333334,
+      "verify_rate": 0.8333333333333334,
+      "risk": "medium",
+      "reasons": [
+        "1 embedding(s) do not match any other embedding of the same person (distance > 0.62) -- possible mislabel or extreme pose/lighting outlier"
+      ],
+      "recommendation": "inspect the outlier embedding(s); re-capture under normal conditions",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "0a7ccc08-e207-41fa-97db-da6f64d71813",
+      "person_name": "abhiraj",
+      "embedding_count": 2,
+      "intra_mean": 0.5130789875984192,
+      "intra_max": 0.5130789875984192,
+      "nearest_person_id": "00e71e75-29dc-44f1-8b09-bcb1d8187f08",
+      "nearest_person_name": "un",
+      "nearest_distance": 0.8001696467399597,
+      "worst_margin": 0.2870906591415405,
+      "median_margin": 0.30690062046051025,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8,
+      "quality_min": 0.8,
+      "recognise_rate": 1.0,
+      "verify_rate": 1.0,
+      "risk": "medium",
+      "reasons": [
+        "only 2 embeddings (target 10)"
+      ],
+      "recommendation": "enroll 8 more varied captures",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "39693116-548f-49fc-a58e-a35777560498",
+      "person_name": "random",
+      "embedding_count": 3,
+      "intra_mean": 0.55027836561203,
+      "intra_max": 0.6004475355148315,
+      "nearest_person_id": "7dfe374f-b5dd-46db-90a7-3f3ef963a4ff",
+      "nearest_person_name": "security 1",
+      "nearest_distance": 0.8243056535720825,
+      "worst_margin": 0.2967744469642639,
+      "median_margin": 0.31812584400177,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.8000000000000002,
+      "quality_min": 0.8,
+      "recognise_rate": 1.0,
+      "verify_rate": 1.0,
+      "risk": "medium",
+      "reasons": [
+        "only 3 embeddings (target 10)"
+      ],
+      "recommendation": "enroll 7 more varied captures",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "720e62a1-620d-4c4d-b57f-4b3d52b832db",
+      "person_name": "Niranjani",
+      "embedding_count": 5,
+      "intra_mean": 0.33479800820350647,
+      "intra_max": 0.45580679178237915,
+      "nearest_person_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "nearest_person_name": "security 2",
+      "nearest_distance": 0.8787397742271423,
+      "worst_margin": 0.5307162404060364,
+      "median_margin": 0.6652653813362122,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.6298,
+      "quality_min": 0.575,
+      "recognise_rate": 1.0,
+      "verify_rate": 1.0,
+      "risk": "good",
+      "reasons": [],
+      "recommendation": "no action needed",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8",
+      "person_name": "Reena",
+      "embedding_count": 5,
+      "intra_mean": 0.2803758978843689,
+      "intra_max": 0.4597817659378052,
+      "nearest_person_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "nearest_person_name": "secutiry 3",
+      "nearest_distance": 0.867483913898468,
+      "worst_margin": 0.5352636575698853,
+      "median_margin": 0.7357653975486755,
+      "misidentified_count": 0,
+      "duplicate_pairs": 2,
+      "quality_mean": 0.6212,
+      "quality_min": 0.534,
+      "recognise_rate": 1.0,
+      "verify_rate": 1.0,
+      "risk": "good",
+      "reasons": [
+        "2 near-duplicate pair(s) below 0.15 -- search cost without added coverage"
+      ],
+      "recommendation": "prune duplicates and replace with varied poses",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "3517ed0a-d5a9-49e3-9121-6bc82247b447",
+      "person_name": "Dileep",
+      "embedding_count": 5,
+      "intra_mean": 0.31027770042419434,
+      "intra_max": 0.3970685601234436,
+      "nearest_person_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "nearest_person_name": "secutiry 3",
+      "nearest_distance": 0.8055776357650757,
+      "worst_margin": 0.5450954437255859,
+      "median_margin": 0.5789700150489807,
+      "misidentified_count": 0,
+      "duplicate_pairs": 1,
+      "quality_mean": 0.6442,
+      "quality_min": 0.532,
+      "recognise_rate": 1.0,
+      "verify_rate": 1.0,
+      "risk": "good",
+      "reasons": [
+        "1 near-duplicate pair(s) below 0.15 -- search cost without added coverage"
+      ],
+      "recommendation": "prune duplicates and replace with varied poses",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "1618c55e-a664-45fa-9fb2-18420b12ae27",
+      "person_name": "Farhana",
+      "embedding_count": 5,
+      "intra_mean": 0.25111234188079834,
+      "intra_max": 0.3293560743331909,
+      "nearest_person_id": "e1073429-a7a4-41e5-b1b0-02d066c6bfff",
+      "nearest_person_name": "Geetha",
+      "nearest_distance": 0.8301812410354614,
+      "worst_margin": 0.6618318557739258,
+      "median_margin": 0.6732514500617981,
+      "misidentified_count": 0,
+      "duplicate_pairs": 0,
+      "quality_mean": 0.6374000000000001,
+      "quality_min": 0.6,
+      "recognise_rate": 1.0,
+      "verify_rate": 1.0,
+      "risk": "good",
+      "reasons": [],
+      "recommendation": "no action needed",
+      "contaminated_encoding_ids": []
+    },
+    {
+      "person_id": "e1073429-a7a4-41e5-b1b0-02d066c6bfff",
+      "person_name": "Geetha",
+      "embedding_count": 5,
+      "intra_mean": 0.18452930450439453,
+      "intra_max": 0.28516876697540283,
+      "nearest_person_id": "1618c55e-a664-45fa-9fb2-18420b12ae27",
+      "nearest_person_name": "Farhana",
+      "nearest_distance": 0.8301812410354614,
+      "worst_margin": 0.6622583270072937,
+      "median_margin": 0.7411850690841675,
+      "misidentified_count": 0,
+      "duplicate_pairs": 3,
+      "quality_mean": 0.6741999999999999,
+      "quality_min": 0.571,
+      "recognise_rate": 1.0,
+      "verify_rate": 1.0,
+      "risk": "good",
+      "reasons": [
+        "3 near-duplicate pair(s) below 0.15 -- search cost without added coverage"
+      ],
+      "recommendation": "prune duplicates and replace with varied poses",
+      "contaminated_encoding_ids": []
+    }
+  ],
+  "confusable_pairs": [
+    {
+      "a_id": "f764106b-d64e-4799-9092-d5099de0ded8",
+      "a_name": "security 1",
+      "b_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "b_name": "secutiry 3",
+      "min_distance": 0.5103175640106201,
+      "centroid_distance": 0.5049773454666138,
+      "severity": "good"
+    },
+    {
+      "a_id": "8ce5274e-af51-4f67-a8c7-f7265367a4ae",
+      "a_name": "security 1",
+      "b_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "b_name": "secutiry 3",
+      "min_distance": 0.5176931023597717,
+      "centroid_distance": 0.5385854244232178,
+      "severity": "good"
+    },
+    {
+      "a_id": "7dfe374f-b5dd-46db-90a7-3f3ef963a4ff",
+      "a_name": "security 1",
+      "b_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "b_name": "secutiry 3",
+      "min_distance": 0.5196007490158081,
+      "centroid_distance": 0.5314345955848694,
+      "severity": "good"
+    },
+    {
+      "a_id": "34d3733a-9c7e-47d7-b11d-3fc0081ade73",
+      "a_name": "security 2",
+      "b_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "b_name": "security 2",
+      "min_distance": 0.5721986293792725,
+      "centroid_distance": 0.5666357278823853,
+      "severity": "good"
+    },
+    {
+      "a_id": "7dfe374f-b5dd-46db-90a7-3f3ef963a4ff",
+      "a_name": "security 1",
+      "b_id": "f764106b-d64e-4799-9092-d5099de0ded8",
+      "b_name": "security 1",
+      "min_distance": 0.5992885828018188,
+      "centroid_distance": 0.5992884635925293,
+      "severity": "good"
+    },
+    {
+      "a_id": "8ce5274e-af51-4f67-a8c7-f7265367a4ae",
+      "a_name": "security 1",
+      "b_id": "f764106b-d64e-4799-9092-d5099de0ded8",
+      "b_name": "security 1",
+      "min_distance": 0.6061052083969116,
+      "centroid_distance": 0.6061051487922668,
+      "severity": "good"
+    },
+    {
+      "a_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "a_name": "secutiry 3",
+      "b_id": "4dd29a64-50f4-4e55-a646-33c91eb44d67",
+      "b_name": "security 4",
+      "min_distance": 0.6072690486907959,
+      "centroid_distance": 0.5300094485282898,
+      "severity": "good"
+    },
+    {
+      "a_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "a_name": "security 2",
+      "b_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "b_name": "secutiry 3",
+      "min_distance": 0.6129090189933777,
+      "centroid_distance": 0.571638822555542,
+      "severity": "good"
+    },
+    {
+      "a_id": "7dfe374f-b5dd-46db-90a7-3f3ef963a4ff",
+      "a_name": "security 1",
+      "b_id": "8ce5274e-af51-4f67-a8c7-f7265367a4ae",
+      "b_name": "security 1",
+      "min_distance": 0.6275351047515869,
+      "centroid_distance": 0.6275350451469421,
+      "severity": "good"
+    },
+    {
+      "a_id": "f764106b-d64e-4799-9092-d5099de0ded8",
+      "a_name": "security 1",
+      "b_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "b_name": "security 2",
+      "min_distance": 0.6322258710861206,
+      "centroid_distance": 0.7148579955101013,
+      "severity": "good"
+    },
+    {
+      "a_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "a_name": "security 2",
+      "b_id": "081cca6f-0a02-4d54-ba7f-8d571c1d0460",
+      "b_name": "lab",
+      "min_distance": 0.6428426504135132,
+      "centroid_distance": 0.7119409441947937,
+      "severity": "good"
+    },
+    {
+      "a_id": "f764106b-d64e-4799-9092-d5099de0ded8",
+      "a_name": "security 1",
+      "b_id": "34d3733a-9c7e-47d7-b11d-3fc0081ade73",
+      "b_name": "security 2",
+      "min_distance": 0.6988779902458191,
+      "centroid_distance": 0.6988779306411743,
+      "severity": "good"
+    },
+    {
+      "a_id": "34d3733a-9c7e-47d7-b11d-3fc0081ade73",
+      "a_name": "security 2",
+      "b_id": "081cca6f-0a02-4d54-ba7f-8d571c1d0460",
+      "b_name": "lab",
+      "min_distance": 0.7019838094711304,
+      "centroid_distance": 0.7432804703712463,
+      "severity": "good"
+    },
+    {
+      "a_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "a_name": "secutiry 3",
+      "b_id": "081cca6f-0a02-4d54-ba7f-8d571c1d0460",
+      "b_name": "lab",
+      "min_distance": 0.7153697609901428,
+      "centroid_distance": 0.7873578071594238,
+      "severity": "good"
+    },
+    {
+      "a_id": "8ce5274e-af51-4f67-a8c7-f7265367a4ae",
+      "a_name": "security 1",
+      "b_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "b_name": "security 2",
+      "min_distance": 0.7475522756576538,
+      "centroid_distance": 0.7157233953475952,
+      "severity": "good"
+    },
+    {
+      "a_id": "f764106b-d64e-4799-9092-d5099de0ded8",
+      "a_name": "security 1",
+      "b_id": "4dd29a64-50f4-4e55-a646-33c91eb44d67",
+      "b_name": "security 4",
+      "min_distance": 0.7516033053398132,
+      "centroid_distance": 0.7855945825576782,
+      "severity": "good"
+    },
+    {
+      "a_id": "34d3733a-9c7e-47d7-b11d-3fc0081ade73",
+      "a_name": "security 2",
+      "b_id": "12a48fd9-3f11-45e8-8fbf-8f699d489c58",
+      "b_name": "secutiry 3",
+      "min_distance": 0.7670607566833496,
+      "centroid_distance": 0.7153955101966858,
+      "severity": "good"
+    },
+    {
+      "a_id": "081cca6f-0a02-4d54-ba7f-8d571c1d0460",
+      "a_name": "lab",
+      "b_id": "4084dab8-68d6-494b-b6ab-2bbf557d0d5a",
+      "b_name": "aadi",
+      "min_distance": 0.7728966474533081,
+      "centroid_distance": 0.9179913997650146,
+      "severity": "good"
+    },
+    {
+      "a_id": "7dfe374f-b5dd-46db-90a7-3f3ef963a4ff",
+      "a_name": "security 1",
+      "b_id": "9ab755db-65d7-4dc2-b4a2-1099ccec259d",
+      "b_name": "security 2",
+      "min_distance": 0.7760850191116333,
+      "centroid_distance": 0.7352163791656494,
+      "severity": "good"
+    },
+    {
+      "a_id": "f764106b-d64e-4799-9092-d5099de0ded8",
+      "a_name": "security 1",
+      "b_id": "081cca6f-0a02-4d54-ba7f-8d571c1d0460",
+      "b_name": "lab",
+      "min_distance": 0.7874813675880432,
+      "centroid_distance": 0.7789196372032166,
+      "severity": "good"
+    }
+  ]
+}
