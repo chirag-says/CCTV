@@ -8,6 +8,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '@/lib/api';
+import { PresenceStateDot, PRESENCE_CONFIG, agoLabel } from './PresenceState';
 
 const TYPE_CONFIG = {
     person: { icon: '👤', color: '#6366f1', label: 'Person', route: '/persons' },
@@ -15,6 +16,21 @@ const TYPE_CONFIG = {
     unknown_face: { icon: '❓', color: '#f59e0b', label: 'Unknown', route: '/unknown-faces' },
     vehicle: { icon: '🚗', color: '#3b82f6', label: 'Vehicle', route: '/traffic' },
 };
+
+/**
+ * Where selecting a result should take you.
+ *
+ * Previously this pushed `config.route` and discarded `result.id`, so picking
+ * a person landed on the persons LIST rather than that person — the search
+ * could find someone but never open them. Person results now deep-link.
+ */
+function routeFor(result) {
+    const config = TYPE_CONFIG[result.type] || TYPE_CONFIG.event;
+    if (result.type === 'person' && result.id) {
+        return `/persons/${result.id}`;
+    }
+    return config.route;
+}
 
 export default function SearchPalette({ isOpen, onClose }) {
     const [query, setQuery] = useState('');
@@ -79,8 +95,7 @@ export default function SearchPalette({ isOpen, onClose }) {
             e.preventDefault();
             const result = results[selectedIdx];
             if (result) {
-                const config = TYPE_CONFIG[result.type] || TYPE_CONFIG.event;
-                router.push(config.route);
+                router.push(routeFor(result));
                 onClose();
             }
         }
@@ -131,7 +146,7 @@ export default function SearchPalette({ isOpen, onClose }) {
                     <input
                         ref={inputRef}
                         type="text"
-                        placeholder="Search persons, events, plates..."
+                        placeholder="Where is someone? Search faculty, events, plates…"
                         value={query}
                         onChange={(e) => setQuery(e.target.value)}
                         onKeyDown={handleKeyDown}
@@ -165,7 +180,7 @@ export default function SearchPalette({ isOpen, onClose }) {
                         <div style={{ padding: '32px 24px', textAlign: 'center' }}>
                             <div style={{ fontSize: '1.5rem', marginBottom: '8px', opacity: 0.3 }}>🔍</div>
                             <div style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
-                                No results for "{query}"
+                                No results for &ldquo;{query}&rdquo;
                             </div>
                         </div>
                     ) : results.length > 0 ? (
@@ -177,7 +192,7 @@ export default function SearchPalette({ isOpen, onClose }) {
                                     <button
                                         key={`${result.type}-${result.id}`}
                                         onClick={() => {
-                                            router.push(config.route);
+                                            router.push(routeFor(result));
                                             onClose();
                                         }}
                                         onMouseEnter={() => setSelectedIdx(idx)}
@@ -229,6 +244,36 @@ export default function SearchPalette({ isOpen, onClose }) {
                                             }}>
                                                 {result.subtitle}
                                             </div>
+                                            {/* "Where is this person?" — answered in the
+                                                result row itself, so finding someone and
+                                                locating them is one action, not two. */}
+                                            {result.presence && (
+                                                <div style={{
+                                                    display: 'flex', alignItems: 'center', gap: '5px',
+                                                    marginTop: '3px', fontSize: '0.6875rem',
+                                                    overflow: 'hidden', textOverflow: 'ellipsis',
+                                                    whiteSpace: 'nowrap',
+                                                }}>
+                                                    <PresenceStateDot state={result.presence.state} size={6} />
+                                                    <span style={{
+                                                        color: PRESENCE_CONFIG[result.presence.state]?.dot
+                                                            || 'var(--text-muted)',
+                                                        fontWeight: 600,
+                                                    }}>
+                                                        {result.presence.state === 'LIVE'
+                                                            ? `Now at ${result.presence.zone || result.presence.camera_name || 'campus'}`
+                                                            : result.presence.state === 'DEPARTED'
+                                                                ? 'Departed'
+                                                                : `${result.presence.zone || result.presence.camera_name || 'On campus'}`}
+                                                    </span>
+                                                    {result.presence.state !== 'LIVE'
+                                                        && result.presence.minutes_since_seen !== null && (
+                                                            <span style={{ color: 'var(--text-muted)', fontWeight: 500 }}>
+                                                                · {agoLabel(result.presence.minutes_since_seen)}
+                                                            </span>
+                                                        )}
+                                                </div>
+                                            )}
                                         </div>
                                         <span style={{
                                             padding: '2px 8px',

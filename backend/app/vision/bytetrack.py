@@ -17,6 +17,7 @@ Reference: ByteTrack: Multi-Object Tracking by Associating Every Detection Box
 
 import numpy as np
 import logging
+import time
 from typing import List, Tuple, Optional, Dict
 from dataclasses import dataclass, field
 from collections import OrderedDict
@@ -44,6 +45,16 @@ class STrack:
     tracklet_len: int = 0
     _velocity: Optional[np.ndarray] = field(default=None, repr=False)
     _prev_bbox: Optional[np.ndarray] = field(default=None, repr=False)
+
+    # ââ Last OBSERVED state (coasting) ââââââââââââââââââ
+    # `bbox` drifts every frame: predict() applies velocity to lost tracks
+    # too, so after a second of absence it can be well off the person or off
+    # the frame entirely. These two fields record the last position that was
+    # actually SEEN, which is the only honest thing to draw once detection
+    # has stopped. Wall-clock, not frame counts, so the coast window is
+    # FPS-independent like the rest of the recognition cache.
+    last_seen_at: float = 0.0
+    last_seen_bbox: Optional[np.ndarray] = field(default=None, repr=False)
 
     # ── Recognition Cache ─────────────────────────────────────────
     # Time-based (FPS-independent) — avoids redundant ArcFace calls
@@ -89,6 +100,10 @@ class STrack:
         self.frame_id = frame_id
         self.tracklet_len += 1
 
+        # Observation, not prediction -- see last_seen_bbox above.
+        self.last_seen_at = time.time()
+        self.last_seen_bbox = np.asarray(new_bbox, dtype=np.float32).copy()
+
         # Update velocity (simple exponential smoothing)
         new_velocity = new_bbox - old_bbox
         if self._velocity is not None:
@@ -103,6 +118,9 @@ class STrack:
         self.frame_id = frame_id
         self.start_frame = frame_id
         self.tracklet_len = 0
+        if self.last_seen_bbox is None:
+            self.last_seen_at = time.time()
+            self.last_seen_bbox = np.asarray(self.bbox, dtype=np.float32).copy()
 
     @property
     def end_frame(self) -> int:
@@ -235,6 +253,10 @@ class ByteTracker:
         # Grace period: how many detection-frames a tracked face can be
         # absent before it moves to "lost". Configurable via settings.
         self.tracked_grace = getattr(settings, 'BYTETRACK_TRACKED_GRACE', 2)
+
+        # Coasting window: how long a LOST track stays drawable. Presentation
+        # only -- get_coasting_tracks() is a read, it mutates nothing.
+        self.coast_sec = getattr(settings, 'BYTETRACK_COAST_SEC', 2.0)
 
         # Track management
         self._tracked_stracks: List[STrack] = []  # Active tracks
@@ -509,6 +531,54 @@ class ByteTracker:
                 track.person_name = person_name
                 return
 
+    def get_coasting_tracks(
+        self, max_age_sec: Optional[float] = None
+    ) -> List[Tuple[STrack, float]]:
+        """
+        Tracks this tracker has LOST but has not forgotten.
+
+        WHY THIS EXISTS
+        `update()` returns only `_tracked_stracks`. A track that goes
+        unmatched for `tracked_grace` detection-frames moves to
+        `_lost_stracks` -- where it remains a live re-association candidate
+        for `track_buffer` detection-frames (~9 real seconds at FRAME_SKIP=3),
+        carrying its person_id, recognition lock and distance history intact.
+
+        The identity is therefore NOT lost. It simply stops being returned,
+        so the pipeline stops drawing it, and a box vanishes the instant
+        someone turns their head. This accessor exposes that surviving state
+        so it can be drawn.
+
+        DELIBERATELY A SEPARATE METHOD, NOT AN ADDITION TO update()'s RETURN.
+        The pipeline's main loop runs recognition, PersonTracker.on_detection
+        and attribute extraction over everything update() hands back. Feeding
+        coasting tracks into that loop would mark people present, and keep
+        entry sessions alive, on frames where nothing was actually detected.
+        Coasting is a drawing concern and must stay one.
+
+        Returns:
+            (track, age_seconds) pairs, newest first. Position to draw is
+            `track.last_seen_bbox` -- the last OBSERVED box. Never `bbox`,
+            which predict() has been drifting forward the whole time.
+        """
+        max_age = self.coast_sec if max_age_sec is None else max_age_sec
+        if max_age <= 0:
+            return []
+
+        now = time.time()
+        out: List[Tuple[STrack, float]] = []
+        for track in self._lost_stracks:
+            # Un-activated tracks never earned a public id; drawing them would
+            # put single-frame detection noise on screen as a ghost box.
+            if not track.is_activated or track.last_seen_bbox is None:
+                continue
+            age = now - track.last_seen_at
+            if 0.0 <= age <= max_age:
+                out.append((track, age))
+
+        out.sort(key=lambda pair: pair[1])
+        return out
+
     def get_track_by_id(self, track_id: int) -> Optional[STrack]:
         """Get a track by its ID."""
         for track in self._tracked_stracks:
@@ -534,6 +604,7 @@ class ByteTracker:
         return {
             "active_tracks": self.active_track_count,
             "lost_tracks": len(self._lost_stracks),
+            "coasting_tracks": len(self.get_coasting_tracks()),
             "total_ids": self._next_id - 1,
             "frame_id": self._frame_id,
         }

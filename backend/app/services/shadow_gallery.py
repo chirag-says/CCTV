@@ -310,7 +310,7 @@ class ShadowGallery:
                 return None
 
             # Detect faces and extract embeddings in one pass
-            locations, embeddings, _ = detector.detect_faces_with_embeddings(img)
+            locations, embeddings, _, _ = detector.detect_faces_with_embeddings(img)
 
             if not embeddings or all(e is None for e in embeddings):
                 return ValidationResult(

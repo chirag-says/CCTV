@@ -10,7 +10,7 @@ import os
 import cv2
 import numpy as np
 import logging
-from typing import Tuple
+from typing import Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +53,50 @@ if not _simplejpeg_available:
 def get_jpeg_encoder_name() -> str:
     """Return the active JPEG encoder name for startup summary."""
     return _jpeg_encoder_name
+
+
+def save_jpeg_bytes(
+    jpeg_bytes: bytes,
+    name: str,
+    subdirectory: str = "",
+) -> Tuple[str, str]:
+    """
+    Write already-encoded JPEG bytes straight to disk.
+
+    Used for security-alert evidence, where the pipeline has already encoded
+    the annotated frame for the live stream (pipeline._last_jpeg). Reusing
+    those bytes skips a decode/re-encode round trip entirely, and the saved
+    image carries the detection boxes the operator saw — better evidence than
+    a clean frame.
+
+    fsync before returning, so the file is on disk before the URL reaches the
+    database row that points at it.
+
+    Returns:
+        (filepath, url_path), or ("", "") on failure — never raises, because
+        losing an evidence image must not lose the incident record.
+    """
+    if not jpeg_bytes:
+        return "", ""
+    try:
+        base_dir = os.path.join("snapshots", subdirectory) if subdirectory else "snapshots"
+        os.makedirs(base_dir, exist_ok=True)
+
+        filename = f"{name}.jpg"
+        filepath = os.path.join(base_dir, filename)
+        with open(filepath, "wb") as f:
+            f.write(jpeg_bytes)
+            f.flush()
+            os.fsync(f.fileno())
+
+        url_parts = ["snapshots"]
+        if subdirectory:
+            url_parts.append(subdirectory)
+        url_parts.append(filename)
+        return filepath, "/" + "/".join(url_parts)
+    except Exception as e:
+        logger.error(f"Failed to save JPEG bytes: {e}")
+        return "", ""
 
 
 def save_snapshot(
@@ -112,6 +156,51 @@ def save_snapshot(
     except Exception as e:
         logger.error(f"Failed to save snapshot: {e}")
         return "", ""
+
+
+def resolve_snapshot_path(url_or_path: str) -> Optional[str]:
+    """
+    Map a stored snapshot URL to a real file on disk.
+
+    save_snapshot() writes to ``snapshots/<subdir>/<name>.jpg`` and stores the
+    URL form ``/snapshots/<subdir>/<name>.jpg``. Naively joining that onto
+    SNAPSHOT_DIR ("./snapshots") produces ``snapshots/snapshots/<subdir>/...``,
+    which never exists — and on Windows the leading slash does not make the
+    path absolute either, since there is no drive letter, so the usual
+    is_absolute() guard does not catch it.
+
+    Tries, in order: the path as given; the URL relative to the working
+    directory; the URL with its leading "snapshots/" segment stripped and
+    re-joined to SNAPSHOT_DIR; and finally the bare filename in SNAPSHOT_DIR.
+
+    Returns None when the file cannot be found anywhere.
+    """
+    if not url_or_path:
+        return None
+
+    from app.config import settings
+
+    snap_dir = str(settings.SNAPSHOT_DIR)
+    rel = url_or_path.lstrip("/").replace("\\", "/")
+    base = os.path.basename(rel)
+    leaf = os.path.basename(os.path.normpath(snap_dir))
+
+    # Strip a duplicated leading "snapshots/" so the join does not double it.
+    trimmed = rel[len(leaf) + 1:] if rel.startswith(leaf + "/") else rel
+
+    for candidate in (
+        url_or_path,
+        rel,
+        os.path.join(snap_dir, trimmed),
+        os.path.join(snap_dir, base),
+    ):
+        try:
+            if candidate and os.path.isfile(candidate):
+                return candidate
+        except (OSError, ValueError):
+            continue
+
+    return None
 
 
 def resize_frame(

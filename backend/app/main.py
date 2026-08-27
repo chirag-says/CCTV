@@ -121,6 +121,31 @@ def _process_pipeline_event(event: dict):
 
     eq = get_event_queue()
 
+    # ── Security-alert evidence snapshot ──────────────────────────
+    # Written SYNCHRONOUSLY here, in the EventQueue consumer thread, so the
+    # URL exists before the row is inserted. The async SnapshotWorker cannot
+    # be used for this: its callback can land after the insert, leaving the
+    # alert with a permanently NULL snapshot_url. Same pattern as the unknown
+    # face crop below.
+    #
+    # The bytes are popped unconditionally — they must never reach
+    # metadata_json or the WebSocket broadcast, both of which are JSON.
+    _evidence_jpeg = event.pop("_evidence_jpeg", None)
+    if _evidence_jpeg and event_type == "security_alert":
+        try:
+            from uuid import uuid4 as _uuid4
+            from app.utils.image_utils import save_jpeg_bytes
+            _, _alert_url = save_jpeg_bytes(
+                _evidence_jpeg,
+                f"alert_{event.get('subtype', 'event')}_{_uuid4().hex[:10]}",
+                subdirectory="alerts",
+            )
+            if _alert_url:
+                event["snapshot_url"] = _alert_url
+        except Exception as e:
+            # Losing an image must never lose the incident record.
+            logger.error(f"Failed to save alert evidence snapshot: {e}")
+
     # Persist to PostgreSQL
     import time as _time
     _db_start = _time.perf_counter()
@@ -455,6 +480,10 @@ def _process_unknown_face(data: dict):
             else:
                 # Genuinely new person — now it is worth the disk write.
                 _save_snapshots()
+                # Pose/quality metadata travels with the FIRST sighting only —
+                # it describes the embedding and snapshot stored on this row.
+                # Absent keys stay NULL rather than defaulting to 0-degree yaw,
+                # which would falsely mark every face "frontal".
                 unknown = UnknownFace(
                     id=data.get("unknown_id", str(uuid4())),
                     camera_id=camera_id,
@@ -466,6 +495,14 @@ def _process_unknown_face(data: dict):
                     last_seen=ts,
                     status="pending",
                     created_at=datetime.now(timezone.utc),
+                    yaw=data.get("yaw"),
+                    pitch=data.get("pitch"),
+                    roll=data.get("roll"),
+                    pose_bucket=data.get("pose_bucket"),
+                    quality=data.get("quality"),
+                    blur_score=data.get("blur_score"),
+                    det_score=data.get("det_score"),
+                    lighting=data.get("lighting"),
                 )
                 db.add(unknown)
                 db.commit()
@@ -636,6 +673,8 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # ── Register Routes ───────────────────────────────────────────
 from app.routes import auth, persons, cameras, events, unknown_faces, analytics, movements, video_analysis, search, retention
+from app.routes import attendance
+from app.routes import incidents
 from app.routes import browser_camera
 from app.routes import share_camera_page
 from app.routes import reid as reid_route
@@ -648,6 +687,8 @@ app.include_router(cameras.router)
 app.include_router(events.router)
 app.include_router(unknown_faces.router)
 app.include_router(analytics.router)
+app.include_router(attendance.router)
+app.include_router(incidents.router)
 app.include_router(movements.router)
 app.include_router(video_analysis.router)
 app.include_router(search.router)

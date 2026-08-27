@@ -36,25 +36,52 @@ from app.config import settings
 # ── Teacher metadata ────────────────────────────────────────────
 # The Teachers/ folder has files named like "dileep (1).jpeg", "farhana (2).jpeg", etc.
 # We group by first-name prefix and assign metadata here.
+#
+# Every enrolled teacher is CSE: that is the actual roster today, and the
+# department-wise attendance rollup is only honest if it reflects it.
+# Spreading these names across ECE/Mechanical/Civil made the dashboard look
+# fuller, but it reported one-person departments that do not exist.
+# These are the only faces available in Teachers/, so the roster is
+# genuinely small -- no placeholder people are invented, because a
+# fabricated teacher with no photo can never be recognised and would show up
+# as a permanent, unexplained absence in every report.
+#
+# Chirag was first enrolled as a CSE student; his photos were copied from
+# Student/ into Teachers/ when he moved onto the faculty roster, so this
+# seeder can rebuild him from scratch on a clean database.
+#
+# `person_type` is what attendance and presence filter on; `role` is the
+# human-facing designation. See app/migrations/009_college_features.sql.
 TEACHERS = [
     {
         "prefix": "dileep",
         "name": "Dileep",
-        "role": "assistant_professor",
+        "role": "hod",
+        "person_type": "faculty",
         "department": "CSE",
         "email": "dileep@atria.edu",
+    },
+    {
+        "prefix": "chirag",
+        "name": "Chirag",
+        "role": "assistant_professor",
+        "person_type": "faculty",
+        "department": "CSE",
+        "email": "chirag@atria.edu",
     },
     {
         "prefix": "farhana",
         "name": "Farhana",
         "role": "assistant_professor",
+        "person_type": "faculty",
         "department": "CSE",
         "email": "farhana@atria.edu",
     },
     {
         "prefix": "geetha",
         "name": "Geetha",
-        "role": "assistant_professor",
+        "role": "associate_professor",
+        "person_type": "faculty",
         "department": "CSE",
         "email": "geetha@atria.edu",
     },
@@ -62,15 +89,25 @@ TEACHERS = [
         "prefix": "niranjani",
         "name": "Niranjani",
         "role": "assistant_professor",
+        "person_type": "faculty",
         "department": "CSE",
         "email": "niranjani@atria.edu",
     },
     {
         "prefix": "reena",
         "name": "Reena",
-        "role": "assistant_professor",
+        "role": "professor",
+        "person_type": "faculty",
         "department": "CSE",
         "email": "reena@atria.edu",
+    },
+    {
+        "prefix": "rithvik",
+        "name": "Rithvik",
+        "role": "assistant_professor",
+        "person_type": "faculty",
+        "department": "CSE",
+        "email": "rithvik@atria.edu",
     },
 ]
 
@@ -164,7 +201,24 @@ def seed_teachers():
                 .first()
             )
             if existing:
-                print(f"  ⏭️  Already exists (id={existing.id[:12]}...), skipping")
+                # Keep the (expensive) face encodings, but refresh the roster
+                # metadata. Re-running the seeder after a department or
+                # designation change should not require deleting and
+                # re-enrolling the person.
+                changes = []
+                for field in ("role", "person_type", "department", "email"):
+                    new_value = teacher.get(field)
+                    if new_value and getattr(existing, field, None) != new_value:
+                        changes.append(
+                            f"{field}: {getattr(existing, field, None)} → {new_value}"
+                        )
+                        setattr(existing, field, new_value)
+                if changes:
+                    existing.updated_at = datetime.now(timezone.utc)
+                    db.commit()
+                    print(f"  ♻️  Already exists — updated {', '.join(changes)}")
+                else:
+                    print(f"  ⏭️  Already exists (id={existing.id[:12]}...), skipping")
                 skipped += 1
                 continue
 
@@ -174,6 +228,7 @@ def seed_teachers():
                 id=person_id,
                 name=teacher["name"],
                 role=teacher["role"],
+                person_type=teacher.get("person_type", "faculty"),
                 department=teacher.get("department", "CSE"),
                 email=teacher.get("email"),
                 avatar_url=None,  # Will be set after processing images

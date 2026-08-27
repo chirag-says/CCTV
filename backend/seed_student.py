@@ -34,7 +34,8 @@ from app.db.models import Person, FaceEncoding
 from app.config import settings
 
 # ── Student metadata ────────────────────────────────────────────
-# The Student/ folder has files named like "abhitha (1).jpeg", "chirag (2).jpeg", etc.
+# The Student/ folder has files named like "abhitha (1).jpeg", "abhitha (2).jpeg", etc.
+# Chirag is seeded by seed_teachers.py -- he is CSE faculty, not a student.
 # We group by first-name prefix and assign metadata here.
 STUDENTS = [
     {
@@ -43,13 +44,6 @@ STUDENTS = [
         "role": "student",
         "department": "CSE",
         "email": "abhitha@atria.edu",
-    },
-    {
-        "prefix": "chirag",
-        "name": "Chirag",
-        "role": "student",
-        "department": "CSE",
-        "email": "chirag@atria.edu",
     },
 ]
 
@@ -153,6 +147,7 @@ def seed_students():
                 id=person_id,
                 name=student["name"],
                 role=student["role"],
+                person_type=student.get("person_type", "student"),
                 department=student.get("department", "CSE"),
                 email=student.get("email"),
                 avatar_url=None,  # Will be set after processing images

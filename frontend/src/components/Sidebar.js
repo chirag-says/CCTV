@@ -22,6 +22,8 @@ import {
     VideoUploadIcon,
     ReIDIcon,
     AIReviewIcon,
+    AttendanceIcon,
+    CampusIcon,
 } from './Icons';
 
 function SunIcon({ size = 18 }) {
@@ -59,6 +61,14 @@ const navItems = [
         ],
     },
     {
+        section: 'College',
+        items: [
+            { href: '/attendance', icon: AttendanceIcon, label: 'Faculty Attendance', id: 'nav-attendance' },
+            { href: '/on-campus', icon: CampusIcon, label: 'Currently on Campus', id: 'nav-on-campus' },
+            { href: '/daily-summary', icon: AnalyticsIcon, label: 'Daily Summary', id: 'nav-daily-summary' },
+        ],
+    },
+    {
         section: 'Management',
         items: [
             { href: '/persons', icon: UsersIcon, label: 'Persons', id: 'nav-persons' },
@@ -71,6 +81,7 @@ const navItems = [
         section: 'Security',
         items: [
             { href: '/security-alerts', icon: SecurityIcon, label: 'Security Alerts', id: 'nav-security', alertBadge: true },
+            { href: '/incidents', icon: ShieldIcon, label: 'Incidents', id: 'nav-incidents' },
             { href: '/traffic', icon: TrafficIcon, label: 'Traffic Monitor', id: 'nav-traffic' },
             { href: '/reid', icon: ReIDIcon, label: 'Person ReID', id: 'nav-reid' },
         ],

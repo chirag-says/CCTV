@@ -348,34 +348,20 @@ class IdentityReviewWorker:
         Returns:
             (inliers, outliers) -- split member lists
         """
+        from app.services.clustering_service import centroid_distances, outlier_flags
+
         if len(members) < 3:
             return members, []
 
-        # Compute distances from centroid
-        centroid_norm = np.linalg.norm(centroid)
-        if centroid_norm == 0:
-            return members, []
-        centroid_n = centroid / centroid_norm
-
-        distances = []
-        for face, enc in members:
-            enc_norm = np.linalg.norm(enc)
-            if enc_norm > 0:
-                dist = 1.0 - float(np.dot(centroid_n, enc / enc_norm))
-            else:
-                dist = 1.0
-            distances.append(dist)
-
-        median_dist = float(np.median(distances))
-        threshold = median_dist * settings.GALLERY_OPT_OUTLIER_FACTOR
+        distances = centroid_distances([enc for _, enc in members], centroid)
+        flags, threshold = outlier_flags(
+            distances, settings.GALLERY_OPT_OUTLIER_FACTOR,
+        )
 
         inliers = []
         outliers = []
-        for (face, enc), dist in zip(members, distances):
-            if dist > threshold and threshold > 0:
-                outliers.append((face, enc))
-            else:
-                inliers.append((face, enc))
+        for member, is_outlier in zip(members, flags):
+            (outliers if is_outlier else inliers).append(member)
 
         if outliers:
             logger.info(
@@ -432,6 +418,7 @@ class IdentityReviewWorker:
             )
             from app.services.embedding_suggestions import classify_pose_bucket
             from app.vision.recognizer import deserialize_encoding
+            from sqlalchemy import func
 
             db = SessionLocal()
             try:
@@ -453,6 +440,7 @@ class IdentityReviewWorker:
                 stats["clusters_scanned"] = len(clusters)
 
                 vlm = get_vlm_reviewer()
+                vlm_enabled = getattr(vlm, "enabled", True)
                 vlm_cache = get_vlm_cache()
                 gallery_version = self._get_gallery_version(db)
 
@@ -477,6 +465,38 @@ class IdentityReviewWorker:
                         if not candidates:
                             continue
 
+                        # Real pose buckets carried by this cluster's members.
+                        # Members written before migration 010 have no pose;
+                        # they contribute nothing here rather than being
+                        # counted as "frontal", which is what made pose rarity
+                        # and coverage delta constant across every candidate.
+                        cluster_poses = [
+                            row[0] for row in (
+                                db.query(UnknownFace.pose_bucket)
+                                .filter(
+                                    UnknownFace.cluster_id == cluster.id,
+                                    UnknownFace.pose_bucket.isnot(None),
+                                )
+                                .distinct()
+                                .all()
+                            )
+                        ]
+                        # Rarest pose present drives the priority weight —
+                        # an extreme-left sighting is the reason to look now.
+                        rarest_pose = max(
+                            cluster_poses,
+                            key=lambda b: _POSE_RARITY_SCORES.get(b, 0.30),
+                            default="unknown",
+                        )
+                        cluster_quality = (
+                            db.query(func.avg(UnknownFace.quality))
+                            .filter(
+                                UnknownFace.cluster_id == cluster.id,
+                                UnknownFace.quality.isnot(None),
+                            )
+                            .scalar()
+                        )
+
                         for cand in candidates:
                             similarity = cand["similarity"]
 
@@ -486,24 +506,19 @@ class IdentityReviewWorker:
                                 stats["tier_low"] += 1
                                 continue
 
-                            # Compute gallery improvement for priority scoring
-                            unknown_pose = "frontal"  # Default
-                            try:
-                                member_faces = (
-                                    db.query(UnknownFace)
-                                    .filter(UnknownFace.cluster_id == cluster.id)
-                                    .limit(1)
-                                    .all()
-                                )
-                                if member_faces:
-                                    pass  # Pose metadata not stored on unknowns
-                            except Exception:
-                                pass
-
+                            # Gallery improvement projected across EVERY pose
+                            # the cluster actually contributes, not just one.
+                            # A cluster holding left + extreme-left + low-light
+                            # is worth more than any single member of it.
+                            member_quality = (
+                                float(cluster_quality)
+                                if cluster_quality is not None
+                                else (cand.get("quality", 0.5) or 0.5)
+                            )
                             coverage_delta = compute_coverage_delta(
                                 person_id=cand["person_id"],
-                                new_pose_bucket=unknown_pose,
-                                new_quality=cand.get("quality", 0.5) or 0.5,
+                                new_pose_buckets=cluster_poses,
+                                new_quality=member_quality,
                                 db=db,
                             )
 
@@ -511,8 +526,8 @@ class IdentityReviewWorker:
                             priority = compute_priority_score(
                                 similarity=similarity,
                                 gallery_improvement_value=coverage_delta.improvement_value,
-                                pose_bucket=unknown_pose,
-                                image_quality=cand.get("quality", 0.5) or 0.5,
+                                pose_bucket=rarest_pose,
+                                image_quality=member_quality,
                                 cluster_size=cluster.member_count or 1,
                             )
 
@@ -533,7 +548,8 @@ class IdentityReviewWorker:
                                 "tier": tier,
                                 "priority": priority,
                                 "coverage_delta": coverage_delta,
-                                "unknown_pose": unknown_pose,
+                                "unknown_pose": rarest_pose,
+                                "member_quality": member_quality,
                             })
 
                     except Exception as e:
@@ -565,12 +581,16 @@ class IdentityReviewWorker:
                 person_cluster_count: Dict[str, int] = defaultdict(int)
                 max_per_person = settings.IDENTITY_REVIEW_MAX_CLUSTERS_PER_PERSON
 
-                # Adaptive VLM budget: min(configured, actual medium-tier count)
+                # Adaptive VLM budget: min(configured, actual medium-tier count).
+                # Zero when no VLM is configured — ambiguous candidates then go
+                # to the human queue with no VLM score, which is honest. The
+                # alternative (calling the disabled stub) records a neutral 0.5
+                # as if a model had looked at the faces.
                 medium_count = stats["tier_medium"]
                 vlm_budget = min(
                     settings.IDENTITY_REVIEW_VLM_MAX_PER_CYCLE,
                     medium_count,
-                )
+                ) if vlm_enabled else 0
                 stats["vlm_budget"] = vlm_budget
                 vlm_calls_this_cycle = 0
 
@@ -600,7 +620,7 @@ class IdentityReviewWorker:
                     vlm_detected_pose = ""
                     vlm_quality_assessment = ""
 
-                    if gate == "call_vlm":
+                    if gate == "call_vlm" and vlm_enabled:
                         # Check VLM cache first (respects cluster_id + person_id + gallery_version)
                         if cluster.representative_snapshot and cand.get("source_image"):
                             cached_result = vlm_cache.get(
@@ -680,7 +700,7 @@ class IdentityReviewWorker:
                         embedding_similarity=similarity,
                         vlm_confidence=vlm_confidence,
                         vlm_explanation=vlm_explanation,
-                        image_quality_score=cand.get("quality", 0.5) or 0.5,
+                        image_quality_score=pair.get("member_quality", 0.5),
                         gallery_improvement_value=coverage_delta.improvement_value,
                         gallery_improvement_reason=(
                             coverage_delta.fills_bucket or ""

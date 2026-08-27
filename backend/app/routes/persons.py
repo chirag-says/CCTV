@@ -12,7 +12,7 @@ from typing import Optional, List
 from app.models.person import PersonCreate, PersonUpdate, PersonResponse, PersonWithHistory
 from app.services.person_service import PersonService
 from app.core.security import get_current_user
-from app.core.exceptions import ValidationException
+from app.core.exceptions import ValidationException, NotFoundException
 from app.vision.camera_worker import camera_manager
 
 router = APIRouter(prefix="/api/persons", tags=["Persons"])
@@ -20,7 +20,9 @@ router = APIRouter(prefix="/api/persons", tags=["Persons"])
 
 @router.get("")
 async def list_persons(
-    role: Optional[str] = Query(None, description="Filter by role"),
+    role: Optional[str] = Query(None, description="Filter by designation (assistant_professor, student, …)"),
+    person_type: Optional[str] = Query(None, description="Filter by class: faculty/student/staff/visitor"),
+    department: Optional[str] = Query(None, description="Filter by department (case-insensitive)"),
     is_active: bool = Query(True, description="Filter by active status"),
     search: Optional[str] = Query(None, description="Search by name"),
     limit: int = Query(50, ge=1, le=200),
@@ -30,6 +32,8 @@ async def list_persons(
     """List all known persons with optional filtering."""
     result = PersonService.list_persons(
         role=role,
+        person_type=person_type,
+        department=department,
         is_active=is_active,
         search=search,
         limit=limit,
@@ -270,6 +274,34 @@ async def upload_face_encoding(
             "left": face_location[3],
         },
     }
+
+
+@router.get("/{person_id}/journey")
+async def get_person_journey(
+    person_id: str,
+    date: Optional[str] = Query(
+        None, description="Campus-local day (YYYY-MM-DD). Defaults to today."
+    ),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Where this person was seen on a given day, in order.
+
+    Consecutive detections at the same physical camera are collapsed into one
+    "stop", so a person lingering at the gate appears once rather than five
+    times. Returns the stop sequence, the gaps between them, and day totals.
+
+    Times are first/last DETECTION, not gate crossings — a person out of
+    camera view is simply not observed.
+    """
+    from app.services.journey_service import JourneyService
+
+    try:
+        return JourneyService.get_journey(person_id=person_id, date=date)
+    except NotFoundException:
+        raise HTTPException(status_code=404, detail=f"Person {person_id} not found")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.get("/{person_id}/history")

@@ -12,30 +12,63 @@ import api, { API_BASE } from '@/lib/api';
 import PersonTimeline from '@/components/PersonTimeline';
 import { PlusIcon, EditIcon, ImageIcon, UserIcon, XIcon, ClockIcon } from '@/components/Icons';
 
+// Designations shown in the UI. These are what the seed scripts write and
+// what the college actually uses — the previous list (employee/visitor/vip/
+// banned) could not represent a single seeded teacher, so editing one
+// silently reclassified them.
+const ROLE_OPTIONS = [
+    { value: 'professor', label: 'Professor', type: 'faculty' },
+    { value: 'associate_professor', label: 'Associate Professor', type: 'faculty' },
+    { value: 'assistant_professor', label: 'Assistant Professor', type: 'faculty' },
+    { value: 'hod', label: 'Head of Department', type: 'faculty' },
+    { value: 'lecturer', label: 'Lecturer', type: 'faculty' },
+    { value: 'student', label: 'Student', type: 'student' },
+    { value: 'employee', label: 'Staff', type: 'staff' },
+    { value: 'visitor', label: 'Visitor', type: 'visitor' },
+];
+
+const PERSON_TYPES = [
+    { value: 'faculty', label: 'Faculty' },
+    { value: 'student', label: 'Student' },
+    { value: 'staff', label: 'Staff' },
+    { value: 'visitor', label: 'Visitor' },
+];
+
+const DEPARTMENTS = ['CSE', 'ECE', 'Mechanical', 'Civil'];
+
+const roleLabel = (role) =>
+    ROLE_OPTIONS.find((r) => r.value === role)?.label
+    || (role || '—').replace(/_/g, ' ');
+
 export default function PersonsPage() {
     const [persons, setPersons] = useState([]);
     const [total, setTotal] = useState(0);
     const [search, setSearch] = useState('');
-    const [roleFilter, setRoleFilter] = useState('');
+    const [typeFilter, setTypeFilter] = useState('');
+    const [deptFilter, setDeptFilter] = useState('');
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const [showModal, setShowModal] = useState(false);
     const [editPerson, setEditPerson] = useState(null);
-    const [formData, setFormData] = useState({ name: '', role: 'visitor', department: '', email: '', phone: '' });
+    const [formData, setFormData] = useState({
+        name: '', role: 'visitor', person_type: 'visitor',
+        department: '', email: '', phone: '',
+    });
     const [timelinePerson, setTimelinePerson] = useState(null);
     const router = useRouter();
 
     useEffect(() => {
         loadPersons();
-    }, [search, roleFilter]);
+    }, [search, typeFilter, deptFilter]);
 
     async function loadPersons() {
         setLoading(true);
         setError(null);
         try {
-            const params = {};
+            const params = { limit: 200 };
             if (search) params.search = search;
-            if (roleFilter) params.role = roleFilter;
+            if (typeFilter) params.person_type = typeFilter;
+            if (deptFilter) params.department = deptFilter;
             const result = await api.getPersons(params);
             setPersons(result.data || []);
             setTotal(result.total || 0);
@@ -50,7 +83,10 @@ export default function PersonsPage() {
 
     function openAddModal() {
         setEditPerson(null);
-        setFormData({ name: '', role: 'visitor', department: '', email: '', phone: '' });
+        setFormData({
+            name: '', role: 'visitor', person_type: 'visitor',
+            department: '', email: '', phone: '',
+        });
         setShowModal(true);
     }
 
@@ -59,11 +95,25 @@ export default function PersonsPage() {
         setFormData({
             name: person.name,
             role: person.role,
+            person_type: person.person_type || 'visitor',
             department: person.department || '',
             email: person.email || '',
             phone: person.phone || '',
         });
         setShowModal(true);
+    }
+
+    /**
+     * Picking a designation moves person_type with it, so an admin cannot
+     * create an "Assistant Professor" who is classified as a visitor and is
+     * then invisible to attendance. It stays editable underneath for the
+     * cases that don't map cleanly.
+     */
+    function handleRoleChange(role) {
+        const inferred = ROLE_OPTIONS.find((r) => r.value === role)?.type;
+        setFormData((f) => ({
+            ...f, role, person_type: inferred || f.person_type,
+        }));
     }
 
     async function handleSave() {
@@ -80,12 +130,12 @@ export default function PersonsPage() {
         }
     }
 
-    const getRoleBadgeClass = (role) => {
-        switch (role) {
-            case 'employee': return 'active';
-            case 'vip': return 'detection';
+    const getTypeBadgeClass = (personType) => {
+        switch (personType) {
+            case 'faculty': return 'active';
+            case 'student': return 'detection';
+            case 'staff': return 'enrolled';
             case 'visitor': return 'pending';
-            case 'banned': return 'exit';
             default: return 'pending';
         }
     };
@@ -111,16 +161,27 @@ export default function PersonsPage() {
                     />
                     <select
                         className="input"
-                        value={roleFilter}
-                        onChange={(e) => setRoleFilter(e.target.value)}
-                        style={{ maxWidth: '160px', marginBottom: 0 }}
-                        id="filter-role"
+                        value={typeFilter}
+                        onChange={(e) => setTypeFilter(e.target.value)}
+                        style={{ maxWidth: '150px', marginBottom: 0 }}
+                        id="filter-person-type"
                     >
-                        <option value="">All Roles</option>
-                        <option value="employee">Employee</option>
-                        <option value="visitor">Visitor</option>
-                        <option value="vip">VIP</option>
-                        <option value="banned">Banned</option>
+                        <option value="">All Types</option>
+                        {PERSON_TYPES.map((t) => (
+                            <option key={t.value} value={t.value}>{t.label}</option>
+                        ))}
+                    </select>
+                    <select
+                        className="input"
+                        value={deptFilter}
+                        onChange={(e) => setDeptFilter(e.target.value)}
+                        style={{ maxWidth: '160px', marginBottom: 0 }}
+                        id="filter-department"
+                    >
+                        <option value="">All Departments</option>
+                        {DEPARTMENTS.map((d) => (
+                            <option key={d} value={d}>{d}</option>
+                        ))}
                     </select>
                     <button className="btn btn-primary ml-auto" onClick={openAddModal} id="add-person-btn">
                         <PlusIcon size={16} /> Add Person
@@ -148,11 +209,11 @@ export default function PersonsPage() {
                         <div className="empty-state-icon"><UserIcon size={32} /></div>
                         <div className="empty-state-title">No persons found</div>
                         <div className="empty-state-text">
-                            {search || roleFilter
+                            {search || typeFilter || deptFilter
                                 ? 'No persons match your current filters. Try adjusting your search.'
-                                : 'Add a person to start tracking individuals.'}
+                                : 'Add a person to start recognising individuals.'}
                         </div>
-                        {!search && !roleFilter && (
+                        {!search && !typeFilter && !deptFilter && (
                             <button className="btn btn-primary" onClick={openAddModal} style={{ marginTop: '16px' }}>
                                 <PlusIcon size={16} /> Add Person
                             </button>
@@ -164,7 +225,8 @@ export default function PersonsPage() {
                             <thead>
                                 <tr>
                                     <th>Person</th>
-                                    <th>Role</th>
+                                    <th>Type</th>
+                                    <th>Designation</th>
                                     <th>Department</th>
                                     <th>Encodings</th>
                                     <th>Status</th>
@@ -200,9 +262,12 @@ export default function PersonsPage() {
                                             </div>
                                         </td>
                                         <td>
-                                            <span className={`badge ${getRoleBadgeClass(person.role)}`}>
-                                                {person.role}
+                                            <span className={`badge ${getTypeBadgeClass(person.person_type)}`}>
+                                                {person.person_type || 'visitor'}
                                             </span>
+                                        </td>
+                                        <td style={{ color: 'var(--text-secondary)' }}>
+                                            {roleLabel(person.role)}
                                         </td>
                                         <td>{person.department || '—'}</td>
                                         <td>
@@ -268,29 +333,52 @@ export default function PersonsPage() {
                         </div>
 
                         <div className="input-group">
-                            <label className="input-label">Role</label>
+                            <label className="input-label">Designation</label>
                             <select
                                 className="input"
                                 value={formData.role}
-                                onChange={(e) => setFormData({ ...formData, role: e.target.value })}
+                                onChange={(e) => handleRoleChange(e.target.value)}
                                 id="person-role"
                             >
-                                <option value="visitor">Visitor</option>
-                                <option value="employee">Employee</option>
-                                <option value="vip">VIP</option>
-                                <option value="banned">Banned</option>
+                                {ROLE_OPTIONS.map((r) => (
+                                    <option key={r.value} value={r.value}>{r.label}</option>
+                                ))}
                             </select>
+                        </div>
+
+                        <div className="input-group">
+                            <label className="input-label">Type</label>
+                            <select
+                                className="input"
+                                value={formData.person_type}
+                                onChange={(e) => setFormData({ ...formData, person_type: e.target.value })}
+                                id="person-type"
+                            >
+                                {PERSON_TYPES.map((t) => (
+                                    <option key={t.value} value={t.value}>{t.label}</option>
+                                ))}
+                            </select>
+                            <div style={{
+                                fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '4px',
+                            }}>
+                                Only people marked <strong>Faculty</strong> appear in attendance
+                                and campus presence.
+                            </div>
                         </div>
 
                         <div className="input-group">
                             <label className="input-label">Department</label>
                             <input
                                 className="input"
+                                list="department-options"
                                 value={formData.department}
                                 onChange={(e) => setFormData({ ...formData, department: e.target.value })}
-                                placeholder="e.g., Engineering"
+                                placeholder="e.g., CSE"
                                 id="person-department"
                             />
+                            <datalist id="department-options">
+                                {DEPARTMENTS.map((d) => <option key={d} value={d} />)}
+                            </datalist>
                         </div>
 
                         <div className="input-group">

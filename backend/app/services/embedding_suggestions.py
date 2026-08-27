@@ -160,6 +160,7 @@ class EmbeddingSuggestionService:
         blur_score: float = 0.0,
         lighting: Optional[str] = None,
         appearance_tags: Optional[List[str]] = None,
+        db: Optional[Session] = None,
     ) -> SuggestionResult:
         """
         Evaluate whether a new encoding adds diversity to a person's profile.
@@ -168,8 +169,18 @@ class EmbeddingSuggestionService:
                   Sharpness Check → Appearance Check
 
         Only reaches the DB if it passes all diversity checks.
+
+        Pass `db` to evaluate against an in-progress transaction. The Gallery
+        Optimizer needs this: it evaluates cluster members one at a time and
+        flushes each accepted embedding before evaluating the next, so member
+        #4 is checked against a gallery that already contains members #1-#3.
+        Without it, six near-identical crops would all pass the duplicate
+        filter independently.
         """
-        db: Session = SessionLocal()
+        close_db = False
+        if db is None:
+            db = SessionLocal()
+            close_db = True
         try:
             new_bucket = classify_pose_bucket(yaw)
             new_tags = appearance_tags or detect_appearance_tags(lighting=lighting)
@@ -320,7 +331,8 @@ class EmbeddingSuggestionService:
             )
 
         finally:
-            db.close()
+            if close_db:
+                db.close()
 
     @staticmethod
     def create_suggestion(

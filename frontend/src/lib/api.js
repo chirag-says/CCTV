@@ -130,6 +130,11 @@ class ApiClient {
     });
   }
 
+  async getPersonJourney(id, date = null) {
+    const q = date ? `?date=${date}` : '';
+    return this.request(`/api/persons/${id}/journey${q}`);
+  }
+
   async getPersonHistory(id, params = {}) {
     const query = new URLSearchParams(params).toString();
     return this.request(`/api/persons/${id}/history${query ? `?${query}` : ''}`);
@@ -226,6 +231,25 @@ class ApiClient {
     return this.request(`/api/events${query ? `?${query}` : ''}`);
   }
 
+  // ── Incidents ─────────────────────────────────────────────
+  async getIncidents(params = {}) {
+    const query = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== null && v !== undefined && v !== '')
+    ).toString();
+    return this.request(`/api/incidents${query ? `?${query}` : ''}`);
+  }
+
+  async getIncident(eventId) {
+    return this.request(`/api/incidents/${eventId}`);
+  }
+
+  async setIncidentStatus(eventId, status) {
+    return this.request(`/api/incidents/${eventId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ status }),
+    });
+  }
+
   // ── Unknown Faces ─────────────────────────────────────────
   async getUnknownFaces(params = {}) {
     const query = new URLSearchParams(params).toString();
@@ -259,6 +283,11 @@ class ApiClient {
     return this.request(`/api/analytics/peak-times?days=${days}`);
   }
 
+  async getDailySummary(date = null) {
+    const q = date ? `?date=${date}` : '';
+    return this.request(`/api/analytics/daily-summary${q}`);
+  }
+
   async getOccupancy() {
     return this.request('/api/analytics/occupancy');
   }
@@ -273,6 +302,78 @@ class ApiClient {
     if (date) params.date = date;
     const query = new URLSearchParams(params).toString();
     return this.request(`/api/analytics/reports?${query}`);
+  }
+
+  // ── Faculty Attendance ────────────────────────────────────
+  async getAttendanceSummary(date = null) {
+    const q = date ? `?date=${date}` : '';
+    return this.request(`/api/attendance/summary${q}`);
+  }
+
+  async getAttendanceDay(params = {}) {
+    const query = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== null && v !== undefined && v !== '')
+    ).toString();
+    return this.request(`/api/attendance/day${query ? `?${query}` : ''}`);
+  }
+
+  async getOnCampus(params = {}) {
+    const query = new URLSearchParams(
+      Object.entries(params).filter(([, v]) => v !== null && v !== undefined && v !== '')
+    ).toString();
+    return this.request(`/api/attendance/on-campus${query ? `?${query}` : ''}`);
+  }
+
+  async getPersonAttendance(personId, from = null, to = null) {
+    const params = new URLSearchParams();
+    if (from) params.set('from', from);
+    if (to) params.set('to', to);
+    const q = params.toString();
+    return this.request(`/api/attendance/person/${personId}${q ? `?${q}` : ''}`);
+  }
+
+  /**
+   * Download an attendance export.
+   *
+   * Uses fetch + blob rather than a plain <a href> because the endpoint
+   * requires an Authorization header, which a link cannot send. The filename
+   * comes from Content-Disposition so the server stays the single source of
+   * truth for naming. Mirrors downloadExport() on the analytics page.
+   */
+  async downloadAttendanceExport({ date, format = 'csv', department = null, status = null } = {}) {
+    const params = new URLSearchParams({ format });
+    if (date) params.set('date', date);
+    if (department) params.set('department', department);
+    if (status) params.set('status', status);
+
+    const token = this.getToken();
+    const resp = await fetch(`${this.baseUrl}/api/attendance/export?${params}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!resp.ok) {
+      let detail = `Export failed (${resp.status})`;
+      try {
+        const body = await resp.json();
+        if (body?.detail) detail = body.detail;
+      } catch { /* non-JSON error body */ }
+      throw new Error(detail);
+    }
+
+    const disposition = resp.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?([^"]+)"?/);
+    const filename = match ? match[1] : `attendance.${format}`;
+
+    const blob = await resp.blob();
+    if (blob.size === 0) throw new Error('No records matched — nothing to export');
+
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(a.href);
+    return filename;
   }
 
   // ── WebSocket ─────────────────────────────────────────────
@@ -451,8 +552,22 @@ class ApiClient {
     return this.request(`/api/identity-review/candidates/${id}`);
   }
 
-  async approveCandidate(id) {
-    return this.request(`/api/identity-review/candidates/${id}/approve`, { method: 'POST' });
+  // Dry-run an approval: which cluster members would actually reach the
+  // gallery, which would not and why, and the measured coverage change.
+  // Writes nothing. Pass selectedFaceIds to see the effect of excluding a
+  // member; omit it for the default selection (everything but the outliers).
+  async previewCandidate(id, selectedFaceIds = null) {
+    return this.request(`/api/identity-review/candidates/${id}/preview`, {
+      method: 'POST',
+      body: JSON.stringify({ selected_face_ids: selectedFaceIds }),
+    });
+  }
+
+  async approveCandidate(id, selectedFaceIds = null) {
+    return this.request(`/api/identity-review/candidates/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ selected_face_ids: selectedFaceIds }),
+    });
   }
 
   async rejectCandidate(id) {

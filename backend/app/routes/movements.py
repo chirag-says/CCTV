@@ -78,21 +78,30 @@ async def get_person_timeline(
     person_id: str,
     days: int = Query(7, ge=1, le=90, description="Days to look back"),
     limit: int = Query(100, ge=1, le=500),
+    date: Optional[str] = Query(
+        None, description="Single campus-local day (YYYY-MM-DD). Overrides `days`."
+    ),
     current_user: dict = Depends(get_current_user),
 ):
     """
     Get chronological movement timeline for a specific person.
 
     Returns a list of all detection events for the person,
-    sorted by most recent first.
+    sorted by most recent first. Each row carries the resolved
+    `camera_name` and `camera_location`, not just the camera UUID.
     """
-    timeline = MovementService.get_person_timeline(
-        person_id=person_id,
-        days=days,
-        limit=limit,
-    )
+    try:
+        timeline = MovementService.get_person_timeline(
+            person_id=person_id,
+            days=days,
+            limit=limit,
+            date=date,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     return {
         "person_id": person_id,
+        "date": date,
         "timeline": timeline,
         "count": len(timeline),
     }

@@ -7,6 +7,7 @@
  */
 
 import { useState, useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import AppShell from '@/components/AppShell';
 import api from '@/lib/api';
 import {
@@ -52,6 +53,7 @@ export default function SecurityAlertsPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
     const wsRef = useRef(null);
+    const router = useRouter();
 
     useEffect(() => {
         loadAlerts();
@@ -269,11 +271,29 @@ export default function SecurityAlertsPage() {
                         const subtype = alert.subtype || alert.metadata?.subtype || '';
                         const meta = alert.metadata || {};
 
+                        // Severity now comes from the backend where one exists,
+                        // so the incident page and this wall cannot disagree.
+                        // The local map remains the fallback for live WebSocket
+                        // events, which arrive before any API round trip.
+                        const severity = alert.severity || config.severity;
+
                         return (
                             <div
                                 key={alert.id || index}
-                                className={`security-alert-card severity-${config.severity} animate-in`}
-                                style={{ animationDelay: `${index * 30}ms` }}
+                                className={`security-alert-card severity-${severity} animate-in`}
+                                onClick={() => alert.id && router.push(`/incidents/${alert.id}`)}
+                                role={alert.id ? 'button' : undefined}
+                                tabIndex={alert.id ? 0 : undefined}
+                                onKeyDown={(e) => {
+                                    if (alert.id && (e.key === 'Enter' || e.key === ' ')) {
+                                        e.preventDefault();
+                                        router.push(`/incidents/${alert.id}`);
+                                    }
+                                }}
+                                style={{
+                                    animationDelay: `${index * 30}ms`,
+                                    cursor: alert.id ? 'pointer' : 'default',
+                                }}
                             >
                                 <div className="alert-header">
                                     <div className="alert-icon">

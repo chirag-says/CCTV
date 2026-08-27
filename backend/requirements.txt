@@ -35,6 +35,11 @@ sqlalchemy>=2.0.0
 psycopg2-binary>=2.9.9
 python-dotenv>=1.0.1
 
+# Timezone database for zoneinfo (CAMPUS_TIMEZONE).
+# REQUIRED on Windows, which ships no system IANA tz database — without it
+# ZoneInfo("Asia/Kolkata") raises and every attendance query fails.
+tzdata>=2024.1
+
 # Auth & Security
 python-jose[cryptography]>=3.3.0
 passlib[bcrypt]>=1.7.4

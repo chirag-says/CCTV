@@ -87,9 +87,51 @@ class Settings(BaseSettings):
 
     # ByteTrack Multi-Object Tracking
     BYTETRACK_TRACK_THRESH: float = 0.5  # High-confidence detection threshold
-    BYTETRACK_TRACK_BUFFER: int = 90  # Frames to keep lost tracks alive (~3s at 30fps, prevents track fragmentation)
+    # DETECTION-frames, not raw frames: _frame_id increments once per
+    # update() call, and update() runs once per FRAME_SKIP raw frames. At
+    # FRAME_SKIP=3 / 30fps this buffer is ~9 real seconds, not the ~3s the
+    # old comment claimed.
+    BYTETRACK_TRACK_BUFFER: int = 90  # Detection-frames to keep lost tracks alive
     BYTETRACK_MATCH_THRESH: float = 0.8  # IoU threshold for matching
-    BYTETRACK_TRACKED_GRACE: int = 2  # Detection-frames before tracked→lost (increase to reduce fragmentation)
+    # Detection-frames a track may go unmatched before tracked->lost.
+    # Raised 2 -> 4: at FRAME_SKIP=3 a value of 2 is only ~0.2 real seconds,
+    # so an ordinary head turn dropped the track out of the active pool.
+    # Kept deliberately modest -- see BYTETRACK_COAST_SEC below, which is what
+    # actually keeps the box on screen. A large grace value also extends how
+    # long a motion-PREDICTED box keeps calling PersonTracker.on_detection,
+    # i.e. it inflates presence on evidence that no longer exists.
+    BYTETRACK_TRACKED_GRACE: int = 4
+
+    # ── Coasting (Step 0) ────────────────────────────────────────
+    # A track ByteTrack has moved to `lost` is still held for re-association
+    # for BYTETRACK_TRACK_BUFFER detection-frames, but update() does not
+    # return it, so the pipeline stopped DRAWING it. That is why a box
+    # vanishes the moment someone turns their head, even though the identity
+    # was never actually lost.
+    #
+    # Coasting draws those tracks for a short window, with their retained
+    # identity, at their last OBSERVED position. It is presentation only:
+    # no recognition runs, no presence/entry event is emitted, and the
+    # tracker's association logic is untouched.
+    # -- Step 1: what ByteTrack actually tracks -------------------
+    # "person": YOLO person boxes drive the tracker. A track is a PERSON, and
+    #           a face is an attribute that person sometimes has. Losing the
+    #           face costs the embedding for that frame, not the track.
+    # "face":   pre-Step-1 behaviour -- SCRFD face boxes drive the tracker, so
+    #           a person who turns away ceases to exist. Kept as an instant
+    #           rollback and as the automatic fallback when YOLO is unavailable.
+    #
+    # Recognition still runs on FACES in both modes. This setting changes what
+    # owns EXISTENCE, not what owns IDENTITY.
+    TRACKING_MODE: str = "person"
+    PERSON_DET_CONF: float = 0.35   # YOLO person confidence floor for tracking
+    # A face is bound to a person track when its centre falls inside the person
+    # box. Person boxes are looser than face boxes, so a small pad tolerates
+    # the usual jitter without letting a neighbour's face bind to the wrong body.
+    PERSON_FACE_BIND_PAD: int = 12
+
+    BYTETRACK_COAST_ENABLED: bool = True
+    BYTETRACK_COAST_SEC: float = 2.0  # Wall-clock seconds to keep drawing a lost track
 
     # Recognition Cache (time-based, FPS-independent)
     # Once a track is confidently recognized, skip ArcFace until re-check
@@ -325,6 +367,94 @@ class Settings(BaseSettings):
     GALLERY_OPT_MIN_DET_SCORE: float = 0.45       # Skip low-confidence detections
     GALLERY_OPT_OUTLIER_FACTOR: float = 1.5       # Cluster outlier threshold (× median distance)
     GALLERY_OPT_VLM_CACHE_TTL_HOURS: int = 168    # Cache VLM results for 7 days
+
+    # ── Campus / College Features ─────────────────────────────
+    # Everything in this system is stored in UTC. A college day is a
+    # LOCAL concept: "late after 09:15" and "today" mean nothing in UTC
+    # (UTC midnight is 05:30 IST). Storage stays UTC -- this timezone is
+    # applied only when computing day boundaries and when formatting.
+    # Requires the `tzdata` package on Windows (no system tz database).
+    CAMPUS_TIMEZONE: str = "Asia/Kolkata"
+    ATTENDANCE_DAY_START: str = "06:00"   # Campus-local. Events before this
+    ATTENDANCE_DAY_END: str = "21:00"     # or after this are outside the day.
+    ATTENDANCE_LATE_AFTER: str = "09:15"  # First detection after this → late
+
+    # ── Attendance rule ───────────────────────────────────────
+    # A single detection MUST NOT equal attendance. ENTRY_THRESHOLD_SECONDS
+    # is 3, so three seconds of visibility creates an entry event, and a
+    # recogniser false-accept produces a real entry row for the wrong person
+    # with no downstream correction.
+    #
+    # The rule requires TWO independent confirmations:
+    #
+    #   present = sightings >= MIN_SIGHTINGS
+    #             AND (span >= MIN_SPAN_MIN OR cameras >= MIN_CAMERAS)
+    #
+    # The AND is load-bearing. Two sightings alone are not enough -- they
+    # must be separated in time or corroborated by a second camera, so two
+    # false accepts a minute apart on one camera correctly yield 'absent'.
+    #
+    # TUNING: on a single-camera deployment the MIN_CAMERAS branch can never
+    # fire, so a teacher seen only on arrival is marked absent. Lower
+    # MIN_SIGHTINGS to 1 there. The attendance table always shows the
+    # sighting and camera counts so a shortfall is visible, never silent.
+    # DISABLED BY DEFAULT (0.0 = accept every recorded confidence).
+    #
+    # Same reasoning as ENABLE_ADAPTIVE_THRESHOLDS above: an uncalibrated
+    # threshold is worse than no threshold. Measured on this deployment:
+    #   - exit events carry NO confidence at all (tracker.check_exits builds
+    #     the event dict without the key) -- 6238/6238 are 0.0
+    #   - entry events only carry one when the confirming frame came from the
+    #     recognition path; the ByteTrack cache-hit and small-face paths pass
+    #     0.0 -- 6361/6400 are 0.0
+    #   - where a confidence IS recorded it clusters around 0.39-0.70, so a
+    #     0.55 gate discarded 5 of 7 genuine entries for a real person
+    #
+    # A value of 0 means the two-confirmation rule in _decide() carries the
+    # decision, which it is designed to do. Raise this only after measuring
+    # the confidence distribution for ENROLLED FACULTY specifically:
+    #   SELECT width_bucket(confidence,0,1,10), count(*) FROM detection_events
+    #    WHERE event_type='entry' AND confidence > 0 GROUP BY 1 ORDER BY 1;
+    # Events with confidence <= 0 are never filtered -- unrecorded is not the
+    # same as low, and discarding unrecorded evidence marks everyone absent.
+    ATTENDANCE_MIN_CONFIDENCE: float = 0.0
+    ATTENDANCE_MIN_SIGHTINGS: int = 2        # Independent detections required
+    ATTENDANCE_MIN_SPAN_MIN: int = 5         # ...spanning at least N minutes
+    ATTENDANCE_MIN_CAMERAS: int = 2          # ...or seen on at least N cameras
+    FACULTY_PERSON_TYPE: str = "faculty"     # persons.person_type value
+
+    # ── Presence ("Currently on Campus") ──────────────────────
+    # The live tracker only knows "visible on a camera in the last 30s", so
+    # a teacher in a classroom is not present by that definition and all of
+    # its state is lost on restart. Presence is therefore derived from
+    # committed events, with the live tracker layered on top as a badge.
+    #
+    #   LIVE          in the live tracker right now
+    #   ON_CAMPUS     last seen < PRESENCE_CONFIDENT_MIN     → counted
+    #   SEEN_EARLIER  seen today, older than that, no exit   → not counted
+    #   DEPARTED      gate exit, or past ATTENDANCE_DAY_END
+    #
+    # Only LIVE + ON_CAMPUS feed the headline count; SEEN_EARLIER is shown
+    # as a separate "+ N seen earlier today" line so neither number has to
+    # be defended. The last-seen age is always rendered.
+    PRESENCE_CONFIDENT_MIN: int = 20   # Minutes: assert "on campus" confidently
+    GATE_DEPART_MIN: int = 10          # Minutes since a gate-camera sighting
+                                        # before departure may be asserted.
+                                        # Gate cameras are flagged in the
+                                        # existing cameras.config JSON:
+                                        #   {"is_gate": true, "zone": "Main Gate"}
+
+    # ── Person Journey ────────────────────────────────────────
+    # Lingering at one camera produces entry → exit → cooldown → entry → exit,
+    # so raw rows would render "Main Gate" five times. Consecutive events on
+    # the same camera collapse into one stop; a gap longer than this splits
+    # them into two stops (a genuine revisit).
+    JOURNEY_STOP_GAP_SEC: int = 300
+
+    # ── Incidents ─────────────────────────────────────────────
+    ALERT_SNAPSHOTS_ENABLED: bool = True    # Capture a frame with each alert
+    INCIDENT_EVIDENCE_WINDOW_SEC: int = 120  # ± window for correlating unknown
+                                              # faces seen on the same camera
 
     @property
     def cors_origins_list(self) -> List[str]:

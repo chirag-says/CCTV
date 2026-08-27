@@ -113,39 +113,86 @@ class AnalyticsService:
             db.close()
 
     @staticmethod
+    def get_hourly_distribution(
+        event_type: str = "entry",
+        days: int = 7,
+        start_utc: Optional[datetime] = None,
+        end_utc: Optional[datetime] = None,
+    ) -> dict:
+        """
+        Bucket events by CAMPUS-LOCAL hour of day.
+
+        Local hour is the only bucketing that means anything to a reader: an
+        08:42 arrival belongs in the 08:00 bucket, not in whatever bucket the
+        UTC offset lands it in.
+
+        The explicit to_campus_local() call is deliberate hardening, not a bug
+        fix. It currently changes nothing, because this deployment's Postgres
+        runs with `TimeZone = Asia/Calcutta` and so psycopg2 already returns
+        TIMESTAMPTZ values converted to +05:30 — reading `.hour` directly
+        happens to give the local hour. That is a property of the SERVER
+        CONFIGURATION, not of the code: point this at a database with the far
+        more common `TimeZone = UTC` and the same `.hour` silently reports the
+        morning rush as happening at 3am. Converting explicitly makes the
+        result depend on CAMPUS_TIMEZONE rather than on a DBA's setting.
+
+        Args:
+            event_type: entry / exit / unknown / vehicle_entry / …
+            days:       lookback window, used when explicit bounds are absent
+            start_utc:  explicit window start (overrides `days`)
+            end_utc:    explicit window end
+
+        Returns:
+            {"hourly": {"0".."23": count}, "peak_hour": int|None, "total": int}
+        """
+        from app.utils.time_utils import to_campus_local
+
+        db: Session = SessionLocal()
+        try:
+            q = db.query(DetectionEvent.created_at).filter(
+                DetectionEvent.event_type == event_type
+            )
+            if start_utc is not None:
+                q = q.filter(DetectionEvent.created_at >= start_utc)
+            if end_utc is not None:
+                q = q.filter(DetectionEvent.created_at < end_utc)
+            if start_utc is None and end_utc is None:
+                q = q.filter(
+                    DetectionEvent.created_at
+                    >= datetime.now(timezone.utc) - timedelta(days=days)
+                )
+
+            hourly = {str(h): 0 for h in range(24)}
+            for (created_at,) in q.all():
+                local = to_campus_local(created_at)
+                if local is not None:
+                    hourly[str(local.hour)] += 1
+
+            total = sum(hourly.values())
+            peak = int(max(hourly, key=hourly.get)) if total else None
+            return {"hourly": hourly, "peak_hour": peak, "total": total}
+        finally:
+            db.close()
+
+    @staticmethod
     def get_peak_times(
         days: int = 7,
         granularity: str = "hour",
     ) -> dict:
-        """Analyze peak entry/exit times."""
-        db: Session = SessionLocal()
-        start_date = datetime.now(timezone.utc) - timedelta(days=days)
-        try:
-            events = (
-                db.query(DetectionEvent.created_at)
-                .filter(
-                    DetectionEvent.event_type == "entry",
-                    DetectionEvent.created_at >= start_date,
-                )
-                .all()
-            )
+        """
+        Analyze peak entry times, bucketed by campus-local hour.
 
-            # Build hourly distribution
-            hourly = {str(h): 0 for h in range(24)}
-            for (created_at,) in events:
-                if created_at:
-                    hourly[str(created_at.hour)] += 1
-
-            peak_entry_hour = max(hourly, key=hourly.get) if any(hourly.values()) else "9"
-
-            return {
-                "peak_entry_hour": int(peak_entry_hour),
-                "hourly_distribution": hourly,
-                "period_days": days,
-                "total_entries": sum(hourly.values()),
-            }
-        finally:
-            db.close()
+        Kept for the existing dashboard and analytics pages; the real work is
+        in get_hourly_distribution().
+        """
+        dist = AnalyticsService.get_hourly_distribution(event_type="entry", days=days)
+        return {
+            # 9 is the historical fallback for "no data at all".
+            "peak_entry_hour": dist["peak_hour"] if dist["peak_hour"] is not None else 9,
+            "hourly_distribution": dist["hourly"],
+            "period_days": days,
+            "total_entries": dist["total"],
+        }
 
     @staticmethod
     def get_occupancy_data() -> dict:

@@ -290,79 +290,62 @@ class IdentityReviewService:
     # ── Review Actions ───────────────────────────────────────────
 
     @staticmethod
+    def preview_candidate(
+        candidate_id: str,
+        selected_face_ids: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Dry-run an approval: which cluster members would reach the gallery,
+        which would not and why, and the resulting coverage.
+
+        Changes nothing. Runs the identical code path as approve_candidate,
+        then rolls back — so the numbers shown to the reviewer are measured,
+        not estimated.
+        """
+        from app.services.gallery_selection import evaluate_candidate_members
+
+        report = evaluate_candidate_members(
+            candidate_id=candidate_id,
+            selected_face_ids=selected_face_ids,
+            apply=False,
+        )
+        return report.to_dict()
+
+    @staticmethod
     def approve_candidate(
         candidate_id: str,
         actor_id: str,
+        selected_face_ids: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         """
-        Approve a candidate — creates a GalleryUpdate in pending state.
-        Does NOT immediately modify the face gallery.
+        Approve a candidate — adds the SELECTED cluster members' individual
+        embeddings to the person's gallery, each one gated for quality,
+        duplication, pose coverage and capacity.
+
+        The human approves the identity; the gates decide which of that
+        identity's images the gallery actually needs. A member can therefore
+        be approved as this person and still not be added — reported back as
+        a rejection reason rather than silently dropped.
+
+        `selected_face_ids` defaults to every member except detected outliers.
         """
-        db = SessionLocal()
-        try:
-            candidate = (
-                db.query(IdentityReviewCandidate)
-                .filter(IdentityReviewCandidate.id == candidate_id)
-                .first()
-            )
-            if not candidate:
-                raise ValueError(f"Candidate {candidate_id} not found")
-            if candidate.status != "pending":
-                raise ValueError(f"Candidate already {candidate.status}")
+        from app.services.gallery_selection import evaluate_candidate_members
 
-            # Get cluster centroid encoding for gallery update
-            cluster = (
-                db.query(UnknownCluster)
-                .filter(UnknownCluster.id == candidate.cluster_id)
-                .first()
-            )
-
-            # Mark candidate as approved
-            candidate.status = "approved"
-            candidate.reviewed_by = actor_id
-            candidate.reviewed_at = datetime.now(timezone.utc)
-
-            # Create gallery update
-            gallery_update = GalleryUpdate(
-                id=str(uuid4()),
-                person_id=candidate.person_id,
-                candidate_id=candidate.id,
-                cluster_id=candidate.cluster_id,
-                encoding_data=cluster.embedding_centroid if cluster else None,
-                snapshot_url=cluster.representative_snapshot if cluster else None,
-                quality=candidate.image_quality_score,
-                action="append",
-                status="pending",
-            )
-            db.add(gallery_update)
-
-            # Log activity
-            activity = IdentityReviewActivity(
-                id=str(uuid4()),
-                candidate_id=candidate_id,
-                cluster_id=candidate.cluster_id,
-                action="approved",
-                actor=actor_id,
-                details={
-                    "person_id": candidate.person_id,
-                    "overall_score": candidate.overall_score,
-                },
-            )
-            db.add(activity)
-
-            db.commit()
-
-            return {
-                "status": "approved",
-                "gallery_update_id": gallery_update.id,
-                "message": f"Candidate approved. Gallery update pending.",
-            }
-
-        except Exception as e:
-            db.rollback()
-            raise
-        finally:
-            db.close()
+        report = evaluate_candidate_members(
+            candidate_id=candidate_id,
+            selected_face_ids=selected_face_ids,
+            apply=True,
+            actor_id=actor_id,
+        )
+        result = report.to_dict()
+        result["status"] = "approved"
+        result["message"] = (
+            f"Approved as {report.person_name}. "
+            f"{len(report.accepted)} embedding(s) added, "
+            f"{len(report.rejected)} not added. "
+            f"Coverage {report.coverage_before:.1f}% → {report.coverage_after:.1f}%."
+        )
+        return result
 
     @staticmethod
     def reject_candidate(candidate_id: str, actor_id: str) -> Dict[str, Any]:
@@ -495,7 +478,17 @@ class IdentityReviewService:
 
     @staticmethod
     def rollback_gallery_update(update_id: str) -> Dict[str, Any]:
-        """Rollback an applied gallery update."""
+        """
+        Roll back an applied gallery update.
+
+        Member-level updates record the face_encodings row they created, so
+        rollback removes that encoding and returns the source unknown face to
+        the pending pool. Legacy centroid-era rows carry no encoding_id; those
+        are marked rolled_back without deleting anything, since there is no
+        record of which encoding they produced.
+        """
+        from app.services.person_service import PersonService
+
         db = SessionLocal()
         try:
             update = (
@@ -508,11 +501,56 @@ class IdentityReviewService:
             if update.status != "applied":
                 raise ValueError(f"Can only rollback applied updates, current: {update.status}")
 
+            removed_encoding = False
+            if update.encoding_id:
+                enc = (
+                    db.query(FaceEncoding)
+                    .filter(FaceEncoding.id == update.encoding_id)
+                    .first()
+                )
+                if enc:
+                    db.delete(enc)
+                    removed_encoding = True
+
+            if update.source_face_id:
+                (
+                    db.query(UnknownFace)
+                    .filter(UnknownFace.id == update.source_face_id)
+                    .update({"status": "pending"}, synchronize_session=False)
+                )
+
             update.status = "rolled_back"
+
+            if removed_encoding:
+                PersonService._set_version(
+                    db, PersonService._get_or_create_version(db) + 1
+                )
+
+            db.add(IdentityReviewActivity(
+                id=str(uuid4()),
+                candidate_id=update.candidate_id,
+                cluster_id=update.cluster_id,
+                action="rolled_back",
+                details={
+                    "gallery_update_id": update.id,
+                    "person_id": update.person_id,
+                    "gallery_version": update.gallery_version,
+                    "encoding_id": update.encoding_id,
+                    "source_face_id": update.source_face_id,
+                    "encoding_removed": removed_encoding,
+                },
+            ))
             db.commit()
 
-            logger.info(f"Gallery update {update_id[:8]}… rolled back")
-            return {"status": "rolled_back"}
+            if removed_encoding:
+                from app.services.gallery_selection import _refresh_pipeline_encodings
+                _refresh_pipeline_encodings()
+
+            logger.info(
+                f"Gallery update {update_id[:8]}… rolled back "
+                f"(encoding_removed={removed_encoding})"
+            )
+            return {"status": "rolled_back", "encoding_removed": removed_encoding}
 
         except Exception as e:
             db.rollback()

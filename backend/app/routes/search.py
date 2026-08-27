@@ -7,6 +7,7 @@ from fastapi import APIRouter, Depends, Query
 from typing import Optional
 from sqlalchemy.orm import joinedload
 
+from app.config import settings
 from app.core.security import get_current_user
 from app.db.session import SessionLocal
 from app.db.models import Person, DetectionEvent, UnknownFace
@@ -40,17 +41,47 @@ async def global_search(
                 persons = (
                     db.query(Person)
                     .filter(Person.name.ilike(f"%{query}%"))
+                    .order_by(Person.name.asc())
                     .limit(limit)
                     .all()
                 )
+
+                # "Where is this person?" — presence is resolved once for the
+                # whole result set rather than per hit, because get_on_campus()
+                # aggregates a full campus-day. Faculty-only: nobody else has a
+                # presence model, and a miss here must never fail the search.
+                presence_by_id = {}
+                if any(p.person_type == settings.FACULTY_PERSON_TYPE for p in persons):
+                    try:
+                        from app.services.presence_service import PresenceService
+                        snapshot = PresenceService.get_on_campus()
+                        presence_by_id = {
+                            f["person_id"]: f for f in snapshot.get("faculty", [])
+                        }
+                    except Exception as e:
+                        logger.debug(f"Presence lookup for search skipped: {e}")
+
+                from app.services.attendance_service import format_designation
+
                 for p in persons:
+                    designation = format_designation(p.role) or "No role"
+                    subtitle = (
+                        f"{p.department} · {designation}" if p.department else designation
+                    )
+                    presence = presence_by_id.get(p.id)
                     results.append({
                         "type": "person",
                         "id": p.id,
                         "title": p.name,
-                        "subtitle": p.role or "No role",
+                        "subtitle": subtitle,
+                        # Lets the palette route straight to the person and
+                        # render a live location card for faculty.
+                        "person_type": p.person_type,
+                        "department": p.department,
+                        "role": p.role,
+                        "presence": presence,
                         "timestamp": p.created_at.isoformat() if p.created_at else None,
-                        "thumbnail_url": f"/snapshots/{p.id}_face.jpg" if p.id else None,
+                        "thumbnail_url": p.avatar_url,
                     })
             except Exception as e:
                 logger.warning(f"Person search failed: {e}")

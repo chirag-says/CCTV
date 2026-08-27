@@ -388,4 +388,13 @@ class TestDisabledReviewer:
 
         assert result.agreement == 0.5
         assert result.confidence == "low"
-        assert result.error is None
+
+    def test_disabled_is_marked_unusable(self):
+        """
+        The neutral 0.5 must never be mistaken for a verdict. `enabled=False`
+        tells the worker to skip the VLM path, and the error flag stops the
+        result being written into the VLM cache, where it would otherwise
+        stand in for a real Qwen answer once the VLM is switched on.
+        """
+        assert DisabledReviewer.enabled is False
+        assert DisabledReviewer().compare_faces("a.jpg", "b.jpg").error == "vlm_disabled"

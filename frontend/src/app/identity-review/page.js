@@ -88,6 +88,53 @@ function formatTimeAgo(isoStr) {
     return `${Math.floor(diff / 86400)}d ago`;
 }
 
+const POSE_LABELS = {
+    frontal: 'Frontal',
+    left: 'Left',
+    right: 'Right',
+    extreme_left: 'Extreme left',
+    extreme_right: 'Extreme right',
+};
+
+// Why a member the human approved as this person still did or did not enter
+// the gallery. Keep this exhaustive — an unexplained rejection is worse than
+// no rejection at all.
+const MEMBER_STATUS = {
+    accepted: { label: 'Added', color: 'var(--success)' },
+    redundant: { label: 'Redundant', color: 'var(--text-muted)' },
+    outlier_excluded: { label: 'Outlier', color: 'var(--warning)' },
+    deselected_by_reviewer: { label: 'Excluded', color: 'var(--text-muted)' },
+    low_quality: { label: 'Low quality', color: 'var(--danger)' },
+    no_pose_metadata: { label: 'No pose data', color: 'var(--text-muted)' },
+    no_embedding: { label: 'No embedding', color: 'var(--text-muted)' },
+    gallery_full: { label: 'Gallery full', color: 'var(--warning)' },
+    unevaluated: { label: 'Not evaluated', color: 'var(--text-muted)' },
+};
+
+function poseLabel(bucket) {
+    return POSE_LABELS[bucket] || 'Unknown pose';
+}
+
+function CoverageBar({ before, after }) {
+    const lo = Math.max(0, Math.min(100, before || 0));
+    const hi = Math.max(lo, Math.min(100, after || 0));
+    return (
+        <div style={{
+            position: 'relative', height: '8px', borderRadius: '4px',
+            background: 'var(--bg-tertiary)', overflow: 'hidden',
+        }}>
+            <div style={{
+                position: 'absolute', inset: 0, width: `${hi}%`,
+                background: 'rgba(16, 185, 129, 0.45)',
+            }} />
+            <div style={{
+                position: 'absolute', inset: 0, width: `${lo}%`,
+                background: 'var(--primary)',
+            }} />
+        </div>
+    );
+}
+
 function ScoreBadge({ score, label }) {
     const pct = Math.round((score || 0) * 100);
     const color = pct >= 70 ? 'var(--success)' : pct >= 40 ? 'var(--warning)' : 'var(--danger)';
@@ -173,10 +220,10 @@ export default function IdentityReviewPage() {
         }
     };
 
-    const handleAction = async (candidateId, action) => {
+    const handleAction = async (candidateId, action, selectedFaceIds = null) => {
         setActionLoading(candidateId);
         try {
-            if (action === 'approve') await api.approveCandidate(candidateId);
+            if (action === 'approve') await api.approveCandidate(candidateId, selectedFaceIds);
             else if (action === 'reject') await api.rejectCandidate(candidateId);
             else if (action === 'skip') await api.skipCandidate(candidateId);
             // Refresh
@@ -631,6 +678,39 @@ function ActivityTab({ activity }) {
 // ── Detail Modal ────────────────────────────────────────────────
 
 function DetailModal({ detail, loading, onClose, onAction, actionLoading }) {
+    // Which cluster members the reviewer wants applied, and the dry run of
+    // what approving that exact selection would do. The server seeds the
+    // default selection (everything but the outliers) in detail.selection.
+    const [selected, setSelected] = useState(() => new Set());
+    const [report, setReport] = useState(null);
+    const [previewing, setPreviewing] = useState(false);
+
+    useEffect(() => {
+        if (!detail || !detail.selection) { setReport(null); return; }
+        setReport(detail.selection);
+        setSelected(new Set(
+            (detail.selection.members || []).filter(m => m.selected).map(m => m.face_id)
+        ));
+    }, [detail && detail.id]);
+
+    const toggleMember = useCallback(async (faceId) => {
+        const next = new Set(selected);
+        if (next.has(faceId)) next.delete(faceId); else next.add(faceId);
+        setSelected(next);
+
+        if (!detail) return;
+        setPreviewing(true);
+        try {
+            // Re-run the same gate ladder for the new selection so the verdicts
+            // and the coverage figures always describe what Approve would do.
+            setReport(await api.previewCandidate(detail.id, [...next]));
+        } catch (e) {
+            console.error('Preview failed:', e);
+        } finally {
+            setPreviewing(false);
+        }
+    }, [detail, selected]);
+
     if (loading) {
         return (
             <div className="ir-modal-backdrop" onClick={onClose}>
@@ -649,6 +729,20 @@ function DetailModal({ detail, loading, onClose, onAction, actionLoading }) {
     const cluster = d.cluster || {};
     const person = d.person || {};
     const pct = Math.round((d.overall_score || 0) * 100);
+    const canEdit = d.status === 'pending';
+
+    // Fall back to the raw cluster list if the preview could not run, so the
+    // modal still shows the images even when the gate ladder errored.
+    // Without a report we know nothing about what would be added, so say so
+    // rather than implying every image is an accepted addition.
+    const members = (report && report.members) || (cluster.members || []).map(m => ({
+        face_id: m.id, snapshot_url: m.snapshot_url, occurrence: m.occurrence,
+        pose_bucket: m.pose_bucket, is_outlier: false, selected: true,
+        status: 'unevaluated', reason: '',
+    }));
+    const accepted = members.filter(m => m.status === 'accepted');
+    const notAdded = members.filter(
+        m => !['accepted', 'deselected_by_reviewer', 'unevaluated'].includes(m.status));
 
     return (
         <div className="ir-modal-backdrop" onClick={onClose}>
@@ -716,33 +810,100 @@ function DetailModal({ detail, loading, onClose, onAction, actionLoading }) {
                         </div>
                     </div>
 
-                    {/* CENTER: Cluster Snapshots */}
+                    {/* CENTER: Cluster members — selectable, outliers flagged */}
                     <div style={{ background: 'var(--bg-primary)', padding: '16px' }}>
-                        <h4 style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--warning)', marginBottom: '12px', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-                            Unknown Cluster ({cluster.member_count || 0} sightings)
-                        </h4>
+                        <div style={{ display: 'flex', alignItems: 'baseline', justifyContent: 'space-between', marginBottom: '4px' }}>
+                            <h4 style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--warning)', margin: 0, textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                Unknown Cluster ({report ? report.total_members : (cluster.member_count || 0)} images)
+                            </h4>
+                            {previewing && (
+                                <span style={{ fontSize: '0.625rem', color: 'var(--text-muted)' }}>updating…</span>
+                            )}
+                        </div>
 
-                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '6px', marginBottom: '12px' }}>
-                            {(cluster.members || []).slice(0, 12).map(m => (
-                                <div key={m.id} style={{
-                                    aspectRatio: '1', borderRadius: '8px', overflow: 'hidden',
-                                    background: '#000', border: '1px solid var(--border-color)',
-                                    position: 'relative',
-                                }}>
-                                    {m.snapshot_url ? (
-                                        <img src={snapshotUrl(m.snapshot_url)} alt="Unknown" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-                                    ) : (
-                                        <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.625rem' }}>?</div>
-                                    )}
-                                    <div style={{
-                                        position: 'absolute', bottom: '2px', right: '2px',
-                                        background: 'rgba(0,0,0,0.7)', borderRadius: '3px',
-                                        padding: '1px 4px', fontSize: '0.5rem', color: 'white',
-                                    }}>
-                                        ×{m.occurrence}
-                                    </div>
-                                </div>
-                            ))}
+                        {report && (
+                            <div style={{ fontSize: '0.688rem', color: 'var(--text-muted)', marginBottom: '10px' }}>
+                                {report.total_members - report.outlier_count} consistent
+                                {report.outlier_count > 0 && (
+                                    <span style={{ color: 'var(--warning)' }}>
+                                        {' · '}{report.outlier_count} possible outlier{report.outlier_count > 1 ? 's' : ''} ⚠️
+                                    </span>
+                                )}
+                            </div>
+                        )}
+
+                        {report && report.outlier_count > 0 && (
+                            <div style={{
+                                padding: '8px 10px', borderRadius: '8px', marginBottom: '10px',
+                                background: 'rgba(245, 158, 11, 0.10)',
+                                border: '1px solid rgba(245, 158, 11, 0.28)',
+                                fontSize: '0.688rem', color: 'var(--warning)', lineHeight: 1.45,
+                            }}>
+                                {report.outlier_count === 1
+                                    ? '1 image appears inconsistent with this cluster and is excluded by default.'
+                                    : `${report.outlier_count} images appear inconsistent with this cluster and are excluded by default.`}
+                                {' '}Tick to include anyway.
+                            </div>
+                        )}
+
+                        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '8px', marginBottom: '12px' }}>
+                            {members.map(m => {
+                                const on = selected.has(m.face_id);
+                                const info = MEMBER_STATUS[m.status] || { label: m.status, color: 'var(--text-muted)' };
+                                return (
+                                    <button
+                                        key={m.face_id}
+                                        type="button"
+                                        onClick={() => toggleMember(m.face_id)}
+                                        disabled={!canEdit}
+                                        title={`${poseLabel(m.pose_bucket)} — ${m.reason || info.label}`}
+                                        style={{
+                                            padding: 0, textAlign: 'left', overflow: 'hidden',
+                                            cursor: canEdit ? 'pointer' : 'default',
+                                            background: 'none', borderRadius: '9px',
+                                            border: `2px solid ${on ? (m.is_outlier ? 'var(--warning)' : 'var(--success)') : 'var(--border-color)'}`,
+                                            opacity: on ? 1 : 0.5,
+                                        }}
+                                    >
+                                        <div style={{ position: 'relative', aspectRatio: '1', background: '#000' }}>
+                                            {m.snapshot_url ? (
+                                                <img src={snapshotUrl(m.snapshot_url)} alt={poseLabel(m.pose_bucket)}
+                                                     style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                            ) : (
+                                                <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.625rem' }}>?</div>
+                                            )}
+                                            {m.is_outlier && (
+                                                <div style={{
+                                                    position: 'absolute', top: '3px', left: '3px',
+                                                    background: 'var(--warning)', color: '#000',
+                                                    borderRadius: '4px', padding: '0 3px',
+                                                    fontSize: '0.563rem', fontWeight: 700,
+                                                }}>⚠</div>
+                                            )}
+                                            <div style={{
+                                                position: 'absolute', top: '3px', right: '3px',
+                                                width: '14px', height: '14px', borderRadius: '4px',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                                background: on ? 'var(--success)' : 'rgba(0,0,0,0.6)',
+                                                color: 'white', fontSize: '0.563rem', fontWeight: 700,
+                                            }}>{on ? '✓' : ''}</div>
+                                            <div style={{
+                                                position: 'absolute', bottom: '2px', right: '3px',
+                                                background: 'rgba(0,0,0,0.7)', borderRadius: '3px',
+                                                padding: '0 3px', fontSize: '0.5rem', color: 'white',
+                                            }}>×{m.occurrence}</div>
+                                        </div>
+                                        <div style={{ padding: '4px 5px', background: 'var(--bg-secondary)' }}>
+                                            <div style={{ fontSize: '0.563rem', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                                                {poseLabel(m.pose_bucket)}
+                                            </div>
+                                            <div style={{ fontSize: '0.563rem', fontWeight: 700, color: info.color }}>
+                                                {info.label}
+                                            </div>
+                                        </div>
+                                    </button>
+                                );
+                            })}
                         </div>
 
                         {cluster.first_seen && (
@@ -779,6 +940,76 @@ function DetailModal({ detail, loading, onClose, onAction, actionLoading }) {
                             {d.cluster_consistency != null && <ScoreBadge score={d.cluster_consistency} label="Cluster" />}
                         </div>
 
+                        {report && (
+                            <div style={{
+                                padding: '10px', borderRadius: '8px', marginBottom: '14px',
+                                background: 'var(--bg-secondary)',
+                                border: '1px solid var(--border-color)',
+                            }}>
+                                <div style={{ fontWeight: 600, marginBottom: '8px', fontSize: '0.688rem', color: 'var(--success)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                                    Gallery Improvement
+                                </div>
+
+                                <div style={{ display: 'flex', alignItems: 'baseline', gap: '6px', marginBottom: '6px' }}>
+                                    <span style={{ fontSize: '1.25rem', fontWeight: 800, color: 'var(--text-secondary)' }}>
+                                        {(report.coverage_before || 0).toFixed(0)}%
+                                    </span>
+                                    <span style={{ color: 'var(--text-muted)' }}>&rarr;</span>
+                                    <span style={{ fontSize: '1.5rem', fontWeight: 800, color: report.coverage_delta > 0 ? 'var(--success)' : 'var(--text-muted)' }}>
+                                        {(report.coverage_after || 0).toFixed(0)}%
+                                    </span>
+                                    {report.coverage_delta > 0 && (
+                                        <span style={{ fontSize: '0.688rem', fontWeight: 700, color: 'var(--success)' }}>
+                                            +{report.coverage_delta.toFixed(1)}
+                                        </span>
+                                    )}
+                                </div>
+                                <CoverageBar before={report.coverage_before} after={report.coverage_after} />
+
+                                <div style={{ fontSize: '0.625rem', color: 'var(--text-muted)', marginTop: '8px' }}>
+                                    {report.encodings_before} &rarr; {report.encodings_after} encodings
+                                    {' (cap '}{report.capacity}{')'}
+                                </div>
+
+                                {accepted.length > 0 && (
+                                    <div style={{ marginTop: '10px' }}>
+                                        <div style={{ fontSize: '0.625rem', color: 'var(--text-muted)', marginBottom: '3px' }}>
+                                            Selected gallery additions
+                                        </div>
+                                        {accepted.map(m => (
+                                            <div key={m.face_id} style={{ fontSize: '0.688rem', color: 'var(--success)' }}>
+                                                &#10003; {poseLabel(m.pose_bucket)}
+                                                <span style={{ color: 'var(--text-muted)' }}>{m.reason ? ` — ${m.reason}` : ''}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {notAdded.length > 0 && (
+                                    <div style={{ marginTop: '10px' }}>
+                                        <div style={{ fontSize: '0.625rem', color: 'var(--text-muted)', marginBottom: '3px' }}>
+                                            Not added
+                                        </div>
+                                        {notAdded.map(m => {
+                                            const info = MEMBER_STATUS[m.status] || { label: m.status };
+                                            return (
+                                                <div key={m.face_id} style={{ fontSize: '0.688rem', color: 'var(--text-muted)' }}>
+                                                    &bull; {poseLabel(m.pose_bucket)} — {info.label.toLowerCase()}
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                )}
+
+                                {accepted.length === 0 && (
+                                    <div style={{ marginTop: '10px', fontSize: '0.688rem', color: 'var(--warning)' }}>
+                                        No image in this cluster improves the gallery. Approving still
+                                        resolves the identity, but adds no encodings.
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
                         {d.vlm_explanation && (
                             <div style={{
                                 padding: '10px', borderRadius: '8px', background: 'var(--bg-secondary)',
@@ -810,10 +1041,10 @@ function DetailModal({ detail, loading, onClose, onAction, actionLoading }) {
                         <button
                             className="btn"
                             style={{ background: 'rgba(16, 185, 129, 0.12)', color: 'var(--success)', border: '1px solid rgba(16, 185, 129, 0.3)' }}
-                            onClick={() => onAction(d.id, 'approve')}
-                            disabled={actionLoading === d.id}
+                            onClick={() => onAction(d.id, 'approve', [...selected])}
+                            disabled={actionLoading === d.id || previewing}
                         >
-                            <CheckIcon size={14} /> Approve
+                            <CheckIcon size={14} /> Approve{accepted.length > 0 ? ` (+${accepted.length})` : ''}
                         </button>
                         <button
                             className="btn"

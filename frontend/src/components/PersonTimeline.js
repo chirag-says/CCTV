@@ -7,6 +7,7 @@
 
 import { useState, useEffect } from 'react';
 import api, { API_BASE } from '@/lib/api';
+import { todayKey } from './DatePicker';
 import { EntryIcon, ExitIcon, DetectionIcon, UnknownFaceIcon, XIcon } from './Icons';
 
 const EVENT_ICONS = {
@@ -28,7 +29,12 @@ export default function PersonTimeline({ person, onClose }) {
     async function loadTimeline() {
         setLoading(true);
         try {
-            const data = await api.request(`/api/movements/person/${person.id}/timeline?days=${days}&limit=200`);
+            // days === 0 means "today only" — the endpoint takes a campus-local
+            // date, which is not the same as the last 24 hours.
+            const query = days === 0
+                ? `date=${todayKey()}&limit=200`
+                : `days=${days}&limit=200`;
+            const data = await api.request(`/api/movements/person/${person.id}/timeline?${query}`);
             setTimeline(data.timeline || []);
         } catch {
             setTimeline([]);
@@ -116,7 +122,7 @@ export default function PersonTimeline({ person, onClose }) {
                 display: 'flex', gap: '6px',
                 borderBottom: '1px solid var(--border-color)',
             }}>
-                {[{ d: 1, l: '24h' }, { d: 7, l: '7d' }, { d: 30, l: '30d' }, { d: 90, l: '90d' }].map(opt => (
+                {[{ d: 0, l: 'Today' }, { d: 1, l: '24h' }, { d: 7, l: '7d' }, { d: 30, l: '30d' }, { d: 90, l: '90d' }].map(opt => (
                     <button
                         key={opt.d}
                         className={`btn btn-sm ${days === opt.d ? 'btn-primary' : 'btn-secondary'}`}
@@ -138,7 +144,9 @@ export default function PersonTimeline({ person, onClose }) {
                     <div style={{ textAlign: 'center', padding: '40px 0' }}>
                         <div style={{ fontSize: '2rem', marginBottom: '8px', opacity: 0.3 }}>📭</div>
                         <div style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
-                            No activity in the last {days} days
+                            {days === 0
+                                ? 'No activity recorded today'
+                                : `No activity in the last ${days} day${days === 1 ? '' : 's'}`}
                         </div>
                     </div>
                 ) : (

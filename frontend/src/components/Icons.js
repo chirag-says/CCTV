@@ -252,6 +252,44 @@ export const ArrowRightIcon = (props) => (
     </Icon>
 );
 
+export const ChevronLeftIcon = (props) => (
+    <Icon {...props}>
+        <polyline points="15 18 9 12 15 6" />
+    </Icon>
+);
+
+export const ChevronRightIcon = (props) => (
+    <Icon {...props}>
+        <polyline points="9 18 15 12 9 6" />
+    </Icon>
+);
+
+export const DownloadIcon = (props) => (
+    <Icon {...props}>
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+        <polyline points="7 10 12 15 17 10" />
+        <line x1="12" y1="15" x2="12" y2="3" />
+    </Icon>
+);
+
+export const AttendanceIcon = (props) => (
+    <Icon {...props}>
+        <rect x="3" y="4" width="18" height="18" rx="2" />
+        <line x1="16" y1="2" x2="16" y2="6" />
+        <line x1="8" y1="2" x2="8" y2="6" />
+        <line x1="3" y1="10" x2="21" y2="10" />
+        <polyline points="9 16 11 18 15 14" />
+    </Icon>
+);
+
+export const CampusIcon = (props) => (
+    <Icon {...props}>
+        <path d="M3 21h18" />
+        <path d="M5 21V8l7-5 7 5v13" />
+        <path d="M10 21v-6h4v6" />
+    </Icon>
+);
+
 export const RefreshIcon = (props) => (
     <Icon {...props}>
         <polyline points="23 4 23 10 17 10" />

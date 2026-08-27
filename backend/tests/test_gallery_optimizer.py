@@ -95,6 +95,20 @@ class TestReviewPriority:
 
 # ── Confidence Gate Tests ────────────────────────────────────────
 
+def _gate_settings(mock_settings):
+    """
+    Thresholds the gate actually reads.
+
+    These tests previously stubbed GALLERY_OPT_VLM_SKIP_HIGH/LOW, names the
+    gate stopped using when the safety-valve review window was added — every
+    comparison was running against a MagicMock.
+    """
+    mock_settings.IDENTITY_REVIEW_REVIEW_MIN = 0.40
+    mock_settings.IDENTITY_REVIEW_REVIEW_MAX = 0.98
+    mock_settings.IDENTITY_REVIEW_TIER_HIGH = 0.85
+    mock_settings.IDENTITY_REVIEW_TIER_LOW = 0.55
+
+
 class TestConfidenceGate:
     """Test the three-tier confidence gate."""
 
@@ -104,47 +118,44 @@ class TestConfidenceGate:
     @patch('app.services.identity_review_worker.settings')
     def test_high_confidence_skips_vlm(self, mock_settings):
         """similarity > 0.85 → skip VLM, queue directly."""
-        mock_settings.GALLERY_OPT_VLM_SKIP_HIGH = 0.85
-        mock_settings.GALLERY_OPT_VLM_SKIP_LOW = 0.55
-
-        action = self.worker._confidence_gate(0.90)
-        assert action == "skip_vlm_queue"
+        _gate_settings(mock_settings)
+        assert self.worker._confidence_gate(0.90) == "skip_vlm_queue"
 
     @patch('app.services.identity_review_worker.settings')
     def test_medium_confidence_calls_vlm(self, mock_settings):
         """similarity 0.55–0.85 → call VLM."""
-        mock_settings.GALLERY_OPT_VLM_SKIP_HIGH = 0.85
-        mock_settings.GALLERY_OPT_VLM_SKIP_LOW = 0.55
-
-        action = self.worker._confidence_gate(0.70)
-        assert action == "call_vlm"
+        _gate_settings(mock_settings)
+        assert self.worker._confidence_gate(0.70) == "call_vlm"
 
     @patch('app.services.identity_review_worker.settings')
-    def test_low_confidence_skips_entirely(self, mock_settings):
-        """similarity < 0.55 → skip entirely."""
-        mock_settings.GALLERY_OPT_VLM_SKIP_HIGH = 0.85
-        mock_settings.GALLERY_OPT_VLM_SKIP_LOW = 0.55
+    def test_low_confidence_rejects(self, mock_settings):
+        """Below the safety valve → reject without spending a VLM call."""
+        _gate_settings(mock_settings)
+        assert self.worker._confidence_gate(0.30) == "reject"
 
-        action = self.worker._confidence_gate(0.40)
-        assert action == "skip_entirely"
+    @patch('app.services.identity_review_worker.settings')
+    def test_inside_valve_below_tier_low_rejects(self, mock_settings):
+        """Above REVIEW_MIN but below TIER_LOW → still rejected."""
+        _gate_settings(mock_settings)
+        assert self.worker._confidence_gate(0.45) == "reject"
+
+    @patch('app.services.identity_review_worker.settings')
+    def test_above_review_max_auto_queues(self, mock_settings):
+        """Near-certain match → queue for a human without a VLM call."""
+        _gate_settings(mock_settings)
+        assert self.worker._confidence_gate(0.99) == "auto_queue"
 
     @patch('app.services.identity_review_worker.settings')
     def test_boundary_high(self, mock_settings):
         """Exactly at high threshold → skip VLM."""
-        mock_settings.GALLERY_OPT_VLM_SKIP_HIGH = 0.85
-        mock_settings.GALLERY_OPT_VLM_SKIP_LOW = 0.55
-
-        action = self.worker._confidence_gate(0.85)
-        assert action == "skip_vlm_queue"
+        _gate_settings(mock_settings)
+        assert self.worker._confidence_gate(0.85) == "skip_vlm_queue"
 
     @patch('app.services.identity_review_worker.settings')
     def test_boundary_low(self, mock_settings):
         """Exactly at low threshold → call VLM."""
-        mock_settings.GALLERY_OPT_VLM_SKIP_HIGH = 0.85
-        mock_settings.GALLERY_OPT_VLM_SKIP_LOW = 0.55
-
-        action = self.worker._confidence_gate(0.55)
-        assert action == "call_vlm"
+        _gate_settings(mock_settings)
+        assert self.worker._confidence_gate(0.55) == "call_vlm"
 
 
 # ── Cluster Outlier Detection Tests ──────────────────────────────

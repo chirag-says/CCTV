@@ -28,6 +28,87 @@ from app.vision.recognizer import deserialize_encoding, serialize_encoding
 logger = logging.getLogger(__name__)
 
 
+def centroid_distances(
+    embeddings: List[np.ndarray],
+    centroid: np.ndarray,
+) -> List[float]:
+    """
+    Cosine distance of each embedding from a cluster centroid.
+
+    A member that no longer looks like the rest of its cluster shows up here
+    as a large distance. Returns 1.0 (maximum distance) for unusable vectors
+    rather than dropping them, so the returned list always lines up with the
+    input list index-for-index.
+    """
+    centroid_norm = np.linalg.norm(centroid)
+    if centroid_norm == 0:
+        return [1.0] * len(embeddings)
+    centroid_n = centroid / centroid_norm
+
+    distances = []
+    for enc in embeddings:
+        enc_norm = np.linalg.norm(enc) if enc is not None else 0.0
+        if enc_norm > 0:
+            distances.append(1.0 - float(np.dot(centroid_n, enc / enc_norm)))
+        else:
+            distances.append(1.0)
+    return distances
+
+
+def outlier_flags(
+    distances: List[float],
+    outlier_factor: float,
+    min_members: int = 3,
+) -> Tuple[List[bool], float]:
+    """
+    Flag cluster members whose distance from the centroid is anomalous.
+
+    A member is an outlier when its distance exceeds
+    `outlier_factor * median_distance`. The median (not the mean) is the
+    reference precisely because one badly-wrong face should not drag the
+    threshold out to cover itself.
+
+    Below `min_members` there is no meaningful median, so nothing is flagged —
+    a 2-member cluster cannot tell you which of the two is the odd one out.
+
+    Returns (flags, threshold). threshold is 0.0 when no check was performed.
+    """
+    if len(distances) < min_members:
+        return [False] * len(distances), 0.0
+
+    median_dist = float(np.median(distances))
+    threshold = median_dist * outlier_factor
+    if threshold <= 0:
+        return [False] * len(distances), 0.0
+
+    return [d > threshold for d in distances], threshold
+
+
+def compute_cluster_groups(
+    face_data: List[Tuple[Any, np.ndarray]],
+    threshold: float,
+) -> Dict[int, List[Tuple[Any, np.ndarray]]]:
+    """
+    Agglomerative-cluster pre-normalised embeddings into label -> members.
+
+    Pure computation, no database access — which is what lets the backlog
+    diagnostic measure exactly what a real cycle would produce without
+    writing a single row.
+    """
+    if len(face_data) < 2:
+        return {}
+
+    embeddings = np.array([fd[1] for fd in face_data], dtype=np.float32)
+    distances = pdist(embeddings, metric="cosine")
+    linkage_matrix = linkage(distances, method="average")
+    labels = fcluster(linkage_matrix, t=threshold, criterion="distance")
+
+    groups: Dict[int, List[Tuple[Any, np.ndarray]]] = {}
+    for member, label in zip(face_data, labels):
+        groups.setdefault(int(label), []).append(member)
+    return groups
+
+
 class ClusteringService:
     """
     Groups unknown faces into identity clusters using agglomerative clustering.
@@ -93,20 +174,10 @@ class ClusteringService:
             if len(face_data) < 2:
                 return stats
 
-            # 3. Build embedding matrix
-            embeddings = np.array([fd[1] for fd in face_data], dtype=np.float32)
-
-            # 4. Compute pairwise cosine distances and cluster
-            distances = pdist(embeddings, metric="cosine")
-            linkage_matrix = linkage(distances, method="average")
-
-            threshold = settings.IDENTITY_REVIEW_CLUSTER_THRESHOLD
-            labels = fcluster(linkage_matrix, t=threshold, criterion="distance")
-
-            # 5. Group faces by cluster label
-            cluster_groups: Dict[int, List[Tuple[UnknownFace, np.ndarray]]] = {}
-            for (face, enc), label in zip(face_data, labels):
-                cluster_groups.setdefault(int(label), []).append((face, enc))
+            # 3-5. Cluster and group by label
+            cluster_groups = compute_cluster_groups(
+                face_data, settings.IDENTITY_REVIEW_CLUSTER_THRESHOLD,
+            )
 
             stats["clusters_found"] = len(cluster_groups)
 

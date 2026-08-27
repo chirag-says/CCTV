@@ -423,16 +423,23 @@ def compute_person_profile(person_id: str, db=None) -> PersonProfile:
 
 def compute_coverage_delta(
     person_id: str,
-    new_pose_bucket: str,
+    new_pose_bucket: Optional[str] = None,
     new_quality: float = 0.7,
     new_lighting: Optional[str] = None,
     new_appearance_tags: Optional[List[str]] = None,
     db=None,
+    new_pose_buckets: Optional[List[str]] = None,
 ) -> CoverageDelta:
     """
-    Project what happens to coverage/health if a new embedding is approved.
+    Project what happens to coverage/health if new embeddings are approved.
 
     Used to populate the "63% → 74%" display on review cards.
+
+    `new_pose_buckets` projects several additions at once — an unknown cluster
+    typically contributes more than one pose, and scoring only its first member
+    understates the gain. `new_pose_bucket` (singular) is the single-embedding
+    form and still works. A bucket of None (pose not known) contributes no pose
+    coverage rather than being counted as frontal.
     """
     close_db = False
     if db is None:
@@ -446,12 +453,18 @@ def compute_coverage_delta(
         # Simulate adding the new encoding
         new_covered = set(current.covered_buckets)
 
-        # Add pose bucket
-        pose_bucket_name = _POSE_TO_BUCKET.get(new_pose_bucket)
+        # Add pose bucket(s)
+        buckets_in = list(new_pose_buckets) if new_pose_buckets else []
+        if new_pose_bucket:
+            buckets_in.append(new_pose_bucket)
+
         fills_bucket = None
-        if pose_bucket_name and pose_bucket_name not in new_covered:
-            new_covered.add(pose_bucket_name)
-            fills_bucket = pose_bucket_name
+        for bucket in buckets_in:
+            pose_bucket_name = _POSE_TO_BUCKET.get(bucket) if bucket else None
+            if pose_bucket_name and pose_bucket_name not in new_covered:
+                new_covered.add(pose_bucket_name)
+                if fills_bucket is None:
+                    fills_bucket = pose_bucket_name
 
         # Add lighting bucket
         if new_lighting:

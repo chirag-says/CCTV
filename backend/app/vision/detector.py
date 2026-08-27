@@ -304,7 +304,7 @@ class FaceDetector:
 
     def detect_faces_with_embeddings(
         self, frame: np.ndarray
-    ) -> Tuple[List[Tuple[int, int, int, int]], List, np.ndarray]:
+    ) -> Tuple[List[Tuple[int, int, int, int]], List, List, np.ndarray]:
         """
         Detect faces AND extract ArcFace embeddings in a SINGLE pass.
 
@@ -321,9 +321,12 @@ class FaceDetector:
             frame: BGR image from OpenCV (numpy array)
 
         Returns:
-            Tuple of (face_locations, embeddings, frame)
+            Tuple of (face_locations, embeddings, landmarks, frame)
             face_locations: List of (top, right, bottom, left)
             embeddings: List of 512-d numpy arrays (or None per face)
+            landmarks: List of SCRFD 5-point landmark arrays (or None per face).
+                       Same index order as face_locations — needed downstream
+                       for real yaw/pitch/roll estimation.
             frame: The original BGR frame (passed through unchanged)
 
         Note: InsightFace expects BGR input — it does swapRB=True
@@ -340,7 +343,7 @@ class FaceDetector:
         app = self._get_app()
         if app is None:
             self._frame_count += 1
-            return [], [], frame
+            return [], [], [], frame
 
         # ── Inference (GPU via ONNX) ──────────────────────────────
         with profiler.measure("scrfd_inference"):
@@ -350,6 +353,7 @@ class FaceDetector:
         with profiler.measure("scrfd_postprocess"):
             face_locations = []
             embeddings = []
+            landmarks = []
             for face in faces:
                 bbox = face.bbox.astype(int)
                 x1, y1, x2, y2 = bbox
@@ -373,11 +377,18 @@ class FaceDetector:
                 else:
                     embeddings.append(None)
 
+                # Carry the 5-point landmarks through. app.get() already
+                # computed them for alignment; passing them on costs nothing
+                # and is what lets pose estimation return a real yaw instead
+                # of (0, 0, 0).
+                kps = getattr(face, "kps", None)
+                landmarks.append(kps if kps is not None and len(kps) >= 5 else None)
+
         # Record face count in profiler
         profiler.record_faces_detected(len(face_locations))
 
         self._frame_count += 1
-        return face_locations, embeddings, frame
+        return face_locations, embeddings, landmarks, frame
 
     def detect_faces_raw(
         self, frame_bgr: np.ndarray

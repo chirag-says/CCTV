@@ -14,17 +14,30 @@ from sqlalchemy import func
 from app.db.session import SessionLocal
 from app.db.models import DetectionEvent, Person, Camera
 from app.core.exceptions import NotFoundException
-from app.utils.time_utils import utc_now, utc_now_iso, today_start_utc, days_ago_utc
+from app.utils.time_utils import (
+    utc_now, utc_now_iso, today_start_utc, days_ago_utc, campus_day_bounds,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def _event_to_dict(event: DetectionEvent) -> dict:
-    """Convert a DetectionEvent ORM object to a dict."""
+def _event_to_dict(event: DetectionEvent, camera: Optional[Camera] = None) -> dict:
+    """
+    Convert a DetectionEvent ORM object to a dict.
+
+    `camera_name` matters: the frontend renders `camera_name || camera_id`
+    (PersonTimeline.js), so without it every row displayed a raw UUID. When
+    a camera row is passed in it is used directly; otherwise the lazy
+    relationship is followed, which is fine for single-row lookups but
+    would be N+1 in a list — list callers pass the joined row.
+    """
+    cam = camera if camera is not None else event.camera
     return {
         "id": event.id,
         "person_id": event.person_id,
         "camera_id": event.camera_id,
+        "camera_name": (cam.name if cam else None) or event.camera_id,
+        "camera_location": (cam.location if cam else None) or "",
         "event_type": event.event_type,
         "subtype": event.subtype,
         "confidence": event.confidence,
@@ -105,15 +118,19 @@ class MovementService:
                 query = query.filter(DetectionEvent.created_at <= end_date)
 
             total = query.count()
-            events = (
-                query.order_by(DetectionEvent.created_at.desc())
+            # Outer-join the camera so _event_to_dict resolves names without
+            # firing a query per row.
+            rows = (
+                query.add_entity(Camera)
+                .outerjoin(Camera, DetectionEvent.camera_id == Camera.id)
+                .order_by(DetectionEvent.created_at.desc())
                 .offset(offset)
                 .limit(limit)
                 .all()
             )
 
             return {
-                "data": [_event_to_dict(e) for e in events],
+                "data": [_event_to_dict(e, cam) for e, cam in rows],
                 "total": total,
             }
         finally:
@@ -186,22 +203,41 @@ class MovementService:
         person_id: str,
         days: int = 7,
         limit: int = 100,
+        date: Optional[str] = None,
     ) -> List[dict]:
-        """Get a chronological timeline of movements for a specific person."""
+        """
+        Get a chronological timeline of movements for a specific person.
+
+        `date` ('YYYY-MM-DD') selects a single CAMPUS-LOCAL day and takes
+        precedence over `days`. Without it the window is the last N days,
+        which is the original behaviour.
+        """
         db: Session = SessionLocal()
-        start = days_ago_utc(days)
         try:
-            events = (
-                db.query(DetectionEvent)
-                .filter(
-                    DetectionEvent.person_id == person_id,
+            query = (
+                db.query(DetectionEvent, Camera)
+                .outerjoin(Camera, DetectionEvent.camera_id == Camera.id)
+                .filter(DetectionEvent.person_id == person_id)
+            )
+
+            if date:
+                # Full calendar day, not the campus operating window — a
+                # timeline should show everything that happened, including
+                # an out-of-hours detection.
+                start, end = campus_day_bounds(date, day_start="00:00", day_end="24:00")
+                query = query.filter(
                     DetectionEvent.created_at >= start,
+                    DetectionEvent.created_at < end,
                 )
-                .order_by(DetectionEvent.created_at.desc())
+            else:
+                query = query.filter(DetectionEvent.created_at >= days_ago_utc(days))
+
+            rows = (
+                query.order_by(DetectionEvent.created_at.desc())
                 .limit(limit)
                 .all()
             )
-            return [_event_to_dict(e) for e in events]
+            return [_event_to_dict(e, cam) for e, cam in rows]
         finally:
             db.close()
 
@@ -214,6 +250,7 @@ class MovementService:
         db: Session = SessionLocal()
         start = utc_now() - timedelta(hours=hours)
         try:
+            cam = db.query(Camera).filter(Camera.id == camera_id).first()
             events = (
                 db.query(DetectionEvent)
                 .filter(
@@ -231,7 +268,8 @@ class MovementService:
                     hour_key = event.created_at.strftime("%Y-%m-%d %H:00")
                     hourly[hour_key] = hourly.get(hour_key, 0) + 1
 
-            event_dicts = [_event_to_dict(e) for e in events]
+            # One camera for the whole result set — resolve it once.
+            event_dicts = [_event_to_dict(e, cam) for e in events]
 
             return {
                 "hourly_counts": hourly,

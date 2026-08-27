@@ -8,7 +8,7 @@ Usage (unchanged):
     from app.vision.benchmarks import pipeline_bench
 
     with pipeline_bench.measure("scrfd_detect"):
-        face_locations, embeddings, rgb_frame = self.detector.detect_faces_with_embeddings(frame)
+        face_locations, embeddings, landmarks, rgb_frame = self.detector.detect_faces_with_embeddings(frame)
 
     with pipeline_bench.measure("arcface_match"):
         result = self.recognizer.recognize_face(embedding)

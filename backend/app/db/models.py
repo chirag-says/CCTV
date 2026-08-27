@@ -6,7 +6,7 @@ These define the actual PostgreSQL table schemas.
 
 from sqlalchemy import (
     Column, String, Boolean, Float, Integer, Text, DateTime, JSON, LargeBinary,
-    ForeignKey, Index, func
+    ForeignKey, Index, Sequence, func
 )
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime, timezone
@@ -63,7 +63,15 @@ class Person(Base):
 
     id = Column(String(36), primary_key=True, default=gen_uuid)
     name = Column(String(255), nullable=False, index=True)
-    role = Column(String(50), default="visitor")  # employee/visitor/vip/banned
+    # `role` is the human-facing designation shown in the UI:
+    # assistant_professor / professor / hod / student / employee / visitor…
+    # It is free text and has always been so — the seed scripts write
+    # designations, the old UI dropdown wrote access flags.
+    role = Column(String(50), default="visitor")
+    # `person_type` is the machine-facing class that attendance, presence and
+    # the daily summary filter on: faculty / student / staff / visitor.
+    # Added in migration 009 — see app/migrations/009_college_features.sql.
+    person_type = Column(String(20), default="visitor", index=True)
     department = Column(String(100), nullable=True)
     phone = Column(String(20), nullable=True)
     email = Column(String(255), nullable=True)
@@ -180,6 +188,19 @@ class UnknownFace(Base):
     status = Column(String(20), default="pending")  # pending/enrolled/dismissed
     cluster_id = Column(String(36), nullable=True, index=True)  # Groups same unknown person across sightings
     created_at = Column(DateTime(timezone=True), default=utcnow)
+
+    # Pose + quality metadata (migration 010). Mirrors face_encodings so an
+    # unknown face and a gallery encoding are described in the same vocabulary.
+    # NULL means "pose unknown" — rows written before 010, or faces detected
+    # without SCRFD landmarks. Never treat NULL as "frontal".
+    yaw = Column(Float, nullable=True)
+    pitch = Column(Float, nullable=True)
+    roll = Column(Float, nullable=True)
+    pose_bucket = Column(String(20), nullable=True)
+    quality = Column(Float, nullable=True)
+    blur_score = Column(Float, nullable=True)
+    det_score = Column(Float, nullable=True)
+    lighting = Column(String(20), nullable=True)
 
     # Relationships
     camera = relationship("Camera", back_populates="unknown_faces")
@@ -302,6 +323,14 @@ class GalleryUpdate(Base):
     action = Column(String(20), default="append")  # append/replace
     replaced_encoding_id = Column(String(36), nullable=True)
     gallery_version = Column(Integer, nullable=True)              # Per-person version for ordered rollback
+
+    # Member-level provenance (migration 010). One row per individual unknown
+    # face that was actually added — not one row per averaged cluster centroid.
+    source_face_id = Column(String(36), nullable=True)            # unknown_faces.id this embedding came from
+    selection_reason = Column(String(255), nullable=True)         # Why the diversity gate accepted it
+    encoding_id = Column(String(36), nullable=True)               # face_encodings.id created on apply (for rollback)
+    coverage_before = Column(Float, nullable=True)                # Gallery coverage % before this addition
+    coverage_after = Column(Float, nullable=True)                 # Gallery coverage % after this addition
     status = Column(String(20), default="pending", index=True)  # pending/applied/rolled_back
     applied_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), default=utcnow)
@@ -309,6 +338,51 @@ class GalleryUpdate(Base):
     # Relationships
     person = relationship("Person")
     candidate = relationship("IdentityReviewCandidate")
+
+
+# ── Incident Reviews (Security Incident Workflow) ────────────────
+class IncidentReview(Base):
+    """
+    Operator review state for a security incident.
+
+    An "incident" IS a detection_events row with event_type='security_alert';
+    this table only carries the human workflow layered on top. Keeping it
+    separate means the event log stays immutable and append-only (it is
+    written from the vision event path on a hot table), and "list all open
+    incidents" is an indexed filter rather than a JSON scan of metadata_json.
+
+    Rows are created lazily -- an alert has no review row until someone
+    changes its status. Absence of a row means status='open'.
+
+    V1 uses `status` only. `severity`, `assignee` and `notes` are defined
+    now because adding a column later needs hand-applied SQL (there is no
+    Alembic), and unused columns cost nothing.
+    """
+    __tablename__ = "incident_reviews"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    event_id = Column(
+        String(36),
+        ForeignKey("detection_events.id", ondelete="CASCADE"),
+        nullable=False, unique=True, index=True,
+    )
+    # Human-facing incident number ("INCIDENT #1042"). Starts at 1000 so it
+    # reads as a case number rather than a row count.
+    seq = Column(
+        Integer,
+        Sequence("incident_review_seq", start=1000),
+        server_default=Sequence("incident_review_seq", start=1000).next_value(),
+        unique=True, nullable=False,
+    )
+    status = Column(String(20), default="open", index=True)  # open/investigating/resolved
+    severity = Column(String(20), nullable=True)   # operator override of the derived severity
+    assignee = Column(String(36), nullable=True)   # admin_users.id — not used in V1
+    notes = Column(JSON, default=list)             # [{author, text, at}] — not used in V1
+    created_at = Column(DateTime(timezone=True), default=utcnow)
+    updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
+
+    # Relationships
+    event = relationship("DetectionEvent")
 
 
 # ── Identity Review Activity (Audit Trail) ───────────────────────

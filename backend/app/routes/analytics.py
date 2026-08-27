@@ -28,6 +28,35 @@ async def get_peak_times(
     return AnalyticsService.get_peak_times(days=days)
 
 
+@router.get("/daily-summary")
+async def get_daily_summary(
+    date: Optional[str] = Query(
+        None, description="Campus-local day (YYYY-MM-DD). Defaults to today."
+    ),
+    current_user: dict = Depends(get_current_user),
+):
+    """
+    Administration-facing summary of one campus day.
+
+    Composed entirely from data already recorded — no new capture.
+
+    Two metrics carry caveats the UI must preserve:
+      * `peak_occupancy` is RECONSTRUCTED from presence intervals, since
+        occupancy is never stored. Present it as an estimate.
+      * `camera_availability_pct` is null when no camera ran that day. Show a
+        dash, never 100%.
+
+    `no_data` is true when the day recorded no events at all; clients must
+    suppress headline figures rather than reporting zeros.
+    """
+    from app.services.campus_summary_service import CampusSummaryService
+
+    try:
+        return CampusSummaryService.get_daily(date=date)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 @router.get("/occupancy")
 async def get_occupancy(
     current_user: dict = Depends(get_current_user),
@@ -95,11 +124,7 @@ async def export_analytics(
         exits       exits only
         events      every event type, including alerts and unknowns
     """
-    import csv
-    import io
-    import json
-    from datetime import datetime
-    from fastapi.responses import StreamingResponse, Response
+    from app.utils.export_utils import export_response, validate_format
 
     TYPE_FILTERS = {
         "entry_exit": ["entry", "exit"],
@@ -112,11 +137,7 @@ async def export_analytics(
             status_code=400,
             detail=f"Invalid type '{type}'. Allowed: {', '.join(TYPE_FILTERS)}",
         )
-    if format not in ("csv", "xlsx", "json"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid format '{format}'. Allowed: csv, xlsx, json",
-        )
+    format = validate_format(format)
 
     event_types = TYPE_FILTERS[type]
     if event_types is None:
@@ -131,83 +152,20 @@ async def export_analytics(
         limit=limit,
     )
 
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    base = f"sentinel_{type}_{stamp}"
-
-    # Stable, human-ordered columns. Taken from the first row so the header is
-    # present even when there are no rows to write.
+    # Stable, human-ordered columns. Declared explicitly rather than derived
+    # from the rows, so the header is present even when there are no rows.
     COLUMNS = [
         "Date", "Time", "Event", "Person", "Role", "Department",
         "Camera", "Location", "Confidence", "Duration (s)",
         "Timestamp (UTC)", "Person ID", "Event ID",
     ]
 
-    # ── CSV ───────────────────────────────────────────────────────
-    if format == "csv":
-        out = io.StringIO()
-        # utf-8-sig BOM so Excel opens accented names correctly on Windows
-        writer = csv.DictWriter(out, fieldnames=COLUMNS, extrasaction="ignore")
-        writer.writeheader()
-        for r in rows:
-            writer.writerow(r)
-        return Response(
-            content=out.getvalue().encode("utf-8-sig"),
-            media_type="text/csv; charset=utf-8",
-            headers={"Content-Disposition": f'attachment; filename="{base}.csv"'},
-        )
-
-    # ── Excel ─────────────────────────────────────────────────────
-    if format == "xlsx":
-        try:
-            from openpyxl import Workbook
-            from openpyxl.styles import Font, PatternFill, Alignment
-            from openpyxl.utils import get_column_letter
-        except ImportError:
-            raise HTTPException(
-                status_code=503,
-                detail="Excel export requires openpyxl. Install it with: pip install openpyxl",
-            )
-
-        wb = Workbook()
-        ws = wb.active
-        ws.title = type.replace("_", " ").title()[:31]  # Excel caps sheet names at 31
-
-        header_font = Font(bold=True, color="FFFFFF")
-        header_fill = PatternFill("solid", fgColor="4F46E5")
-        ws.append(COLUMNS)
-        for cell in ws[1]:
-            cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = Alignment(horizontal="center")
-
-        for r in rows:
-            ws.append([r.get(c, "") for c in COLUMNS])
-
-        # Width from the widest cell, capped so IDs don't blow the layout out
-        for i, col in enumerate(COLUMNS, start=1):
-            longest = max([len(col)] + [len(str(r.get(col, ""))) for r in rows[:500]])
-            ws.column_dimensions[get_column_letter(i)].width = min(longest + 2, 32)
-
-        ws.freeze_panes = "A2"
-        ws.auto_filter.ref = f"A1:{get_column_letter(len(COLUMNS))}{max(len(rows) + 1, 1)}"
-
-        buf = io.BytesIO()
-        wb.save(buf)
-        buf.seek(0)
-        return Response(
-            content=buf.getvalue(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{base}.xlsx"'},
-        )
-
-    # ── JSON ──────────────────────────────────────────────────────
-    payload = json.dumps(
-        {"exported_at": stamp, "type": type, "count": len(rows), "data": rows},
-        indent=2, default=str,
-    )
-    return Response(
-        content=payload,
-        media_type="application/json",
-        headers={"Content-Disposition": f'attachment; filename="{base}.json"'},
+    return export_response(
+        rows=rows,
+        columns=COLUMNS,
+        fmt=format,
+        filename_prefix=f"sentinel_{type}",
+        sheet_title=type.replace("_", " ").title(),
+        meta={"type": type},
     )
 

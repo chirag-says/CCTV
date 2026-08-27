@@ -10,6 +10,7 @@ from sqlalchemy import func
 from app.db.session import SessionLocal
 from app.db.models import Person, FaceEncoding, TrackingSession, EncodingVersion
 from app.core.exceptions import NotFoundException
+from app.models.person import infer_person_type
 from app.vision.recognizer import serialize_encoding, deserialize_encoding
 
 logger = logging.getLogger(__name__)
@@ -21,6 +22,9 @@ def _person_to_dict(person: Person, encoding_count: int = 0) -> dict:
         "id": person.id,
         "name": person.name,
         "role": person.role,
+        # Older rows written before migration 009 can still be NULL if the
+        # migration has not been applied; fall back rather than emit null.
+        "person_type": person.person_type or infer_person_type(person.role),
         "department": person.department,
         "phone": person.phone,
         "email": person.email,
@@ -38,6 +42,8 @@ class PersonService:
     @staticmethod
     def list_persons(
         role: Optional[str] = None,
+        person_type: Optional[str] = None,
+        department: Optional[str] = None,
         is_active: bool = True,
         search: Optional[str] = None,
         limit: int = 50,
@@ -50,6 +56,13 @@ class PersonService:
 
             if role:
                 query = query.filter(Person.role == role)
+            if person_type:
+                query = query.filter(Person.person_type == person_type)
+            if department:
+                # Departments are hand-typed, so 'CSE' and 'cse' both occur.
+                query = query.filter(
+                    func.upper(func.trim(Person.department)) == department.strip().upper()
+                )
             if is_active is not None:
                 query = query.filter(Person.is_active == is_active)
             if search:
@@ -57,7 +70,7 @@ class PersonService:
 
             total = query.count()
             persons_orm = (
-                query.order_by(Person.created_at.desc())
+                query.order_by(Person.name.asc())
                 .offset(offset)
                 .limit(limit)
                 .all()
@@ -104,10 +117,15 @@ class PersonService:
         """Create a new person."""
         db: Session = SessionLocal()
         try:
+            role = data.get("role", "visitor")
             person = Person(
                 id=str(uuid4()),
                 name=data["name"],
-                role=data.get("role", "visitor"),
+                role=role,
+                # An explicit person_type wins; otherwise derive it from the
+                # designation so callers that predate this field (and the
+                # seed scripts) still classify correctly.
+                person_type=data.get("person_type") or infer_person_type(role),
                 department=data.get("department") or None,
                 phone=data.get("phone") or None,
                 email=data.get("email") or None,
@@ -147,6 +165,12 @@ class PersonService:
             for key, value in update_data.items():
                 if hasattr(person, key):
                     setattr(person, key, value)
+
+            # Changing the designation without saying what class it belongs to
+            # must not silently leave a teacher classified as a visitor. An
+            # explicit person_type in the same request still wins.
+            if "role" in update_data and "person_type" not in update_data:
+                person.person_type = infer_person_type(update_data["role"])
 
             person.updated_at = datetime.now(timezone.utc)
             db.commit()

@@ -25,11 +25,33 @@ import {
   ArrowRightIcon,
 } from '@/components/Icons';
 
+/** One clickable figure in the college strip. */
+function CollegeMetric({ label, value, sub, href }) {
+  return (
+    <a href={href} style={{ textDecoration: 'none', color: 'inherit' }}>
+      <div style={{
+        fontSize: '0.6875rem', fontWeight: 700, letterSpacing: '0.06em',
+        textTransform: 'uppercase', color: 'var(--text-muted)',
+      }}>
+        {label}
+      </div>
+      <div style={{
+        fontFamily: "'JetBrains Mono', monospace", fontSize: '1.5rem',
+        fontWeight: 700, color: 'var(--text-primary)', lineHeight: 1.2,
+      }}>
+        {value}
+      </div>
+      <div style={{ fontSize: '0.6875rem', color: 'var(--text-muted)' }}>{sub}</div>
+    </a>
+  );
+}
+
 export default function DashboardPage() {
   const [dashboard, setDashboard] = useState(null);
   const [events, setEvents] = useState([]);
   const [peakTimes, setPeakTimes] = useState(null);
   const [activePersons, setActivePersons] = useState([]);
+  const [attendance, setAttendance] = useState(null);
   const [isLive, setIsLive] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -59,15 +81,19 @@ export default function DashboardPage() {
 
   async function loadData() {
     try {
-      const [dashData, peakData, eventsData, activeData] = await Promise.allSettled([
+      const [dashData, peakData, eventsData, activeData, collegeData] = await Promise.allSettled([
         api.getDashboard(),
         api.getPeakTimes(7),
         api.getEvents({ limit: 20 }),
         api.getActivePersons(),
+        // College metrics are additive — if this fails the rest of the
+        // dashboard still renders exactly as before.
+        api.getAttendanceSummary(),
       ]);
 
       if (dashData.status === 'fulfilled') setDashboard(dashData.value);
       if (peakData.status === 'fulfilled') setPeakTimes(peakData.value);
+      if (collegeData.status === 'fulfilled') setAttendance(collegeData.value);
       if (eventsData.status === 'fulfilled' && eventsData.value?.data) {
         setEvents((prev) => prev.length === 0 ? eventsData.value.data : prev);
       }
@@ -232,6 +258,41 @@ export default function DashboardPage() {
           variant="primary"
         />
       </div>
+
+      {/* College strip — links through to the full daily summary */}
+      {attendance && attendance.totals.total > 0 && (
+        <div className="card" style={{ marginTop: '20px' }}>
+          <div className="toolbar-responsive" style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            gap: '16px', flexWrap: 'wrap',
+          }}>
+            <div style={{ display: 'flex', gap: '28px', flexWrap: 'wrap' }}>
+              <CollegeMetric
+                label="Faculty attendance"
+                value={attendance.no_data ? '—' : `${attendance.totals.pct}%`}
+                sub={`${attendance.totals.attending} of ${attendance.totals.total}`}
+                href="/attendance"
+              />
+              <CollegeMetric
+                label="Present now"
+                value={attendance.totals.attending}
+                sub="see live presence"
+                href="/on-campus"
+              />
+              <CollegeMetric
+                label="Late today"
+                value={attendance.totals.late}
+                sub={attendance.totals.late === 1 ? 'arrival' : 'arrivals'}
+                href="/attendance"
+              />
+            </div>
+            <a href="/daily-summary" className="btn btn-secondary btn-sm"
+              style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+              Daily summary <ArrowRightIcon size={14} />
+            </a>
+          </div>
+        </div>
+      )}
 
       {/* Main Grid */}
       <div className="dashboard-grid">

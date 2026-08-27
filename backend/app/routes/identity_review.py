@@ -11,7 +11,7 @@ Provides endpoints for:
 """
 
 import logging
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -34,6 +34,17 @@ router = APIRouter(prefix="/api/identity-review", tags=["Identity Review"])
 class ReviewActionRequest(BaseModel):
     """Request body for approve/reject/skip actions."""
     pass  # actor_id comes from auth
+
+
+class SelectionRequest(BaseModel):
+    """
+    Which cluster members the reviewer wants applied.
+
+    Omit `selected_face_ids` (or send null) for the default selection: every
+    member except the ones flagged as outliers. Send an explicit list to
+    exclude a suspicious face — or to deliberately include a flagged one.
+    """
+    selected_face_ids: Optional[List[str]] = None
 
 
 class IgnoreClusterRequest(BaseModel):
@@ -191,6 +202,10 @@ async def get_candidate_detail(candidate_id: str, user=Depends(require_admin)):
                     "first_seen": f.first_seen.isoformat() if f.first_seen else None,
                     "last_seen": f.last_seen.isoformat() if f.last_seen else None,
                     "camera_id": f.camera_id,
+                    "pose_bucket": f.pose_bucket,
+                    "yaw": f.yaw,
+                    "quality": f.quality,
+                    "lighting": f.lighting,
                 }
                 for f in faces
             ]
@@ -246,10 +261,24 @@ async def get_candidate_detail(candidate_id: str, user=Depends(require_admin)):
             except Exception as e:
                 logger.debug(f"PersonProfile computation failed: {e}")
 
+        # Dry-run the approval so the reviewer sees the real outcome before
+        # deciding: which members are outliers, which embeddings would actually
+        # be added, and the measured coverage change. Rolls back — reads only.
+        # Only for candidates still awaiting a decision. Re-running it on an
+        # already-approved one would report every member as redundant against
+        # the encodings that approval itself added.
+        selection = None
+        if candidate.status == "pending":
+            try:
+                selection = IdentityReviewService.preview_candidate(candidate.id)
+            except Exception as e:
+                logger.warning(f"Selection preview failed for {candidate_id[:8]}...: {e}")
+
         return {
             "id": candidate.id,
             "status": candidate.status,
             "overall_score": candidate.overall_score,
+            "selection": selection,
             "embedding_similarity": candidate.embedding_similarity,
             "verifier_similarity": candidate.verifier_similarity,
             "vlm_confidence": candidate.vlm_confidence,
@@ -294,19 +323,56 @@ async def get_candidate_detail(candidate_id: str, user=Depends(require_admin)):
 
 # ── Review Actions ───────────────────────────────────────────────
 
+@router.post("/candidates/{candidate_id}/preview")
+async def preview_candidate(
+    candidate_id: str,
+    body: Optional[SelectionRequest] = None,
+    user=Depends(require_admin),
+):
+    """
+    Dry-run an approval without changing anything.
+
+    Returns the per-member verdict (accepted / redundant / low quality /
+    outlier / no pose metadata) and the measured coverage before and after.
+    Call this again with a different `selected_face_ids` to see the effect of
+    excluding a member, before committing to it.
+    """
+    try:
+        return IdentityReviewService.preview_candidate(
+            candidate_id=candidate_id,
+            selected_face_ids=(body.selected_face_ids if body else None),
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        logger.error(f"Preview failed: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to preview candidate")
+
+
 @router.post("/candidates/{candidate_id}/approve")
-async def approve_candidate(candidate_id: str, user=Depends(require_admin)):
-    """Approve a candidate — creates a pending gallery update."""
+async def approve_candidate(
+    candidate_id: str,
+    body: Optional[SelectionRequest] = None,
+    user=Depends(require_admin),
+):
+    """
+    Approve a candidate — adds the selected members' individual embeddings
+    to the person's gallery, each gated for quality, duplication, pose
+    coverage and capacity.
+
+    Defaults to every cluster member except detected outliers.
+    """
     try:
         result = IdentityReviewService.approve_candidate(
             candidate_id=candidate_id,
             actor_id=user["id"],
+            selected_face_ids=(body.selected_face_ids if body else None),
         )
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
-        logger.error(f"Approve failed: {e}")
+        logger.error(f"Approve failed: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail="Failed to approve candidate")
 
 

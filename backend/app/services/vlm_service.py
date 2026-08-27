@@ -115,6 +115,9 @@ class VLMCache:
 # ── Base Class ───────────────────────────────────────────────────
 
 class VLMReviewer:
+    # Subclasses that cannot actually look at an image set this False.
+    enabled = True
+
     """Base class for VLM face comparison providers."""
 
     def compare_faces(
@@ -140,13 +143,23 @@ class VLMReviewer:
 # ── Disabled Reviewer ────────────────────────────────────────────
 
 class DisabledReviewer(VLMReviewer):
-    """Returns neutral scores when VLM is disabled."""
+    """
+    Stand-in when no VLM is configured.
+
+    `enabled = False` matters: callers must skip the VLM path entirely rather
+    than call this and treat the neutral 0.5 as a verdict. Caching that 0.5
+    would poison the result cache, so that later enabling Qwen would find a
+    fabricated "agreement" already recorded for the pair and never ask.
+    """
+
+    enabled = False
 
     def compare_faces(self, image_a_path, image_b_path, context=None):
         return VLMResult(
             agreement=0.5,
             confidence="low",
             explanation="VLM review disabled — using embedding similarity only",
+            error="vlm_disabled",
         )
 
 
@@ -204,19 +217,13 @@ Respond in JSON format:
     def _encode_image(self, image_path: str) -> Optional[str]:
         """Read and base64-encode an image file."""
         try:
-            # Handle both absolute paths and relative snapshot paths
-            path = Path(image_path)
-            if not path.is_absolute():
-                path = Path(settings.SNAPSHOT_DIR) / image_path.lstrip("/")
+            from app.utils.image_utils import resolve_snapshot_path
 
-            if not path.exists():
-                # Try stripping /snapshots/ prefix
-                alt_path = Path(settings.SNAPSHOT_DIR) / Path(image_path).name
-                if alt_path.exists():
-                    path = alt_path
-                else:
-                    logger.warning(f"VLM image not found: {image_path}")
-                    return None
+            resolved = resolve_snapshot_path(image_path)
+            if resolved is None:
+                logger.warning(f"VLM image not found: {image_path}")
+                return None
+            path = Path(resolved)
 
             with open(path, "rb") as f:
                 return base64.b64encode(f.read()).decode("utf-8")
@@ -351,18 +358,13 @@ class OllamaReviewer(VLMReviewer):
         No face detection. No SCRFD. The pipeline already saved the crop.
         """
         try:
-            path = Path(image_path)
-            if not path.is_absolute():
-                path = Path(settings.SNAPSHOT_DIR) / image_path.lstrip("/")
+            from app.utils.image_utils import resolve_snapshot_path
 
-            if not path.exists():
-                # Try stripping path prefix
-                alt_path = Path(settings.SNAPSHOT_DIR) / Path(image_path).name
-                if alt_path.exists():
-                    path = alt_path
-                else:
-                    logger.warning(f"VLM image not found: {image_path}")
-                    return None
+            resolved = resolve_snapshot_path(image_path)
+            if resolved is None:
+                logger.warning(f"VLM image not found: {image_path}")
+                return None
+            path = Path(resolved)
 
             import cv2
             img = cv2.imread(str(path))

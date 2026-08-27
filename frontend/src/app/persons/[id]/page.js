@@ -14,6 +14,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import AppShell from '@/components/AppShell';
 import PersonTimeline from '@/components/PersonTimeline';
+import JourneyPanel from '@/components/JourneyPanel';
 import api, { API_BASE } from '@/lib/api';
 import {
     UserIcon, ImageIcon, XIcon, ClockIcon, EditIcon, PlusIcon,
@@ -115,7 +116,9 @@ export default function PersonDetailPage() {
     const [suggestions, setSuggestions] = useState([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState(null);
-    const [activeTab, setActiveTab] = useState('encodings');
+    // Journey leads: "where was this person" is the question people open a
+    // person page to answer. Embedding management is admin plumbing.
+    const [activeTab, setActiveTab] = useState('journey');
 
     // Replacement modal state
     const [replaceModal, setReplaceModal] = useState(null);
@@ -486,6 +489,7 @@ export default function PersonDetailPage() {
             {/* ── Tab Navigation ─────────────────────────────── */}
             <div style={{ display: 'flex', gap: '4px', marginBottom: '20px', borderBottom: '1px solid var(--border-color)', paddingBottom: '0' }}>
                 {[
+                    { key: 'journey', label: 'Journey', count: null },
                     { key: 'encodings', label: 'Current Embeddings', count: encodings.length },
                     { key: 'suggestions', label: 'Suggested Embeddings', count: suggestions.length },
                     { key: 'timeline', label: 'Activity', count: null },
@@ -527,6 +531,11 @@ export default function PersonDetailPage() {
                     </button>
                 ))}
             </div>
+
+            {/* ── Journey ────────────────────────────────────── */}
+            {activeTab === 'journey' && (
+                <JourneyPanel personId={personId} />
+            )}
 
             {/* ── Current Embeddings ─────────────────────────── */}
             {activeTab === 'encodings' && (

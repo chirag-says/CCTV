@@ -116,6 +116,24 @@ class VisionPipeline:
         # expensive ArcFace recognition on every single frame.
         self.byte_tracker = ByteTracker()
 
+        # What ByteTrack tracks: person boxes ("person") or face boxes
+        # ("face"). See settings.TRACKING_MODE. Mutable, because a missing
+        # YOLO model demotes this to "face" at runtime.
+        self._tracking_mode = getattr(settings, "TRACKING_MODE", "person").lower()
+        if self._tracking_mode not in ("person", "face"):
+            logger.warning(
+                f"[{self.camera_id}] unknown TRACKING_MODE "
+                f"{self._tracking_mode!r}; using 'face'"
+            )
+            self._tracking_mode = "face"
+        self._person_fallback_logged = False
+        self._frame_person_dets: List[dict] = []
+        # Centroids of person tracks carrying NO identity. In person mode these
+        # emit no presence event (see the face_too_small branch), so they would
+        # otherwise be invisible to crowd detection -- which counts people, not
+        # identities, and was previously fed only by detected faces.
+        self._anon_track_centroids: Dict[str, Tuple[int, int]] = {}
+
         # Identity layer, sitting ABOVE the tracker. ByteTrack stays
         # geometry-only; this owns the track_id -> identity binding.
         # Milestone 1: observe-only (measures recovery headroom, assigns nothing).
@@ -567,29 +585,47 @@ class VisionPipeline:
         # Detect faces AND get embeddings in a SINGLE insightface pass
         # (sub-stage timing: scrfd_preprocess/scrfd_inference/scrfd_postprocess
         #  is recorded inside detector.detect_faces_with_embeddings)
-        face_locations, embeddings, rgb_frame = self.detector.detect_faces_with_embeddings(frame)
+        face_locations, embeddings, face_landmarks, rgb_frame = (
+            self.detector.detect_faces_with_embeddings(frame)
+        )
 
-        if not face_locations:
+        # In PERSON mode "no faces" is an ordinary frame, not an empty one:
+        # people with their backs turned still have bodies to track. Only face
+        # mode can conclude there is nothing here, because there the face IS
+        # the track.
+        if not face_locations and self._tracking_mode != "person":
             # Update ByteTrack with empty detections
             self.byte_tracker.update(np.empty((0, 4)), np.empty(0))
+
+            # Coasting: zero faces this frame does NOT mean zero people. Every
+            # track just moved toward `lost` still holds its identity and is
+            # still a re-association candidate. This is the exact frame the box
+            # used to vanish on -- someone turned their head and the whole
+            # overlay went blank. Draw what the tracker still believes.
+            coast = self._scale_boxes(self._coasting_boxes())
+            self._last_face_draws = coast  # so frame-skip redraws keep them
+            with profiler.measure("drawing"):
+                for draw_args in coast:
+                    self._draw_box(display_frame, *draw_args)
+
             self._run_safety_analytics()
             self._check_periodic_exits()
             self._update_fps()
             self._last_frame = display_frame
             return display_frame
 
-        logger.debug(f"Camera {self.camera_id}: Detected {len(face_locations)} face(s)")
+        logger.debug(
+            f"Camera {self.camera_id}: {len(face_locations)} face(s), "
+            f"mode={self._tracking_mode}"
+        )
 
-        # Convert face locations to xyxy format for ByteTrack
-        bboxes_xyxy = []
-        det_scores = []
-        for loc in face_locations:
-            top, right, bottom, left = loc
-            bboxes_xyxy.append([left, top, right, bottom])
-            det_scores.append(1.0)  # SCRFD already filtered by confidence
-
-        bboxes_array = np.array(bboxes_xyxy, dtype=np.float32)
-        scores_array = np.array(det_scores, dtype=np.float32)
+        # What drives the tracker this frame: person boxes (Step 1) or face
+        # boxes (legacy). `track_source` then decides how a face is bound back
+        # to a track, since the two need different geometry.
+        with profiler.measure("person_detect"):
+            bboxes_array, scores_array, track_source = self._tracking_detections(
+                clean_frame, face_locations
+            )
 
         # ByteTrack update: assigns stable track IDs across frames
         with profiler.measure("bytetrack"):
@@ -601,36 +637,24 @@ class VisionPipeline:
         # predecessor exist? It does not assign identity yet.
         self._observe_identity_continuity(active_tracks)
 
-        # Collect all face boxes to draw
+        # Collect all boxes to draw
         boxes_to_draw = []
+        self._anon_track_centroids = {}
 
-        # Match ByteTrack tracks to detected faces by IoU
-        # (tracks may have slightly different bboxes due to motion prediction)
         for track in active_tracks:
-            location = track.to_location()  # (top, right, bottom, left)
-            top, right, bottom, left = location
-            centroid = ((left + right) // 2, (top + bottom) // 2)
+            # THE BOX WE DRAW vs THE BOX WE RECOGNISE.
+            # In person mode `track.to_location()` is a BODY box: right for
+            # drawing, for the centroid, and for presence -- and useless for
+            # anything that needs pixels of a face. Those two were the same
+            # rectangle before Step 1, and conflating them now would feed body
+            # crops to ArcFace and pose estimation.
+            draw_location = track.to_location()  # (top, right, bottom, left)
+            d_top, d_right, d_bottom, d_left = draw_location
+            centroid = ((d_left + d_right) // 2, (d_top + d_bottom) // 2)
 
-            # Find the best matching detection (by IoU) to get its embedding
-            best_embedding = None
-            best_iou = 0.0
-            tx1, ty1, tx2, ty2 = left, top, right, bottom
-
-            for i, loc in enumerate(face_locations):
-                ft, fr, fb, fl = loc
-                # IoU
-                ix1 = max(tx1, fl); iy1 = max(ty1, ft)
-                ix2 = min(tx2, fr); iy2 = min(ty2, fb)
-                if ix2 > ix1 and iy2 > iy1:
-                    inter = (ix2 - ix1) * (iy2 - iy1)
-                    a1 = (tx2 - tx1) * (ty2 - ty1)
-                    a2 = (fr - fl) * (fb - ft)
-                    iou = inter / (a1 + a2 - inter) if (a1 + a2 - inter) > 0 else 0
-                else:
-                    iou = 0
-                if iou > best_iou and embeddings[i] is not None:
-                    best_iou = iou
-                    best_embedding = embeddings[i]
+            face_location, best_embedding, best_landmarks = self._bind_face_to_track(
+                track, face_locations, embeddings, face_landmarks, track_source
+            )
 
             # ── Identity recovery (Milestone 2) ───────────────────
             # Runs BEFORE the recognition-cache decision so that a successfully
@@ -650,32 +674,69 @@ class VisionPipeline:
                 profiler.record_track_recreated()
 
             # ── Face size gate for recognition ────────────────────
-            # Only compute embeddings on faces large enough for reliable
-            # matching. Small faces (32-80px) are still tracked but
-            # reported as unidentified — never guess on insufficient pixels.
-            face_w = abs(location[1] - location[3])  # right - left
-            face_h = abs(location[2] - location[0])  # bottom - top
-            face_too_small = (face_w < settings.MIN_FACE_RECOGNIZE_PX or
-                             face_h < settings.MIN_FACE_RECOGNIZE_PX)
+            # Measured on the FACE box, never the track box: a person box is
+            # always wider than MIN_FACE_RECOGNIZE_PX, so measuring the track
+            # would pass the gate on a body and hand ArcFace a torso.
+            #
+            # No bound face is not a failure -- it is someone facing away. The
+            # track survives with whatever identity it already had, which is
+            # the entire point of Step 1.
+            if face_location is None:
+                face_too_small = True
+            else:
+                face_w = abs(face_location[1] - face_location[3])  # right - left
+                face_h = abs(face_location[2] - face_location[0])  # bottom - top
+                face_too_small = (face_w < settings.MIN_FACE_RECOGNIZE_PX or
+                                  face_h < settings.MIN_FACE_RECOGNIZE_PX)
 
             if face_too_small:
-                # Track but don't recognize — show as tracked face
+                # No usable face this frame: either none was bound (the person
+                # is facing away) or it is too small to embed. Recognition is
+                # skipped either way -- but the person is still demonstrably
+                # HERE, which is the whole Step 1 distinction.
                 label = track.person_name if track.person_name else f"Track #{track.track_id}"
                 color = (0, 200, 0) if track.person_name else (255, 165, 0)
-                boxes_to_draw.append((location, label, color, 0.0))
-                self.tracker.on_detection(
-                    # `anon:` marks a TRACK HANDLE, not an identity. A face this
-                    # small has no usable embedding, so we can count it as
-                    # present without inventing an identity for it. The prefix
-                    # lets _process_pipeline_event drop it rather than filing a
-                    # ByteTrack id into detection_events.metadata_json, which is
-                    # what `small_track_{id}` used to do.
-                    person_id=track.person_id or f"anon:{self.camera_id}:{track.track_id}",
-                    person_name=label,
-                    camera_id=self.camera_id,
-                    confidence=0.0,
-                    centroid=centroid,
-                )
+                boxes_to_draw.append((draw_location, label, color, 0.0))
+
+                if track.person_id:
+                    # Established identity, still visible as a body. Refresh
+                    # presence: before Step 1 this person would have aged out
+                    # toward EXIT_THRESHOLD while standing in frame with their
+                    # back turned. Confidence carries over from the last real
+                    # match -- we are asserting presence, not re-asserting a
+                    # recognition we did not perform.
+                    self.tracker.on_detection(
+                        person_id=track.person_id,
+                        person_name=track.person_name or label,
+                        camera_id=self.camera_id,
+                        confidence=track.recognition_confidence,
+                        centroid=centroid,
+                    )
+                elif track_source == "face":
+                    # FACE MODE ONLY. `anon:` marks a TRACK HANDLE, not an
+                    # identity: a face too small to embed still counts as
+                    # someone being present. The prefix lets
+                    # _process_pipeline_event drop it rather than filing a
+                    # ByteTrack id into detection_events.metadata_json.
+                    self.tracker.on_detection(
+                        person_id=f"anon:{self.camera_id}:{track.track_id}",
+                        person_name=label,
+                        camera_id=self.camera_id,
+                        confidence=0.0,
+                        centroid=centroid,
+                    )
+                # PERSON MODE, no identity: drawn, but nothing is claimed and
+                # no presence is emitted. Handing every back-turned body an
+                # `anon:` handle would mint a fresh one on each track
+                # recreation, and PersonTracker._cooldowns is only ever pruned
+                # when that exact id returns -- it has no time-based expiry, so
+                # the map would grow without bound. Giving unidentified person
+                # tracks a real lifecycle is Step 1.5.
+                #
+                # It still counts as a BODY for crowd detection, which asks
+                # "how many people are here", not "who are they".
+                if track_source == "person":
+                    self._anon_track_centroids[f"track:{track.track_id}"] = centroid
                 continue
 
             if needs_recognition and best_embedding is not None:
@@ -693,7 +754,7 @@ class VisionPipeline:
                 with profiler.measure("arcface"):
                     result: MatchResult = self.recognizer.recognize_face(
                         best_embedding,
-                        face_quality=self._face_quality_for(frame, location),
+                        face_quality=self._face_quality_for(frame, face_location),
                     )
 
                 if result.matched:
@@ -723,7 +784,7 @@ class VisionPipeline:
                     if result.confidence >= self._recognition_lock_confidence:
                         track.recognition_locked = True
 
-                    boxes_to_draw.append((location, result.person_name, (0, 255, 0), result.confidence))
+                    boxes_to_draw.append((draw_location, result.person_name, (0, 255, 0), result.confidence))
 
                     self.tracker.on_detection(
                         person_id=result.person_id,
@@ -746,7 +807,7 @@ class VisionPipeline:
                             self.attribute_recognizer.maybe_extract(
                                 track_id=result.person_id,
                                 frame=clean_frame,
-                                face_location=location,
+                                face_location=face_location,
                                 on_complete=self._handle_attributes_complete,
                             )
                         except Exception as e:
@@ -760,7 +821,8 @@ class VisionPipeline:
                             encoding=best_embedding,
                             confidence=result.confidence,
                             frame=clean_frame,
-                            location=location,
+                            location=face_location,
+                            landmarks=best_landmarks,
                         )
                 else:
                     # ── HYSTERESIS: don't immediately drop a known identity ──
@@ -792,7 +854,7 @@ class VisionPipeline:
                         # Temporal average says this person is known — keep identity
                         track.reset_fail_streak()
                         track.recognition_time = time.time()
-                        boxes_to_draw.append((location, track.person_name, (0, 200, 0), track.recognition_confidence))
+                        boxes_to_draw.append((draw_location, track.person_name, (0, 200, 0), track.recognition_confidence))
                         self.tracker.on_detection(
                             person_id=track.person_id,
                             person_name=track.person_name,
@@ -812,7 +874,7 @@ class VisionPipeline:
                                 f"avg={track.temporal_avg_distance:.4f}"
                             )
                             # Show with slightly dimmer green to indicate borderline
-                            boxes_to_draw.append((location, track.person_name, (0, 200, 0), track.recognition_confidence))
+                            boxes_to_draw.append((draw_location, track.person_name, (0, 200, 0), track.recognition_confidence))
                             self.tracker.on_detection(
                                 person_id=track.person_id,
                                 person_name=track.person_name,
@@ -831,8 +893,8 @@ class VisionPipeline:
                             track.person_name = None
                             track.recognition_locked = False
                             track.identity_fail_streak = 0
-                            boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
-                            self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid, track_id=track.track_id)
+                            boxes_to_draw.append((draw_location, "UNKNOWN", (0, 0, 255), 0.0))
+                            self._handle_unknown_face(clean_frame, frame, face_location, best_embedding, centroid, track_id=track.track_id, landmarks=best_landmarks)
                     else:
                         # Definitive failure (distance far above threshold, or
                         # no previous identity) — immediate unknown
@@ -846,12 +908,12 @@ class VisionPipeline:
                             track.person_name = None
                             track.recognition_locked = False
                             track.identity_fail_streak = 0
-                        boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
-                        self._handle_unknown_face(clean_frame, frame, location, best_embedding, centroid, track_id=track.track_id)
+                        boxes_to_draw.append((draw_location, "UNKNOWN", (0, 0, 255), 0.0))
+                        self._handle_unknown_face(clean_frame, frame, face_location, best_embedding, centroid, track_id=track.track_id, landmarks=best_landmarks)
             elif not needs_recognition and track.person_id and track.person_name:
                 # Reuse existing identity from ByteTrack cache (skip ArcFace)
                 profiler.record_cache_hit()
-                boxes_to_draw.append((location, track.person_name, (0, 255, 0), track.recognition_confidence))
+                boxes_to_draw.append((draw_location, track.person_name, (0, 255, 0), track.recognition_confidence))
                 self.tracker.on_detection(
                     person_id=track.person_id,
                     person_name=track.person_name,
@@ -863,21 +925,17 @@ class VisionPipeline:
                 # No embedding available or unidentified track
                 label = track.person_name if track.person_name else f"Track #{track.track_id}"
                 color = (0, 200, 0) if track.person_name else (255, 165, 0)
-                boxes_to_draw.append((location, label, color, 0.0))
+                boxes_to_draw.append((draw_location, label, color, 0.0))
 
-        # ── Scale bounding boxes to display resolution & draw ─────
-        # boxes_to_draw contains coords in full 4MP space.
-        # Scale them to 1080p display_frame coords for drawing.
-        sx = self._stream_scale_x
-        sy = self._stream_scale_y
-        scaled_boxes = []
-        for (location, label, color, conf) in boxes_to_draw:
-            top, right, bottom, left = location
-            scaled_loc = (
-                int(top * sy), int(right * sx),
-                int(bottom * sy), int(left * sx),
-            )
-            scaled_boxes.append((scaled_loc, label, color, conf))
+        # Coasting tracks: identities ByteTrack still holds but did not return
+        # this frame (person present, face not currently detectable). Appended
+        # AFTER the live boxes so a live box always wins the z-order.
+        # `_tracked_stracks` and `_lost_stracks` are disjoint by construction,
+        # so this cannot double-draw a track that is already above.
+        boxes_to_draw.extend(self._coasting_boxes())
+
+        # Scale bounding boxes from full-res detection space to display space.
+        scaled_boxes = self._scale_boxes(boxes_to_draw)
 
         # Cache SCALED boxes for frame-skip redraw
         self._last_face_draws = scaled_boxes
@@ -890,9 +948,25 @@ class VisionPipeline:
         if self._should_run_yolo_assist(active_tracks, face_locations):
             self._last_yolo_assist_check = time.time()
             try:
-                yolo_persons = self._get_yolo_person_detections(clean_frame)
+                # In person mode the boxes for this frame were already
+                # computed to drive the tracker; re-detecting would double the
+                # per-frame YOLO cost for an identical answer.
+                if self._tracking_mode == "person":
+                    yolo_persons = self._frame_person_dets
+                else:
+                    yolo_persons = self._get_yolo_person_detections(clean_frame)
                 if yolo_persons:
                     missed = self._find_missed_persons(yolo_persons, face_locations)
+                    if self._tracking_mode == "person":
+                        # "Person without a visible face" is the ordinary state
+                        # here, not an anomaly, so this list is no longer short.
+                        # Each entry costs a crop plus a full SCRFD pass; spend
+                        # that on the nearest few, not on a whole corridor.
+                        missed = sorted(
+                            missed,
+                            key=lambda d: d.get("confidence", 0.0),
+                            reverse=True,
+                        )[:3]
                     for person_det in missed:
                         self._attempt_yolo_assisted_detection(
                             frame, clean_frame, person_det
@@ -1247,13 +1321,21 @@ class VisionPipeline:
             # Crowd Detection — only count actively-detected persons
             # Exclude stale tracks that are still in active_tracks but
             # haven't been seen recently (waiting for exit_threshold).
-            if self.crowd_detector and len(centroids) >= 2:
+            # Guard on identified + unidentified together: five strangers
+            # with their backs to the camera are a crowd, and none of them
+            # would appear in `centroids`.
+            anon_centroids = dict(self._anon_track_centroids)
+            if self.crowd_detector and (len(centroids) + len(anon_centroids)) >= 2:
                 recent_centroids = {}
                 active_tracks_snapshot = self.tracker.get_active_track_times()
                 for pid, centroid in centroids.items():
                     last_det = active_tracks_snapshot.get(pid, 0)
                     if now - last_det < 2.0:  # Only count if seen in last 2 seconds
                         recent_centroids[pid] = centroid
+                # Unidentified person tracks: bodies without names. Counted
+                # for crowd density, deliberately NOT passed to loitering
+                # below, which reasons about a specific person over time.
+                recent_centroids.update(anon_centroids)
                 if len(recent_centroids) >= 2:
                     self.crowd_detector.update(recent_centroids, self.camera_id)
 
@@ -1269,11 +1351,30 @@ class VisionPipeline:
         """
         Callback for all security alerts (crowd, loitering, hazard,
         vehicle_proximity). Routes through standard event system.
+
+        Attaches the latest encoded frame as evidence. An incident report
+        without an image is not evidence, and alerts previously carried no
+        snapshot at all.
+
+        This is cheap on purpose: _last_jpeg is the ANNOTATED frame the JPEG
+        encoder thread already produced for the live stream, so this is a
+        reference copy of immutable bytes — no frame copy, no re-encode, and
+        the saved image shows the detection boxes the operator would have
+        seen. The disk write itself is deferred to the EventQueue consumer
+        thread, keeping it off the vision loop entirely.
+
+        The key is underscore-prefixed so _process_pipeline_event strips it
+        before the event is persisted or broadcast — raw bytes would break
+        JSON serialisation on both paths.
         """
         logger.warning(
             f"Security alert on camera {self.camera_id}: "
             f"{alert.get('subtype', 'unknown')} — {alert}"
         )
+
+        if settings.ALERT_SNAPSHOTS_ENABLED and self._last_jpeg:
+            alert["_evidence_jpeg"] = self._last_jpeg
+
         if self.on_event:
             self.on_event(alert)
 
@@ -1326,6 +1427,7 @@ class VisionPipeline:
         confidence: float,
         frame: np.ndarray,
         location: tuple,
+        landmarks: Optional[np.ndarray] = None,
     ):
         """
         Evaluate whether a confident match should be queued as an embedding suggestion.
@@ -1363,15 +1465,15 @@ class VisionPipeline:
             # NOTE: face_location must be the *unpadded* box — assess() uses it for
             # the size gate and size_score, which should measure the face itself,
             # not the padded crop.
-            # TODO(phase2): pass real 5-point landmarks so estimate_pose() returns a
-            # true yaw. With landmarks=None it returns (0,0,0), so every suggestion
-            # buckets as "frontal" and the pose-coverage check (step 2 of the
-            # diversity ladder) can never fire.
+            # landmarks are SCRFD's 5 points for THIS detection, so estimate_pose()
+            # returns a true yaw. Without them it returned (0,0,0) and every
+            # suggestion bucketed as "frontal", which made the pose-coverage check
+            # (step 2 of the diversity ladder) dead code.
             quality_result = gate.assess(
                 face_crop=face_crop,
                 face_location=location,
                 det_score=confidence,
-                landmarks=None,
+                landmarks=landmarks,
             )
             if not quality_result.passed:
                 return
@@ -1438,6 +1540,7 @@ class VisionPipeline:
         encoding: np.ndarray,
         centroid: Optional[Tuple[int, int]] = None,
         track_id: Optional[int] = None,
+        landmarks: Optional[np.ndarray] = None,
     ):
         """
         Handle an unrecognised face: resolve to a STABLE identity, track, queue.
@@ -1494,6 +1597,13 @@ class VisionPipeline:
             context_crop = self._extract_context_crop(frame, location).copy()
             full_frame_copy = frame.copy()
 
+            # Pose + quality metadata for the row we are about to create.
+            # Only computed on the first-ever sighting of this identity (the
+            # only path that writes an unknown_faces row), so the cost stays
+            # off the per-frame hot path. Stays None when SCRFD landmarks are
+            # unavailable — a null pose is honest, a fabricated 0° yaw is not.
+            pose_meta = self._pose_metadata(frame, location, landmarks)
+
             self.on_unknown({
                 "unknown_id": unknown_id,
                 "camera_id": self.camera_id,
@@ -1506,6 +1616,7 @@ class VisionPipeline:
                     "top": location[0], "right": location[1],
                     "bottom": location[2], "left": location[3]
                 },
+                **pose_meta,
             })
         elif self.unknown_registry.should_report_sighting(unknown_id):
             # Known unknown, seen again. Report a SIGHTING so `occurrence`
@@ -1518,6 +1629,56 @@ class VisionPipeline:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "sighting_only": True,
             })
+
+    def _pose_metadata(
+        self,
+        frame: np.ndarray,
+        location: tuple,
+        landmarks: Optional[np.ndarray],
+    ) -> dict:
+        """
+        Compute real pose + quality metadata for an unknown face crop.
+
+        Reuses FaceQualityGate (the same gate the enrollment path uses) so
+        unknown faces are described in exactly the same vocabulary as gallery
+        encodings — that is what makes pose-coverage comparison meaningful.
+
+        Returns {} when landmarks are missing: downstream code must treat a
+        null pose as "unknown", never as "frontal".
+        """
+        if landmarks is None:
+            return {}
+
+        try:
+            from app.vision.quality import FaceQualityGate
+            from app.services.embedding_suggestions import classify_pose_bucket
+
+            gate = FaceQualityGate()
+            face_crop = self.detector.extract_face_crop(frame, location, padding=40)
+            result = gate.assess(
+                face_crop=face_crop,
+                face_location=location,
+                det_score=1.0,  # SCRFD already applied its own confidence filter
+                landmarks=landmarks,
+            )
+            m = result.metrics
+            yaw = m.get("yaw")
+            if yaw is None:
+                return {}
+
+            return {
+                "yaw": float(yaw),
+                "pitch": float(m.get("pitch", 0.0)),
+                "roll": float(m.get("roll", 0.0)),
+                "pose_bucket": classify_pose_bucket(float(yaw)),
+                "quality": float(result.quality_score),
+                "blur_score": float(m.get("blur_score", 0.0)),
+                "det_score": float(m.get("det_score", 0.0)),
+                "lighting": m.get("lighting"),
+            }
+        except Exception as e:
+            logger.debug(f"Pose metadata computation failed: {e}")
+            return {}
 
     def _handle_entry_event(self, event: dict):
         """Callback when tracker confirms an entry."""
@@ -1552,6 +1713,236 @@ class VisionPipeline:
             self.tracker.check_exits(now)
             self._last_exit_check = now
 
+    # ==================================================================
+    #  Step 1 -- tracking owns existence, recognition owns identity
+    # ==================================================================
+
+    def _tracking_detections(
+        self,
+        clean_frame: np.ndarray,
+        face_locations: List[Tuple],
+    ) -> Tuple[np.ndarray, np.ndarray, str]:
+        """
+        The boxes that drive ByteTrack this frame.
+
+        In "person" mode these are YOLO person boxes, so a track is a PERSON
+        and a face is something that person sometimes has. In "face" mode they
+        are SCRFD face boxes -- the pre-Step-1 behaviour, where a person who
+        turns away stops existing.
+
+        Falls back to face boxes PERMANENTLY if the YOLO model cannot load,
+        because silently tracking nothing is worse than tracking faces.
+
+        A frame where YOLO finds no people is NOT a fallback: it returns empty
+        boxes and the tracks coast. Switching detection source mid-stream would
+        change what a track box MEANS, and every track id would churn.
+
+        Returns:
+            (bboxes_xyxy, scores, source) where source is "person" or "face".
+        """
+        if self._tracking_mode == "person":
+            if self._load_yolo_person_detector():
+                persons = self._get_yolo_person_detections(clean_frame)
+                conf_floor = getattr(settings, "PERSON_DET_CONF", 0.35)
+                boxes, scores = [], []
+                for det in persons:
+                    conf = det.get("confidence", 0.0)
+                    if conf < conf_floor:
+                        continue
+                    b = det["bbox"]
+                    boxes.append([b["x1"], b["y1"], b["x2"], b["y2"]])
+                    scores.append(conf)
+                # Kept for the YOLO-assist stage, which would otherwise run
+                # a SECOND inference over the identical frame.
+                self._frame_person_dets = [
+                    d for d in persons
+                    if d.get("confidence", 0.0) >= conf_floor
+                ]
+                if boxes:
+                    return (
+                        np.array(boxes, dtype=np.float32),
+                        np.array(scores, dtype=np.float32),
+                        "person",
+                    )
+                return np.empty((0, 4), dtype=np.float32), np.empty(0, dtype=np.float32), "person"
+
+            # Model unavailable -- degrade to face tracking rather than blind.
+            self._tracking_mode = "face"
+            if not self._person_fallback_logged:
+                self._person_fallback_logged = True
+                logger.warning(
+                    f"[{self.camera_id}] TRACKING_MODE=person but the YOLO person "
+                    f"detector could not be loaded; falling back to face tracking. "
+                    f"Boxes will drop when a face turns away."
+                )
+
+        # Face mode (explicit, or fallen back to).
+        boxes = []
+        for top, right, bottom, left in face_locations:
+            boxes.append([left, top, right, bottom])
+        if not boxes:
+            return np.empty((0, 4), dtype=np.float32), np.empty(0, dtype=np.float32), "face"
+        return (
+            np.array(boxes, dtype=np.float32),
+            np.full(len(boxes), 1.0, dtype=np.float32),  # SCRFD already filtered
+            "face",
+        )
+
+    def _bind_face_to_track(
+        self,
+        track,
+        face_locations: List[Tuple],
+        embeddings: List,
+        face_landmarks: List,
+        source: str,
+    ) -> Tuple[Optional[Tuple], Optional[np.ndarray], Optional[np.ndarray]]:
+        """
+        Find the face belonging to a track, if one is visible this frame.
+
+        THIS RETURNING None IS NORMAL, NOT AN ERROR. It is the ordinary state
+        of a person facing away from the camera, and is exactly the case Step 1
+        exists to survive: the track keeps its identity, no recognition runs,
+        and nothing downstream is told the person left.
+
+        Person mode binds on containment -- a face centre inside the (padded)
+        person box -- because a face box and a body box barely overlap by area,
+        so IoU is the wrong test. Ties go to the LARGEST face, which is both
+        the nearer person and the better embedding.
+
+        Face mode keeps the original IoU match: there, the track box IS a face
+        box, and the only question is which detection it drifted from.
+
+        Returns:
+            (face_location, embedding, landmarks) -- all None when unbound.
+        """
+        if not face_locations:
+            return None, None, None
+
+        top, right, bottom, left = track.to_location()
+
+        if source == "person":
+            pad = getattr(settings, "PERSON_FACE_BIND_PAD", 12)
+            x1, y1, x2, y2 = left - pad, top - pad, right + pad, bottom + pad
+            best_area = 0.0
+            best = (None, None, None)
+            for i, loc in enumerate(face_locations):
+                if embeddings[i] is None:
+                    continue
+                f_top, f_right, f_bottom, f_left = loc
+                cx = (f_left + f_right) / 2.0
+                cy = (f_top + f_bottom) / 2.0
+                if not (x1 <= cx <= x2 and y1 <= cy <= y2):
+                    continue
+                area = max(0, f_right - f_left) * max(0, f_bottom - f_top)
+                if area > best_area:
+                    best_area = area
+                    best = (
+                        loc,
+                        embeddings[i],
+                        face_landmarks[i] if i < len(face_landmarks) else None,
+                    )
+            return best
+
+        # ---- face mode: original IoU association ----
+        best_iou = 0.0
+        best = (None, None, None)
+        tx1, ty1, tx2, ty2 = left, top, right, bottom
+        for i, loc in enumerate(face_locations):
+            if embeddings[i] is None:
+                continue
+            ft, fr, fb, fl = loc
+            ix1, iy1 = max(tx1, fl), max(ty1, ft)
+            ix2, iy2 = min(tx2, fr), min(ty2, fb)
+            if ix2 <= ix1 or iy2 <= iy1:
+                continue
+            inter = (ix2 - ix1) * (iy2 - iy1)
+            a1 = (tx2 - tx1) * (ty2 - ty1)
+            a2 = (fr - fl) * (fb - ft)
+            denom = a1 + a2 - inter
+            iou = inter / denom if denom > 0 else 0.0
+            if iou > best_iou:
+                best_iou = iou
+                best = (
+                    loc,
+                    embeddings[i],
+                    face_landmarks[i] if i < len(face_landmarks) else None,
+                )
+        return best
+
+    def _scale_boxes(self, boxes: List[tuple]) -> List[tuple]:
+        """
+        Scale draw args from full-res detection space to display space.
+
+        Entries are (location, label, color, confidence[, coasting]); any
+        trailing elements are carried through untouched.
+        """
+        sx = self._stream_scale_x
+        sy = self._stream_scale_y
+        out = []
+        for entry in boxes:
+            location, label, color, conf = entry[:4]
+            top, right, bottom, left = location
+            scaled_loc = (
+                int(top * sy), int(right * sx),
+                int(bottom * sy), int(left * sx),
+            )
+            out.append((scaled_loc, label, color, conf) + tuple(entry[4:]))
+        return out
+
+    def _coasting_boxes(self) -> List[tuple]:
+        """
+        Draw args for tracks ByteTrack has lost but has not forgotten.
+
+        See ByteTracker.get_coasting_tracks(). These carry a retained
+        identity at a last-observed position; nothing about them is
+        re-recognised and no presence event is emitted for them. Purely
+        what the tracker already believes, made visible.
+        """
+        if not getattr(settings, "BYTETRACK_COAST_ENABLED", True):
+            return []
+        try:
+            coasting = self.byte_tracker.get_coasting_tracks()
+        except Exception as e:
+            logger.debug(f"[{self.camera_id}] coasting lookup failed: {e}")
+            return []
+
+        boxes = []
+        for track, _age in coasting:
+            x1, y1, x2, y2 = track.last_seen_bbox.astype(int)
+            location = (y1, x2, y2, x1)  # top, right, bottom, left
+            if track.person_name:
+                label = track.person_name
+                color = (0, 150, 0)      # dimmed green -- known, not currently seen
+            else:
+                label = f"Track #{track.track_id}"
+                color = (140, 100, 0)    # dimmed amber -- tracked, unidentified
+            boxes.append((location, label, color, 0.0, True))
+
+        if boxes:
+            profiler.record_coasting(len(boxes))
+        return boxes
+
+    @staticmethod
+    def _dashed_rect(
+        frame: np.ndarray,
+        pt1: tuple,
+        pt2: tuple,
+        color: tuple,
+        thickness: int = 1,
+        dash: int = 10,
+    ):
+        """Rectangle drawn as dashes, marking a box we are inferring rather than seeing."""
+        x1, y1 = pt1
+        x2, y2 = pt2
+        for x in range(x1, x2, dash * 2):
+            xe = min(x + dash, x2)
+            cv2.line(frame, (x, y1), (xe, y1), color, thickness)
+            cv2.line(frame, (x, y2), (xe, y2), color, thickness)
+        for y in range(y1, y2, dash * 2):
+            ye = min(y + dash, y2)
+            cv2.line(frame, (x1, y), (x1, ye), color, thickness)
+            cv2.line(frame, (x2, y), (x2, ye), color, thickness)
+
     def _draw_box(
         self,
         frame: np.ndarray,
@@ -1559,12 +1950,24 @@ class VisionPipeline:
         label: str,
         color: tuple,
         confidence: float = 0.0,
+        coasting: bool = False,
     ):
-        """Draw a bounding box and label on the frame."""
+        """
+        Draw a bounding box and label on the frame.
+
+        `coasting` marks a box drawn from a LOST track's last observed
+        position -- the person was not detected on this frame. It is rendered
+        dashed and dimmed so an operator can always tell an inference from an
+        observation. Never render a coast box identically to a live one: the
+        whole value of the feature is that it degrades honestly.
+        """
         top, right, bottom, left = location
 
         # Draw rectangle
-        cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
+        if coasting:
+            self._dashed_rect(frame, (left, top), (right, bottom), color, 1)
+        else:
+            cv2.rectangle(frame, (left, top), (right, bottom), color, 2)
 
         # Draw label background
         label_text = f"{label}"
@@ -1867,10 +2270,15 @@ class VisionPipeline:
                 f"[{self.camera_id}] YOLO-assisted: found {len(crop_face_locs)} face(s) "
                 f"in missed person body (conf={person_confidence:.0%})"
             )
-        else:
-            # No face detected even in the focused crop Ã¢â‚¬â€ create body-only unknown
-            # This person is visible but their face cannot be detected
-            # (e.g., facing away, heavy occlusion, very small)
+        elif self._tracking_mode != "person":
+            # No face even in the focused crop -- someone facing away, heavily
+            # occluded, or very small.
+            #
+            # FACE MODE ONLY. In person mode this person already HAS a track:
+            # the tracker saw their body and owns their existence. Running this
+            # too would build a second, centroid-keyed pseudo-identity beside
+            # the real track, double-count them for presence, and re-mint an id
+            # whenever they moved more than the dedup radius.
             self._handle_unknown_person_body(frame, clean_frame, person_det)
 
     def _handle_unknown_person_body(
@@ -2060,10 +2468,13 @@ class VisionPipeline:
         # ── 1. Run Face Detection FIRST (on clean frame) ──
         face_locations = []
         embeddings = []
+        face_landmarks = []
         rgb_frame = None
 
         if self._frame_count % settings.FRAME_SKIP == 0:
-            face_locations, embeddings, rgb_frame = self.detector.detect_faces_with_embeddings(clean_frame)
+            face_locations, embeddings, face_landmarks, rgb_frame = (
+                self.detector.detect_faces_with_embeddings(clean_frame)
+            )
 
         # ── 2. Pass face locations to traffic module so it can filter overlaps ──
         if self.traffic_monitor and face_locations:
@@ -2156,7 +2567,10 @@ class VisionPipeline:
              else:
                  # Unknown - Draw on the ACCUMULATED frame
                  boxes_to_draw.append((location, "UNKNOWN", (0, 0, 255), 0.0))
-                 self._handle_unknown_face(clean_frame, clean_frame, location, encoding, centroid)
+                 self._handle_unknown_face(
+                     clean_frame, clean_frame, location, encoding, centroid,
+                     landmarks=(face_landmarks[i] if i < len(face_landmarks) else None),
+                 )
 
                  # ReID: also track unknown persons for cross-camera matching
                  if run_reid:

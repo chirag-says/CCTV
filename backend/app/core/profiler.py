@@ -92,6 +92,11 @@ class PerformanceProfiler:
         self._cache_hits = 0
         self._tracks_recreated = 0
         self._forced_rechecks = 0
+        # Step 0 (coasting): how often a track survived only because it was
+        # drawn from `lost` state. Measures how much of the "disappearing
+        # box" problem is a DRAWING gap rather than a tracking failure.
+        self._coast_draws = 0
+        self._coast_frames = 0
         self._cache_reasons: Dict[str, int] = defaultdict(int)
 
         # Identity carryover stats
@@ -254,6 +259,16 @@ class PerformanceProfiler:
             return
         with self._lock:
             self._tracks_recreated += 1
+
+    def record_coasting(self, count: int):
+        """Called once per detection frame with the number of coasting tracks drawn."""
+        if not self._enabled:
+            return
+        if count <= 0:
+            return
+        with self._lock:
+            self._coast_draws += count
+            self._coast_frames += 1
 
     def record_forced_recheck(self):
         if not self._enabled:
@@ -725,6 +740,8 @@ class PerformanceProfiler:
             lines.append(f"  Hit Rate         : {hit_rate:.1f}%")
             lines.append(f"  Tracks Recreated : {self._tracks_recreated}")
             lines.append(f"  Forced Rechecks  : {self._forced_rechecks}")
+            lines.append(f"  Coasted Draws    : {self._coast_draws} "
+                         f"(on {self._coast_frames} frames)")
 
             # Cache reason breakdown
             if self._cache_reasons:
