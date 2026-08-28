@@ -21,10 +21,33 @@ import time
 from typing import List, Tuple, Optional, Dict
 from dataclasses import dataclass, field
 from collections import OrderedDict
+from enum import Enum
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+class IdentityState(str, Enum):
+    """
+    What the system is willing to CLAIM about a track (Step 2).
+
+    Distinct from `person_id`, which is only ever a best guess at this instant.
+    The state records how much evidence stands behind that guess, and it is
+    what decides whether new evidence is allowed to overturn it.
+
+        PROVISIONAL        a verdict has not been earned yet; cheap to change
+        KNOWN              confirmed enrolled person; only confident
+                           contradiction can take it away
+        UNKNOWN_CANDIDATE  leaning stranger, not yet confirmed -- crucially,
+                           NO unknown_faces row exists yet
+        UNKNOWN_CONFIRMED  voted a stranger; the registry has given them a
+                           stable id
+    """
+    PROVISIONAL = "provisional"
+    KNOWN = "known"
+    UNKNOWN_CANDIDATE = "unknown_candidate"
+    UNKNOWN_CONFIRMED = "unknown_confirmed"
 
 
 @dataclass
@@ -53,6 +76,32 @@ class STrack:
     # actually SEEN, which is the only honest thing to draw once detection
     # has stopped. Wall-clock, not frame counts, so the coast window is
     # FPS-independent like the rest of the recognition cache.
+    # -- Unknown identity (Step 1.5) ------------------------------
+    # A stranger the UnknownRegistry has given a STABLE id to. Kept separate
+    # from person_id, which only ever holds an enrolled person: an unknown is
+    # identified (we can tell them apart, across cameras and restarts) without
+    # being known (we cannot name them).
+    #
+    # Without this, a stranger who turned away lost their identity entirely and
+    # was re-counted as an anonymous body, so one human occupied both the
+    # identified and unidentified lanes within the same visit.
+    # -- Identity evidence (Step 2) -------------------------------
+    # What we are willing to CLAIM, and the observations backing it.
+    # `person_id` is this frame's best guess; `identity_state` is the verdict.
+    identity_state: "IdentityState" = IdentityState.PROVISIONAL
+    # (timestamp, person_id or None, confidence, confident).
+    # person_id None == "a usable face that matched nobody".
+    # `confident` separates a decisive outcome from a gray-zone one: both are
+    # evidence that this is a stranger, but only a decisive one may unseat an
+    # identity that confident matches already earned.
+    _identity_votes: List[Tuple[float, Optional[str], float, bool]] = field(
+        default_factory=list, repr=False
+    )
+    _votes_max: int = 40
+
+    unknown_id: Optional[str] = None
+    unknown_label: Optional[str] = None
+
     last_seen_at: float = 0.0
     last_seen_bbox: Optional[np.ndarray] = field(default=None, repr=False)
 
@@ -86,6 +135,76 @@ class STrack:
     def reset_fail_streak(self):
         """Called on successful recognition match."""
         self.identity_fail_streak = 0
+
+    # -- Identity voting -------------------------------------------
+
+    def record_vote(self, person_id: Optional[str], confidence: float,
+                    confident: bool = True, now: Optional[float] = None):
+        """
+        Record one recognition outcome.
+
+        `person_id=None` means the recogniser looked at a usable face and did
+        NOT match it to anyone. That is evidence. The absence of a face is not
+        evidence and must never reach this method -- a person turning around
+        tells us nothing about who they are.
+        """
+        ts = now if now is not None else time.time()
+        self._identity_votes.append((ts, person_id, confidence, confident))
+        if len(self._identity_votes) > self._votes_max:
+            del self._identity_votes[:-self._votes_max]
+
+    def _votes_within(self, window: float, now: float):
+        return [v for v in self._identity_votes if now - v[0] <= window]
+
+    def votes_for(self, person_id: str, window: float,
+                  now: Optional[float] = None) -> List[tuple]:
+        now = now if now is not None else time.time()
+        return [v for v in self._votes_within(window, now) if v[1] == person_id]
+
+    def votes_against(self, person_id: Optional[str], window: float,
+                      now: Optional[float] = None) -> List[tuple]:
+        """
+        Evidence contradicting `person_id`: a confident match to somebody else,
+        or a definitive non-match. Callers must only feed confident outcomes
+        here -- borderline misses are recorded through the fail-streak
+        hysteresis instead, so they cannot unseat a confirmed identity.
+        """
+        now = now if now is not None else time.time()
+        return [
+            v for v in self._votes_within(window, now)
+            if v[1] != person_id and v[3]
+        ]
+
+    def unknown_votes(self, window: float, now: Optional[float] = None) -> List:
+        now = now if now is not None else time.time()
+        return [v for v in self._votes_within(window, now) if v[1] is None]
+
+    @staticmethod
+    def _spans(votes, min_span: float) -> bool:
+        """
+        True when the votes are spread over time rather than arriving as one
+        burst. A single well-lit pose can produce several consecutive frames
+        that all agree; that is one observation, not several.
+        """
+        if len(votes) < 2:
+            return min_span <= 0
+        return (max(v[0] for v in votes) - min(v[0] for v in votes)) >= min_span
+
+    def can_promote(self, person_id: str, need: int, window: float,
+                    min_span: float, now: Optional[float] = None) -> bool:
+        votes = self.votes_for(person_id, window, now)
+        return len(votes) >= need and self._spans(votes, min_span)
+
+    def can_demote(self, need: int, window: float, now: Optional[float] = None) -> bool:
+        return len(self.votes_against(self.person_id, window, now)) >= need
+
+    def can_confirm_unknown(self, need: int, window: float, min_span: float,
+                            now: Optional[float] = None) -> bool:
+        votes = self.unknown_votes(window, now)
+        return len(votes) >= need and self._spans(votes, min_span)
+
+    def clear_votes(self):
+        self._identity_votes.clear()
 
     def predict(self):
         """Predict the next position using simple linear motion."""

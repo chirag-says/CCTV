@@ -9,12 +9,14 @@ feeds the face gallery.
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
+from uuid import uuid4
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db.session import SessionLocal
-from app.db.models import UnknownFace
+from app.db.models import UnknownFace, UnknownFaceView
 from app.vision.recognizer import deserialize_encoding
 
 logger = logging.getLogger(__name__)
@@ -24,17 +26,90 @@ class UnknownService:
     """Read/write helpers for the unknown_faces table."""
 
     @staticmethod
-    def get_pending_encodings(limit: int = 500) -> List[Dict[str, Any]]:
+    def add_views(unknown_id: str, views: List[Any]) -> int:
         """
-        Load pending unknown identities that carry a usable encoding.
+        Persist additional face views for an unknown identity (migration 012).
 
-        Ordered by last_seen DESC and capped, so a long-lived deployment with
-        thousands of historical unknowns loads only the recently active ones
-        into each pipeline's registry.
+        These are what make an identity re-identifiable on a DIFFERENT camera
+        or after a restart. Before this existed the registry learned views in
+        memory and dropped them, so cross-camera re-identification measured
+        0.0%.
+
+        Bounded by UNKNOWN_REGISTRY_MAX_VIEWS: past that the identity already
+        covers enough poses, and every extra row costs a line in the search
+        matrix of every camera, forever.
+
+        Silently skips an identity whose row is gone (enrolled or dismissed
+        between the sighting and this write) -- the FK would reject it, and it
+        is not an error.
+        """
+        if not views:
+            return 0
+
+        from app.vision.recognizer import serialize_encoding
+
+        max_views = getattr(settings, "UNKNOWN_REGISTRY_MAX_VIEWS", 5)
+        db: Session = SessionLocal()
+        try:
+            exists = (
+                db.query(UnknownFace.id)
+                .filter(UnknownFace.id == unknown_id)
+                .first()
+            )
+            if not exists:
+                return 0
+
+            have = (
+                db.query(func.count(UnknownFaceView.id))
+                .filter(UnknownFaceView.unknown_face_id == unknown_id)
+                .scalar()
+            ) or 0
+            room = max_views - have
+            if room <= 0:
+                return 0
+
+            written = 0
+            for view in views[:room]:
+                blob = serialize_encoding(view)
+                if blob is None:
+                    continue
+                db.add(UnknownFaceView(
+                    id=str(uuid4()),
+                    unknown_face_id=unknown_id,
+                    encoding=blob,
+                ))
+                written += 1
+
+            if written:
+                db.commit()
+            return written
+        except Exception as e:
+            db.rollback()
+            logger.warning(f"Failed to store unknown views for {unknown_id}: {e}")
+            return 0
+        finally:
+            db.close()
+
+    @staticmethod
+    def get_pending_encodings(limit: int = None) -> List[Dict[str, Any]]:
+        """
+        Load pending unknown identities together with ALL of their face views.
+
+        Ordered by last_seen DESC and capped, so a long-lived deployment loads
+        the recently active people rather than everyone who ever walked past.
+
+        THE CAP IS LOAD-BEARING, AND WAS TOO SMALL. It defaulted to 500 against
+        9,624 pending identities -- each camera could see 5% of the pool, and
+        the shortfall was self-reinforcing: a stranger outside the resident set
+        cannot match, so a new identity is minted, so the pool grows further
+        past the cap. It is now settings.UNKNOWN_REGISTRY_LOAD_LIMIT.
 
         Rows without an encoding (body-only detections) are skipped: they
         cannot be matched against a face embedding.
         """
+        if limit is None:
+            limit = getattr(settings, "UNKNOWN_REGISTRY_LOAD_LIMIT", 5000)
+
         db: Session = SessionLocal()
         try:
             rows = (
@@ -47,15 +122,36 @@ class UnknownService:
                 .limit(limit)
                 .all()
             )
+            if not rows:
+                return []
+
+            ids = [r.id for r in rows]
+
+            # One query for every view of every identity, not one per identity:
+            # this runs on a refresh timer with thousands of ids.
+            views_by_id: Dict[str, List[Any]] = {}
+            for face_id, blob in (
+                db.query(UnknownFaceView.unknown_face_id, UnknownFaceView.encoding)
+                .filter(UnknownFaceView.unknown_face_id.in_(ids))
+                .all()
+            ):
+                arr = deserialize_encoding(blob)
+                if arr is not None:
+                    views_by_id.setdefault(face_id, []).append(arr)
 
             out: List[Dict[str, Any]] = []
             for r in rows:
-                arr = deserialize_encoding(r.face_encoding)
-                if arr is None:
-                    continue
+                encodings = views_by_id.get(r.id)
+                if not encodings:
+                    # No views row yet (created before migration 012 seeded, or
+                    # seeding skipped it). Fall back to the canonical first view.
+                    arr = deserialize_encoding(r.face_encoding)
+                    if arr is None:
+                        continue
+                    encodings = [arr]
                 out.append({
                     "id": r.id,
-                    "encoding": arr,
+                    "encodings": encodings,
                     "occurrence": r.occurrence or 1,
                     "first_seen": r.first_seen.timestamp() if r.first_seen else 0.0,
                     "last_seen": r.last_seen.timestamp() if r.last_seen else 0.0,

@@ -117,10 +117,10 @@ class UnknownRegistry:
     def __init__(
         self,
         match_threshold: float = 0.70,
-        max_entries: int = 500,
+        max_entries: int = None,
         sighting_cooldown: float = 30.0,
         refresh_interval: float = 60.0,
-        max_views: int = 5,
+        max_views: int = None,
         learn_min_distance: float = 0.30,
     ):
         """
@@ -141,16 +141,25 @@ class UnknownRegistry:
                 it is at least this far from every view already held. Closer
                 than this it is the same pose again and adds nothing but cost.
         """
+        from app.config import settings as _settings
         self.match_threshold = match_threshold
-        self.max_entries = max_entries
+        self.max_entries = (
+            max_entries if max_entries is not None
+            else getattr(_settings, "UNKNOWN_REGISTRY_MAX_ENTRIES", 5000)
+        )
         self.sighting_cooldown = sighting_cooldown
         self.refresh_interval = refresh_interval
-        self.max_views = max(1, max_views)
+        self.max_views = max(1, (
+            max_views if max_views is not None
+            else getattr(_settings, "UNKNOWN_REGISTRY_MAX_VIEWS", 5)
+        ))
         self.learn_min_distance = learn_min_distance
 
         self._identities: Dict[str, UnknownIdentity] = {}
         self._matrix: Optional[np.ndarray] = None   # (V, D) stacked views
         self._ids: List[str] = []                   # owner id per matrix row
+        self._owner_rows: Dict[str, np.ndarray] = {}  # id -> its row indices
+        self._n_rows = 0                            # rows in use in _matrix
         self._dirty = True
         self._last_refresh = 0.0
 
@@ -158,6 +167,14 @@ class UnknownRegistry:
         self._persistence_inbox: "queue.SimpleQueue[Tuple[str, Optional[str]]]" = (
             queue.SimpleQueue()
         )
+
+        # Views learned in memory that the database does not have yet.
+        # Drained by the pipeline and shipped to the EventQueue consumer.
+        # Before migration 012 these were never written anywhere, so every
+        # refresh, restart and second camera rebuilt each identity from its one
+        # frozen first view -- which is why cross-camera re-identification
+        # measured 0.0%.
+        self._unsaved_views: List[Tuple[str, np.ndarray]] = []
 
         # Counters for the overnight validation report.
         self.stat_resolved = 0
@@ -177,16 +194,59 @@ class UnknownRegistry:
         """
         if not self._identities:
             self._matrix, self._ids = None, []
+            self._owner_rows = {}
+            self._n_rows = 0
         else:
             rows: List[np.ndarray] = []
             owners: List[str] = []
+            owner_rows: Dict[str, List[int]] = {}
             for uid, ident in self._identities.items():
                 for view in ident.encodings:
+                    owner_rows.setdefault(uid, []).append(len(rows))
                     rows.append(view)
                     owners.append(uid)
-            self._matrix = np.vstack(rows)
+            # Allocated with headroom so a newly minted identity can be
+            # APPENDED rather than triggering another full rebuild. Minting is
+            # not rare, and vstacking 25k rows on each one measured at 40ms --
+            # more than a whole frame budget at 30fps.
+            need = len(rows)
+            capacity = max(1024, need * 2)
+            self._matrix = np.zeros((capacity, rows[0].shape[0]), dtype=np.float32)
+            self._matrix[:need] = np.vstack(rows)
+            self._n_rows = need
             self._ids = owners
+            # Row indices per identity, so _maybe_learn_view can find an
+            # identity's own rows by fancy-indexing instead of scanning every
+            # row of the matrix in Python. At the pre-Step-3.5 cap (500
+            # entries, mostly one view each) the scan was invisible; at 5000
+            # entries x 5 views it is ~25k iterations on every matched face.
+            self._owner_rows = {k: np.asarray(v, dtype=np.intp)
+                                for k, v in owner_rows.items()}
         self._dirty = False
+
+    def _append_row(self, uid: str, view: np.ndarray):
+        """
+        Add one view to the search matrix in place.
+
+        The alternative -- flagging dirty and rebuilding -- is O(total views)
+        and runs on the face path every time an identity is minted or learns a
+        pose. Amortised O(1) here, with a doubling rebuild when the buffer
+        fills.
+        """
+        if self._matrix is None or self._dirty:
+            self._dirty = True   # a full rebuild is already pending
+            return
+        if self._n_rows >= self._matrix.shape[0]:
+            self._dirty = True   # buffer full; _rebuild() will double it
+            return
+        self._matrix[self._n_rows] = view
+        self._ids.append(uid)
+        existing = self._owner_rows.get(uid)
+        idx = np.asarray([self._n_rows], dtype=np.intp)
+        self._owner_rows[uid] = (
+            idx if existing is None else np.concatenate([existing, idx])
+        )
+        self._n_rows += 1
 
     @staticmethod
     def _normalise(encoding: np.ndarray) -> Optional[np.ndarray]:
@@ -217,8 +277,8 @@ class UnknownRegistry:
 
         # Vectorised: one matvec scores every view of every identity, so cost
         # stays flat as the registry fills and best-of-K comes free.
-        if self._matrix is not None and len(self._ids):
-            distances = 1.0 - (self._matrix @ q)
+        if self._matrix is not None and self._n_rows:
+            distances = 1.0 - (self._matrix[:self._n_rows] @ q)
             best = int(np.argmin(distances))
             best_distance = float(distances[best])
             if best_distance < self.match_threshold:
@@ -237,7 +297,7 @@ class UnknownRegistry:
             unknown_id=uid, encodings=[q], label=label,
             first_seen=now, last_seen=now, occurrence=1, persisted=False,
         )
-        self._dirty = True
+        self._append_row(uid, q)
         self.stat_minted += 1
         self._evict()
         return uid, label, True
@@ -260,20 +320,45 @@ class UnknownRegistry:
         if ident.view_count >= self.max_views:
             return
 
-        own = min(
-            float(distances[i]) for i, owner in enumerate(self._ids)
-            if owner == ident.unknown_id
-        )
+        rows = self._owner_rows.get(ident.unknown_id)
+        if rows is None or not len(rows):
+            return
+        own = float(distances[rows].min())
         if own < self.learn_min_distance:
             return
 
         ident.encodings.append(q)
-        self._dirty = True
+        self._append_row(ident.unknown_id, q)
         self.stat_views_learned += 1
+        self._queue_view(ident, q)
         logger.debug(
             f"Unknown {ident.unknown_id[:8]}… learned view {ident.view_count} "
             f"(distance {own:.4f} from nearest existing view)"
         )
+
+    def _queue_view(self, ident: UnknownIdentity, view: np.ndarray):
+        """
+        Mark a view for persistence.
+
+        Only for identities that already have a DB row. An identity minted
+        this frame has no row to attach views to yet; its views are flushed by
+        mark_persisted() once the consumer reports the canonical id, so
+        nothing learned before persistence is lost.
+        """
+        if not ident.persisted:
+            return
+        self._unsaved_views.append((ident.unknown_id, view))
+
+    def drain_new_views(self) -> List[Tuple[str, np.ndarray]]:
+        """
+        Take the views awaiting a database write. Called from the camera
+        thread; the caller is responsible for shipping them to the consumer.
+        """
+        if not self._unsaved_views:
+            return []
+        out = self._unsaved_views
+        self._unsaved_views = []
+        return out
 
     def should_report_sighting(self, unknown_id: str) -> bool:
         """
@@ -355,6 +440,14 @@ class UnknownRegistry:
         else:
             ident.persisted = True
 
+        # Views learned before the row existed were skipped by _queue_view.
+        # Flush them now, minus encodings[0] -- that one IS the row's
+        # `face_encoding` and is seeded as view #1 by migration 012.
+        final = self._identities.get(canonical_id or unknown_id)
+        if final is not None and final.persisted:
+            for view in final.encodings[1:]:
+                self._unsaved_views.append((final.unknown_id, view))
+
     # ── Database sync ─────────────────────────────────────────────────────
 
     def maybe_refresh(self, loader) -> bool:
@@ -368,8 +461,13 @@ class UnknownRegistry:
 
         Args:
             loader: zero-arg callable returning
-                    [{"id": str, "encoding": bytes|ndarray, "occurrence": int,
+                    [{"id": str, "encodings": [ndarray, ...], "occurrence": int,
                       "first_seen": float, "last_seen": float}, ...]
+
+                    `encodings` is a LIST as of migration 012. Loading a single
+                    vector here was what silently reduced best-of-K matching to
+                    best-of-1 on every camera but the one that first saw the
+                    person. A legacy single "encoding" key is still accepted.
 
         Returns:
             True if a refresh ran.
@@ -390,15 +488,24 @@ class UnknownRegistry:
             uid = row.get("id")
             if not uid or uid in self._identities:
                 continue
-            enc = row.get("encoding")
-            if enc is None:
-                continue
-            arr = self._normalise(np.asarray(enc, dtype=np.float32))
-            if arr is None:
+            raw = row.get("encodings")
+            if raw is None:
+                legacy = row.get("encoding")
+                raw = [legacy] if legacy is not None else []
+            views = []
+            for enc in raw:
+                if enc is None:
+                    continue
+                arr = self._normalise(np.asarray(enc, dtype=np.float32))
+                if arr is not None:
+                    views.append(arr)
+                if len(views) >= self.max_views:
+                    break
+            if not views:
                 continue
             self._identities[uid] = UnknownIdentity(
                 unknown_id=uid,
-                encodings=[arr],
+                encodings=views,
                 label=make_label(uid),
                 first_seen=row.get("first_seen", now),
                 last_seen=row.get("last_seen", now),
@@ -410,9 +517,10 @@ class UnknownRegistry:
         if added:
             self._dirty = True
             self._evict()
+            total_views = sum(i.view_count for i in self._identities.values())
             logger.info(
                 f"UnknownRegistry: loaded {added} pending unknown identities "
-                f"({len(self._identities)} resident)"
+                f"({len(self._identities)} resident, {total_views} views)"
             )
         return True
 
@@ -440,10 +548,18 @@ class UnknownRegistry:
         ]
         evictable.sort(key=lambda i: i.last_seen)
 
-        overflow = len(self._identities) - self.max_entries
+        # Evict in BATCHES, down to a low-water mark, not just back to the
+        # cap. Trimming exactly one identity per mint means a full matrix
+        # rebuild per mint once the registry is full -- measured at ~40ms on a
+        # 25k-row matrix, which is more than a whole frame at 30fps. Dropping
+        # to 90% amortises that rebuild over the next ~10% of the cap.
+        target = int(self.max_entries * 0.9)
+        overflow = max(0, len(self._identities) - target)
+        removed = 0
         for ident in evictable[:overflow]:
             self._identities.pop(ident.unknown_id, None)
             self.stat_evicted += 1
+            removed += 1
 
         if len(self._identities) > self.max_entries:
             logger.warning(
@@ -451,7 +567,10 @@ class UnknownRegistry:
                 f"{self.max_entries} max, only {len(evictable)} evictable. "
                 f"Is the event queue consumer keeping up?"
             )
-        self._dirty = True
+        # Only when something actually went: an unconditional flag here made
+        # every over-cap mint rebuild the matrix even when nothing was removed.
+        if removed:
+            self._dirty = True
 
     def stats(self) -> Dict[str, int]:
         """Aggregate counters for the validation report. Cheap; no allocation."""

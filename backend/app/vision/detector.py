@@ -9,9 +9,11 @@ Detects faces using the SCRFD model from insightface, which provides:
 Replaces the old dlib/face_recognition-based detector.
 """
 
+import os
 import cv2
 import numpy as np
 import logging
+from pathlib import Path
 from typing import List, Tuple, Optional, Dict, Any
 from app.config import settings
 
@@ -21,6 +23,91 @@ logger = logging.getLogger(__name__)
 _insightface_app = None
 _insightface_lock = None
 _insightface_failed = False
+
+
+# DLL directories registered for onnxruntime's CUDA provider. Handles must be
+# kept alive: os.add_dll_directory() removes the directory again when the
+# returned object is closed or garbage collected.
+_cuda_dll_handles = []
+
+
+def _ensure_cuda_dll_path() -> list:
+    """
+    Make onnxruntime able to FIND the CUDA runtime, explicitly.
+
+    THE BUG THIS FIXES
+    onnxruntime-gpu does not ship the CUDA runtime. On this machine the only
+    copy of `cublasLt64_12.dll` lives in site-packages/torch/lib -- PyTorch
+    bundles its own. onnxruntime does not look there, so creating a CUDA
+    session fails with:
+
+        Error loading "onnxruntime_providers_cuda.dll" which depends on
+        "cublasLt64_12.dll" which is missing. (Error 126)
+
+    and silently falls back to CPU. Measured cost of that fallback: SCRFD at
+    det=1024 goes from 34 ms to 3,648 ms. A ~100x regression, on a code path
+    whose only symptom is "the cameras got slow".
+
+    It USUALLY worked anyway, for a bad reason: importing torch loads those
+    DLLs into the process, so if the hazard detector or ReID happened to
+    initialise before the first frame reached insightface, onnxruntime could
+    resolve them. Every `import torch` in this codebase is inside a function,
+    so that ordering was a race decided at startup -- and losing it cost 100x.
+
+    This makes the dependency explicit, so the outcome no longer depends on
+    which subsystem happened to wake up first.
+
+    Returns a description of what was registered, for logging.
+    """
+    added = []
+
+    # 1. THE ONE THAT ACTUALLY WORKS: import torch.
+    #
+    # Registering torch/lib with os.add_dll_directory() is NOT sufficient --
+    # measured: onnxruntime still resolved to CPUExecutionProvider. It loads
+    # its provider DLL with search flags that bypass user-added directories.
+    #
+    # Importing torch loads the CUDA runtime into the process by absolute
+    # path, after which Windows resolves onnxruntime's dependency on
+    # `cublasLt64_12.dll` against the already-loaded module. This is precisely
+    # what used to happen by luck, whenever some other subsystem imported
+    # torch before the first frame reached insightface. Doing it here makes it
+    # a guarantee instead of a race.
+    #
+    # torch is already a hard dependency (YOLO, ReID) and is imported anyway,
+    # so this moves the cost rather than adding it.
+    try:
+        import torch  # noqa: F401
+        added.append("torch runtime")
+    except Exception as e:
+        logger.warning(
+            f"Could not import torch to provide the CUDA runtime: {e}. "
+            f"onnxruntime may fall back to CPU (~100x slower)."
+        )
+
+    # 2. Belt and braces for the `nvidia-*-cu12` wheel layout, where the
+    #    runtime is installed properly rather than borrowed from torch.
+    if hasattr(os, "add_dll_directory") and not _cuda_dll_handles:
+        import importlib.util
+        candidates = []
+        for pkg, sub in (("torch", "lib"), ("nvidia", None)):
+            try:
+                spec = importlib.util.find_spec(pkg)
+                if not (spec and spec.submodule_search_locations):
+                    continue
+                root = Path(list(spec.submodule_search_locations)[0])
+                candidates.extend([root / sub] if sub else sorted(root.glob("*/bin")))
+            except Exception:
+                pass
+        for d in candidates:
+            try:
+                if d.is_dir():
+                    _cuda_dll_handles.append(os.add_dll_directory(str(d)))
+                    added.append(str(d))
+            except Exception as e:
+                logger.debug(f"Could not add DLL directory {d}: {e}")
+
+    return added
 
 
 def _get_insightface_app():
@@ -48,6 +135,12 @@ def _get_insightface_app():
             return None
 
         try:
+            # MUST run before onnxruntime creates a CUDA session: DLL search
+            # paths only affect libraries loaded after they are registered.
+            added = _ensure_cuda_dll_path()
+            if added:
+                logger.info(f"CUDA DLL search path: {', '.join(added)}")
+
             import insightface
             from insightface.app import FaceAnalysis
 
@@ -61,9 +154,14 @@ def _get_insightface_app():
             # use CPUExecutionProvider if CUDA fails, turning 10 ms inference
             # into 200-500 ms. Fail loudly instead.
             providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            # Only the modules whose output is actually read. See
+            # settings.INSIGHTFACE_MODULES for what the others cost.
+            modules_cfg = getattr(settings, "INSIGHTFACE_MODULES", "") or ""
+            allowed = [m.strip() for m in modules_cfg.split(",") if m.strip()]
             app = FaceAnalysis(
                 name=model_name,
                 providers=providers,
+                allowed_modules=allowed or None,
             )
             app.prepare(
                 ctx_id=0,  # GPU 0
@@ -100,6 +198,7 @@ def _get_insightface_app():
             logger.info(
                 f"InsightFace loaded successfully: {model_name}, "
                 f"det_size={det_size}, thresh={settings.INSIGHTFACE_DET_THRESH}, "
+                f"modules={sorted(app.models.keys())}, "
                 f"CUDA={'active' if _cuda_active else 'INACTIVE (CPU fallback!)'}"
             )
             return _insightface_app

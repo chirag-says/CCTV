@@ -3594,5 +3594,2361 @@
       }
     },
     "run_duration_ms": 1503.4
+  },
+  {
+    "timestamp": 1787828490.8064148,
+    "gallery_version": 172,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 2061.8
+  },
+  {
+    "timestamp": 1787896560.8752227,
+    "gallery_version": 196,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 7069.4
+  },
+  {
+    "timestamp": 1787896729.100735,
+    "gallery_version": 196,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 2971.6
+  },
+  {
+    "timestamp": 1787896912.9710753,
+    "gallery_version": 196,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 3654.8
+  },
+  {
+    "timestamp": 1787897223.634508,
+    "gallery_version": 196,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 987.7
+  },
+  {
+    "timestamp": 1787897369.2868638,
+    "gallery_version": 196,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 6368.6
+  },
+  {
+    "timestamp": 1787897589.5292766,
+    "gallery_version": 196,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 6464.0
+  },
+  {
+    "timestamp": 1787897735.5810065,
+    "gallery_version": 212,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 6250.1
+  },
+  {
+    "timestamp": 1787897775.38108,
+    "gallery_version": 220,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 6470.4
+  },
+  {
+    "timestamp": 1787898578.0000513,
+    "gallery_version": 228,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 1013.2
+  },
+  {
+    "timestamp": 1787900326.6781554,
+    "gallery_version": 242,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 1108.9
+  },
+  {
+    "timestamp": 1787900579.086763,
+    "gallery_version": 274,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 1047.0
+  },
+  {
+    "timestamp": 1787900654.2884383,
+    "gallery_version": 290,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 6219.6
+  },
+  {
+    "timestamp": 1787900959.9904842,
+    "gallery_version": 290,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 1251.8
+  },
+  {
+    "timestamp": 1787902543.602586,
+    "gallery_version": 299,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 4446.9
+  },
+  {
+    "timestamp": 1787902730.8584943,
+    "gallery_version": 307,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 861.7
+  },
+  {
+    "timestamp": 1787903016.533716,
+    "gallery_version": 307,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 1047.5
+  },
+  {
+    "timestamp": 1787903235.753965,
+    "gallery_version": 315,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 4436.4
+  },
+  {
+    "timestamp": 1787903284.7312908,
+    "gallery_version": 315,
+    "total_tests": 32,
+    "true_positives": 8,
+    "false_positives": 0,
+    "misses": 24,
+    "accuracy": 25.0,
+    "per_person": {
+      "bd1fcd50-e51e-44a7-9c85-0ba261347299": {
+        "name": "ishan",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "9ab755db-65d7-4dc2-b4a2-1099ccec259d": {
+        "name": "security 2",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "12a48fd9-3f11-45e8-8fbf-8f699d489c58": {
+        "name": "secutiry 3",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "081cca6f-0a02-4d54-ba7f-8d571c1d0460": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "39693116-548f-49fc-a58e-a35777560498": {
+        "name": "random",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "4dd29a64-50f4-4e55-a646-33c91eb44d67": {
+        "name": "security 4",
+        "tests": 2,
+        "correct": 2,
+        "wrong": 0,
+        "missed": 0
+      },
+      "00e71e75-29dc-44f1-8b09-bcb1d8187f08": {
+        "name": "un",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "c1a59473-1fc9-4611-be8a-603543ed5063": {
+        "name": "Abhitha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "3517ed0a-d5a9-49e3-9121-6bc82247b447": {
+        "name": "Dileep",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "1618c55e-a664-45fa-9fb2-18420b12ae27": {
+        "name": "Farhana",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "e1073429-a7a4-41e5-b1b0-02d066c6bfff": {
+        "name": "Geetha",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "720e62a1-620d-4c4d-b57f-4b3d52b832db": {
+        "name": "Niranjani",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "0cda289a-0ced-4d1f-9a07-398dcf9fb3e8": {
+        "name": "Reena",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "344306d7-1a49-4981-941e-29615f2a3c01": {
+        "name": "Chirag",
+        "tests": 2,
+        "correct": 0,
+        "wrong": 0,
+        "missed": 2
+      },
+      "d23b5284-3604-4b13-9604-ea87ae798bb6": {
+        "name": "lab",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      },
+      "3cc5fd7a-6894-4cf3-b6d6-7199dca7953e": {
+        "name": "Security 5",
+        "tests": 2,
+        "correct": 1,
+        "wrong": 0,
+        "missed": 1
+      }
+    },
+    "run_duration_ms": 823.0
   }
 ]

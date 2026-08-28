@@ -49,6 +49,30 @@ class TrackState:
         return time.time() - self.last_seen
 
 
+@dataclass
+class UnidentifiedState:
+    """
+    Someone the cameras can see but have never identified.
+
+    Keyed by the integer ByteTrack id, NOT by a synthetic string identity.
+    The `anon:<camera>:<track>` handle this replaces was a string pretending
+    to be a person: it entered `_active_tracks` and `_cooldowns` beside real
+    identities, and because it embedded the track id it minted a brand-new
+    "person" every time ByteTrack recreated the track.
+    """
+    track_id: int
+    camera_id: str
+    first_seen: float
+    last_seen: float
+    detection_count: int = 1
+    entry_confirmed: bool = False
+    last_centroid: Optional[Tuple[int, int]] = None
+
+    @property
+    def duration(self) -> float:
+        return self.last_seen - self.first_seen
+
+
 class PersonTracker:
     """
     Tracks persons' entry and exit based on face detection events.
@@ -69,6 +93,8 @@ class PersonTracker:
         cooldown_period: int = 60,  # Prevents re-entry detection for 60s after exit
         on_entry: Optional[Callable] = None,
         on_exit: Optional[Callable] = None,
+        on_unidentified_entry: Optional[Callable] = None,
+        on_unidentified_exit: Optional[Callable] = None,
     ):
         self.entry_threshold = entry_threshold or settings.ENTRY_THRESHOLD_SECONDS
         self.exit_threshold = exit_threshold or settings.EXIT_THRESHOLD_SECONDS
@@ -83,6 +109,19 @@ class PersonTracker:
         # Cooldown: person_id -> timestamp when cooldown expires
         self._cooldowns: Dict[str, float] = {}
         self._lock = threading.RLock()
+
+        # -- Unidentified occupants (Step 1.5) --------------------
+        # A SEPARATE lane, keyed by ByteTrack id. Nothing here ever reaches
+        # `_active_tracks`, so attendance, presence and journeys keep meaning
+        # exactly what they meant before: things that happened to a person we
+        # can name.
+        self.on_unidentified_entry = on_unidentified_entry
+        self.on_unidentified_exit = on_unidentified_exit
+        self._unidentified: Dict[int, UnidentifiedState] = {}
+        self._unidentified_entry_sec = getattr(settings, "UNIDENTIFIED_ENTRY_SEC", 5.0)
+        self._unidentified_exit_sec = getattr(settings, "UNIDENTIFIED_EXIT_SEC", 15.0)
+        self._unidentified_max = getattr(settings, "UNIDENTIFIED_MAX_TRACKS", 200)
+        self._total_unidentified = 0
 
         # Statistics
         self._total_entries = 0
@@ -256,7 +295,159 @@ class PersonTracker:
                 del self._active_tracks[pid]
                 self._cooldowns[pid] = now + self.cooldown_period
 
+            self._prune_cooldowns(now)
+
         return exit_events
+
+    def _prune_cooldowns(self, now: float):
+        """
+        Drop cooldowns that have expired.
+
+        Without this the map only ever shrank when that EXACT person_id was
+        seen again (on_detection) or on a full reset. For enrolled people that
+        is self-limiting -- there are only so many of them. For any id that
+        never repeats it is a slow leak, which is precisely what the old
+        `anon:<camera>:<track>` handles were: a fresh key every time ByteTrack
+        recreated a track. Step 1.5 removes that emitter; this makes the
+        structure safe regardless of what feeds it.
+        """
+        if not self._cooldowns:
+            return
+        expired = [pid for pid, until in self._cooldowns.items() if now >= until]
+        for pid in expired:
+            del self._cooldowns[pid]
+
+    # -- Unidentified occupants -----------------------------------
+
+    def on_unidentified(
+        self,
+        track_id: int,
+        camera_id: str,
+        centroid: Optional[Tuple[int, int]] = None,
+        timestamp: Optional[float] = None,
+    ) -> Optional[dict]:
+        """
+        Record a sighting of a tracked person we cannot name.
+
+        Counted, never named. This deliberately does NOT touch
+        `_active_tracks`: everything downstream of that dict -- attendance,
+        presence, journeys, campus summary -- answers questions about a
+        specific person, and an unidentified body cannot answer them.
+
+        Returns an occupancy-start event once the track has been visible for
+        UNIDENTIFIED_ENTRY_SEC, else None.
+        """
+        ts = timestamp or time.time()
+
+        with self._lock:
+            state = self._unidentified.get(track_id)
+            if state is None:
+                if len(self._unidentified) >= self._unidentified_max:
+                    # Bounded by construction. Evict the stalest rather than
+                    # refusing, so a camera watching a crowd keeps reporting
+                    # the people currently in front of it.
+                    oldest = min(self._unidentified.values(), key=lambda s: s.last_seen)
+                    del self._unidentified[oldest.track_id]
+                self._unidentified[track_id] = UnidentifiedState(
+                    track_id=track_id,
+                    camera_id=camera_id,
+                    first_seen=ts,
+                    last_seen=ts,
+                    last_centroid=centroid,
+                )
+                return None
+
+            state.last_seen = ts
+            state.detection_count += 1
+            state.camera_id = camera_id
+            if centroid is not None:
+                state.last_centroid = centroid
+
+            if state.entry_confirmed:
+                return None
+            if state.duration < self._unidentified_entry_sec:
+                return None
+
+            state.entry_confirmed = True
+            self._total_unidentified += 1
+            event = self._unidentified_event(state, "unidentified_entry", state.first_seen)
+
+        # Callback outside the lock -- it reaches the event queue.
+        if self.on_unidentified_entry:
+            self.on_unidentified_entry(event)
+        return event
+
+    @staticmethod
+    def _unidentified_event(state: "UnidentifiedState", subtype: str, ts: float) -> dict:
+        """
+        Shape an occupancy event.
+
+        event_type is 'detection', never 'entry'/'exit': every attendance,
+        journey and analytics query filters on those two, and an unidentified
+        body must not be able to inflate footfall. The subtype carries the
+        real meaning.
+        """
+        return {
+            "event_type": "detection",
+            "subtype": subtype,
+            "camera_id": state.camera_id,
+            "confidence": 0.0,
+            "timestamp": datetime.fromtimestamp(ts, tz=timezone.utc).isoformat(),
+            "track_id": state.track_id,
+            "detection_count": state.detection_count,
+            "duration_sec": int(state.last_seen - state.first_seen),
+            "unidentified": True,
+        }
+
+    def expire_unidentified(self, current_time: Optional[float] = None) -> List[dict]:
+        """
+        Close out unidentified tracks that have not been seen recently.
+
+        Time-based, so the map cannot grow without bound however badly the
+        tracker fragments.
+        """
+        now = current_time or time.time()
+        events = []
+
+        with self._lock:
+            gone = [
+                tid for tid, st in self._unidentified.items()
+                if now - st.last_seen >= self._unidentified_exit_sec
+            ]
+            for tid in gone:
+                state = self._unidentified.pop(tid)
+                if state.entry_confirmed:
+                    events.append(
+                        self._unidentified_event(
+                            state, "unidentified_exit", state.last_seen
+                        )
+                    )
+
+        for event in events:
+            if self.on_unidentified_exit:
+                self.on_unidentified_exit(event)
+        return events
+
+    def get_unidentified_centroids(self) -> Dict[str, Tuple[int, int]]:
+        """
+        {"track:<id>": (cx, cy)} for unidentified occupants.
+
+        The key is namespaced so it can be merged with get_person_centroids()
+        for crowd density -- which counts bodies -- without ever colliding
+        with a real person_id.
+        """
+        with self._lock:
+            return {
+                f"track:{tid}": st.last_centroid
+                for tid, st in self._unidentified.items()
+                if st.last_centroid is not None
+            }
+
+    @property
+    def unidentified_count(self) -> int:
+        """Unidentified people currently considered present."""
+        with self._lock:
+            return sum(1 for st in self._unidentified.values() if st.entry_confirmed)
 
     def get_active_persons(self) -> List[dict]:
         """Get list of currently tracked (present) persons."""
@@ -341,6 +532,7 @@ class PersonTracker:
         with self._lock:
             self._active_tracks.clear()
             self._cooldowns.clear()
+            self._unidentified.clear()
             logger.info("Tracker state reset")
 
     @property
@@ -351,4 +543,7 @@ class PersonTracker:
             "total_entries": self._total_entries,
             "total_exits": self._total_exits,
             "cooldowns_active": len(self._cooldowns),
+            "unidentified_present": self.unidentified_count,
+            "unidentified_tracked": len(self._unidentified),
+            "total_unidentified": self._total_unidentified,
         }

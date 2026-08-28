@@ -43,7 +43,7 @@ from app.config import settings
 from app.vision.detector import FaceDetector
 from app.vision.recognizer import FaceRecognizer, MatchResult
 from app.vision.tracker import PersonTracker
-from app.vision.bytetrack import ByteTracker, STrack, VehicleByteTracker, VehicleSTrack
+from app.vision.bytetrack import ByteTracker, STrack, IdentityState, VehicleByteTracker, VehicleSTrack
 from app.vision.identity import IdentityLedger
 from app.vision.unknown_registry import UnknownRegistry
 
@@ -59,6 +59,7 @@ from app.vision.hazard_detector import HazardDetector
 from app.vision.anpr import PlateRecognizer
 from app.vision.traffic import TrafficMonitor
 from app.vision.reid import get_reid_tracker, ReIDTracker
+from app.vision.unknown_registry import make_label as make_unknown_label
 from app.vision.stream_health import StreamHealthMonitor, StreamState
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Internal: Utilities Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
@@ -109,6 +110,8 @@ class VisionPipeline:
         self.tracker = PersonTracker(
             on_entry=self._handle_entry_event,
             on_exit=self._handle_exit_event,
+            on_unidentified_entry=self._handle_unidentified_event,
+            on_unidentified_exit=self._handle_unidentified_event,
         )
 
         # ByteTrack frame-to-frame face tracker
@@ -127,12 +130,16 @@ class VisionPipeline:
             )
             self._tracking_mode = "face"
         self._person_fallback_logged = False
+        # Step 2 vote thresholds, read once (this is the per-frame hot path).
+        self._promote_votes = getattr(settings, "IDENTITY_PROMOTE_VOTES", 2)
+        self._promote_window = getattr(settings, "IDENTITY_PROMOTE_WINDOW_SEC", 8.0)
+        self._promote_min_span = getattr(settings, "IDENTITY_PROMOTE_MIN_SPAN_SEC", 0.5)
+        self._demote_votes = getattr(settings, "IDENTITY_DEMOTE_VOTES", 3)
+        self._demote_window = getattr(settings, "IDENTITY_DEMOTE_WINDOW_SEC", 10.0)
+        self._unknown_confirm_votes = getattr(settings, "UNKNOWN_CONFIRM_VOTES", 3)
+        self._unknown_confirm_window = getattr(settings, "UNKNOWN_CONFIRM_WINDOW_SEC", 6.0)
+        self._unknown_confirm_span = getattr(settings, "UNKNOWN_CONFIRM_MIN_SPAN_SEC", 1.0)
         self._frame_person_dets: List[dict] = []
-        # Centroids of person tracks carrying NO identity. In person mode these
-        # emit no presence event (see the face_too_small branch), so they would
-        # otherwise be invisible to crowd detection -- which counts people, not
-        # identities, and was previously fed only by detected faces.
-        self._anon_track_centroids: Dict[str, Tuple[int, int]] = {}
 
         # Identity layer, sitting ABOVE the tracker. ByteTrack stays
         # geometry-only; this owns the track_id -> identity binding.
@@ -182,13 +189,6 @@ class VisionPipeline:
         self._jpeg_quality_override = None  # None = use default
         self._frame_skip_override = None    # None = use default
         self._skip_low_priority = False     # Skip P3 work (attributes, suggestions)
-
-        # ── Unknown Maturation Gate ──────────────────────────────────────────────────────────
-        # A track must remain unrecognised for UNKNOWN_MATURATION_SEC before
-        # the unknown snapshot is persisted. Prevents premature unknowns when
-        # recognition hasn't stabilised yet.  Maps track_id → time.monotonic()
-        # of the first frame where the track was seen as unknown.
-        self._unknown_maturation: Dict[int, float] = {}
 
         # ── Safety & Security Modules ────────────────────────────────────────────────────────
         # Attribute Recognition (gender + clothing)
@@ -639,7 +639,6 @@ class VisionPipeline:
 
         # Collect all boxes to draw
         boxes_to_draw = []
-        self._anon_track_centroids = {}
 
         for track in active_tracks:
             # THE BOX WE DRAW vs THE BOX WE RECOGNISE.
@@ -694,8 +693,12 @@ class VisionPipeline:
                 # is facing away) or it is too small to embed. Recognition is
                 # skipped either way -- but the person is still demonstrably
                 # HERE, which is the whole Step 1 distinction.
-                label = track.person_name if track.person_name else f"Track #{track.track_id}"
-                color = (0, 200, 0) if track.person_name else (255, 165, 0)
+                if track.person_name:
+                    label, color = track.person_name, (0, 200, 0)
+                elif track.unknown_label:
+                    label, color = track.unknown_label, (0, 140, 255)
+                else:
+                    label, color = f"Track #{track.track_id}", (255, 165, 0)
                 boxes_to_draw.append((draw_location, label, color, 0.0))
 
                 if track.person_id:
@@ -712,31 +715,33 @@ class VisionPipeline:
                         confidence=track.recognition_confidence,
                         centroid=centroid,
                     )
-                elif track_source == "face":
-                    # FACE MODE ONLY. `anon:` marks a TRACK HANDLE, not an
-                    # identity: a face too small to embed still counts as
-                    # someone being present. The prefix lets
-                    # _process_pipeline_event drop it rather than filing a
-                    # ByteTrack id into detection_events.metadata_json.
+                elif track.unknown_id:
+                    # A stranger we can nonetheless tell apart: UnknownRegistry
+                    # gave them a stable id that survives restarts and is the
+                    # same on every camera. They are identified, just not known,
+                    # so they keep refreshing presence under that id rather than
+                    # decaying into an anonymous body.
                     self.tracker.on_detection(
-                        person_id=f"anon:{self.camera_id}:{track.track_id}",
-                        person_name=label,
+                        person_id=track.unknown_id,
+                        person_name=track.unknown_label or label,
                         camera_id=self.camera_id,
                         confidence=0.0,
                         centroid=centroid,
                     )
-                # PERSON MODE, no identity: drawn, but nothing is claimed and
-                # no presence is emitted. Handing every back-turned body an
-                # `anon:` handle would mint a fresh one on each track
-                # recreation, and PersonTracker._cooldowns is only ever pruned
-                # when that exact id returns -- it has no time-based expiry, so
-                # the map would grow without bound. Giving unidentified person
-                # tracks a real lifecycle is Step 1.5.
-                #
-                # It still counts as a BODY for crowd detection, which asks
-                # "how many people are here", not "who are they".
-                if track_source == "person":
-                    self._anon_track_centroids[f"track:{track.track_id}"] = centroid
+                else:
+                    # No identity of any kind. Recorded as an UNIDENTIFIED
+                    # OCCUPANT: counted, never named, and kept in a lane of its
+                    # own. The `anon:<camera>:<track>` handle this replaces was
+                    # a string pretending to be a person -- it sat in
+                    # PersonTracker._active_tracks beside real identities, and
+                    # because it embedded the ByteTrack id it minted a fresh
+                    # "person" on every track recreation, one that
+                    # PersonTracker._cooldowns then held forever.
+                    self.tracker.on_unidentified(
+                        track_id=track.track_id,
+                        camera_id=self.camera_id,
+                        centroid=centroid,
+                    )
                 continue
 
             if needs_recognition and best_embedding is not None:
@@ -758,29 +763,90 @@ class VisionPipeline:
                     )
 
                 if result.matched:
-                    # Identity swap detection: a single track flipping directly
-                    # from one KNOWN person to a different KNOWN person, without
-                    # passing through unknown. This is the metric that must not
-                    # regress once identity recovery is enabled in Milestone 2.
-                    if track.person_id and track.person_id != result.person_id:
+                    prev_person_id = track.person_id
+                    prev_person_name = track.person_name
+
+                    # Evidence first, verdict second (Step 2).
+                    track.record_vote(result.person_id, result.confidence)
+
+                    # A CONFIRMED identity is not overwritten by a single
+                    # match to somebody else -- that is the identity-swap
+                    # failure mode. It takes the same confident contradiction
+                    # that demotion takes, accumulated below.
+                    contradicts = (
+                        track.identity_state == IdentityState.KNOWN
+                        and track.person_id
+                        and track.person_id != result.person_id
+                    )
+                    if contradicts and not track.can_demote(
+                        self._demote_votes, self._demote_window
+                    ):
+                        logger.info(
+                            f"[{self.camera_id}] HOLDING {track.person_name} on "
+                            f"T{track.track_id} against {result.person_name} "
+                            f"(conf={result.confidence:.2f}): "
+                            f"{len(track.votes_against(track.person_id, self._demote_window))}"
+                            f"/{self._demote_votes} contradicting votes"
+                        )
+                        boxes_to_draw.append((
+                            draw_location, track.person_name, (0, 200, 0),
+                            track.recognition_confidence,
+                        ))
+                        self.tracker.on_detection(
+                            person_id=track.person_id,
+                            person_name=track.person_name,
+                            camera_id=self.camera_id,
+                            confidence=track.recognition_confidence,
+                            centroid=centroid,
+                        )
+                        continue
+
+                    # Identity swap: a track flipping straight from one known
+                    # person to a different known person, without passing
+                    # through unknown. Recorded HERE, after the hold check, so
+                    # the metric counts swaps that happened -- not swaps the
+                    # vote threshold just prevented. It is the number that says
+                    # whether body-box association is mixing people up.
+                    if prev_person_id and prev_person_id != result.person_id:
                         profiler.record_identity_swap(
-                            track.person_name or "?", result.person_name or "?",
+                            prev_person_name or "?", result.person_name or "?",
                             track.track_id,
                         )
                         logger.warning(
                             f"[{self.camera_id}] IDENTITY SWAP on T{track.track_id}: "
-                            f"{track.person_name} -> {result.person_name} "
+                            f"{prev_person_name} -> {result.person_name} "
                             f"(distance={result.distance:.4f}, margin={result.margin:.4f})"
                         )
+
                     track.person_id = result.person_id
                     track.person_name = result.person_name
+
+                    # A track that was a confirmed stranger and is now a named
+                    # person leaves a stranded unknown identity behind. Record
+                    # the link rather than orphaning it -- see
+                    # _report_unknown_resolved.
+                    if track.unknown_id:
+                        self._report_unknown_resolved(track, result)
+                    track.unknown_id = None
+                    track.unknown_label = None
+
+                    # Promotion needs several confident matches for the SAME
+                    # person, spread over time. One good pose producing three
+                    # consecutive agreeing frames is one observation.
+                    if track.identity_state != IdentityState.KNOWN and track.can_promote(
+                        result.person_id, self._promote_votes,
+                        self._promote_window, self._promote_min_span,
+                    ):
+                        track.identity_state = IdentityState.KNOWN
+                        logger.info(
+                            f"[{self.camera_id}] IDENTITY CONFIRMED: "
+                            f"{result.person_name} on T{track.track_id}"
+                        )
                     # Update recognition cache on the track
                     track.recognition_confidence = result.confidence
                     track.recognition_time = time.time()
                     track.reset_fail_streak()
                     track.record_distance(result.distance)
-                    # Clear maturation gate — identity settled to known
-                    self._unknown_maturation.pop(track.track_id, None)
                     if result.confidence >= self._recognition_lock_confidence:
                         track.recognition_locked = True
 
@@ -864,8 +930,18 @@ class VisionPipeline:
                         )
                     elif track.person_id and track.person_name and result.in_gray_zone:
                         # Gray zone: borderline failure — apply hysteresis
+                        # Recorded as NON-confident: it counts toward confirming a
+                        # stranger, never toward unseating a known identity.
+                        track.record_vote(None, result.confidence, confident=False)
                         track.identity_fail_streak += 1
-                        if track.identity_fail_streak < settings.IDENTITY_GRACE_FRAMES:
+                        # ASYMMETRY. A gray-zone miss is the ambiguous middle:
+                        # a usable face the recogniser could not decide on. It
+                        # is enough to unseat a PROVISIONAL guess, and it is
+                        # not enough to unseat a verdict that several confident
+                        # matches already earned. Only confident contradiction
+                        # does that, and it is counted separately.
+                        if (track.identity_fail_streak < settings.IDENTITY_GRACE_FRAMES
+                                or track.identity_state == IdentityState.KNOWN):
                             # Keep previous identity (grace period)
                             logger.info(
                                 f"⏳ HYSTERESIS: keeping {track.person_name} "
@@ -893,11 +969,54 @@ class VisionPipeline:
                             track.person_name = None
                             track.recognition_locked = False
                             track.identity_fail_streak = 0
+                            # The verdict is withdrawn too. Leaving state at
+                            # KNOWN with no person_id would make the next
+                            # frame's promotion check skip entirely.
+                            track.identity_state = IdentityState.PROVISIONAL
+                            track.clear_votes()
                             boxes_to_draw.append((draw_location, "UNKNOWN", (0, 0, 255), 0.0))
-                            self._handle_unknown_face(clean_frame, frame, face_location, best_embedding, centroid, track_id=track.track_id, landmarks=best_landmarks)
+                            track.unknown_id = self._handle_unknown_face(
+                                clean_frame, frame, face_location, best_embedding,
+                                centroid, track_id=track.track_id,
+                                landmarks=best_landmarks,
+                                confirmed=self._confirm_unknown(track),
+                            )
+                            track.unknown_label = (
+                                make_unknown_label(track.unknown_id)
+                                if track.unknown_id else None
+                            )
                     else:
-                        # Definitive failure (distance far above threshold, or
-                        # no previous identity) — immediate unknown
+                        # Definitive failure: a usable face, far above the
+                        # threshold. This IS confident contradiction, so it is
+                        # recorded as a vote against whoever the track claims.
+                        track.record_vote(None, result.confidence)
+
+                        if (track.identity_state == IdentityState.KNOWN
+                                and track.person_id
+                                and not track.can_demote(
+                                    self._demote_votes, self._demote_window)):
+                            # Not yet enough contradiction to overturn a
+                            # confirmed identity. Before Step 2 a single frame
+                            # did this.
+                            logger.info(
+                                f"[{self.camera_id}] HOLDING {track.person_name} "
+                                f"(T{track.track_id}) on definitive miss "
+                                f"{len(track.votes_against(track.person_id, self._demote_window))}"
+                                f"/{self._demote_votes}"
+                            )
+                            boxes_to_draw.append((
+                                draw_location, track.person_name, (0, 200, 0),
+                                track.recognition_confidence,
+                            ))
+                            self.tracker.on_detection(
+                                person_id=track.person_id,
+                                person_name=track.person_name,
+                                camera_id=self.camera_id,
+                                confidence=track.recognition_confidence,
+                                centroid=centroid,
+                            )
+                            continue
+
                         if track.person_id and track.person_name:
                             logger.info(
                                 f"🚫 DEFINITE MISS: dropping {track.person_name} "
@@ -908,8 +1027,22 @@ class VisionPipeline:
                             track.person_name = None
                             track.recognition_locked = False
                             track.identity_fail_streak = 0
+                            # The verdict is withdrawn too. Leaving state at
+                            # KNOWN with no person_id would make the next
+                            # frame's promotion check skip entirely.
+                            track.identity_state = IdentityState.PROVISIONAL
+                            track.clear_votes()
                         boxes_to_draw.append((draw_location, "UNKNOWN", (0, 0, 255), 0.0))
-                        self._handle_unknown_face(clean_frame, frame, face_location, best_embedding, centroid, track_id=track.track_id, landmarks=best_landmarks)
+                        track.unknown_id = self._handle_unknown_face(
+                            clean_frame, frame, face_location, best_embedding,
+                            centroid, track_id=track.track_id,
+                            landmarks=best_landmarks,
+                            confirmed=self._confirm_unknown(track),
+                        )
+                        track.unknown_label = (
+                            make_unknown_label(track.unknown_id)
+                            if track.unknown_id else None
+                        )
             elif not needs_recognition and track.person_id and track.person_name:
                 # Reuse existing identity from ByteTrack cache (skip ArcFace)
                 profiler.record_cache_hit()
@@ -1324,7 +1457,7 @@ class VisionPipeline:
             # Guard on identified + unidentified together: five strangers
             # with their backs to the camera are a crowd, and none of them
             # would appear in `centroids`.
-            anon_centroids = dict(self._anon_track_centroids)
+            anon_centroids = self.tracker.get_unidentified_centroids()
             if self.crowd_detector and (len(centroids) + len(anon_centroids)) >= 2:
                 recent_centroids = {}
                 active_tracks_snapshot = self.tracker.get_active_track_times()
@@ -1532,6 +1665,69 @@ class VisionPipeline:
     #  Original Pipeline Methods (unchanged logic)
     # ═════════════════════════════════════════════════════════════════════════════
 
+    def _confirm_unknown(self, track) -> bool:
+        """
+        Has this track earned the verdict "stranger"?
+
+        Replaces the UNKNOWN_MATURATION_SEC timer, which a single bad angle
+        held for half a second could satisfy. Confirmation now needs several
+        non-matches SPREAD OVER TIME, so one unlucky pose cannot mint an
+        identity for somebody the system already knows.
+
+        This is what stops most stranded unknowns from existing at all: no
+        confirmation, no unknown_faces row to strand.
+        """
+        if track.identity_state == IdentityState.UNKNOWN_CONFIRMED:
+            return True
+        if track.can_confirm_unknown(
+            self._unknown_confirm_votes,
+            self._unknown_confirm_window,
+            self._unknown_confirm_span,
+        ):
+            track.identity_state = IdentityState.UNKNOWN_CONFIRMED
+            return True
+        track.identity_state = IdentityState.UNKNOWN_CANDIDATE
+        return False
+
+    def _report_unknown_resolved(self, track, result):
+        """
+        A track that was a confirmed stranger turned out to be someone enrolled.
+
+        The `unknown_faces` row already written is now a stranger who is
+        actually Rahul. It must not be silently orphaned in the review queue.
+
+        We do NOT auto-merge it into the gallery. The repository's rule
+        throughout is that the machine proposes and a human disposes, and an
+        automatic merge on a single track's say-so is exactly how a gallery
+        gets poisoned. Instead the observed link is recorded as an event, so
+        it is durable, queryable, and available to the existing review flow --
+        which already knows how to take an unknown_faces row and merge it into
+        a person once somebody approves it.
+
+        Same-track evidence is much stronger than the offline embedding
+        similarity the review worker computes: these are literally the same
+        person, seen continuously, within one tracklet.
+        """
+        payload = {
+            "event_type": "detection",
+            "subtype": "unknown_resolved",
+            "camera_id": self.camera_id,
+            "confidence": result.confidence,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "unknown_person_id": track.unknown_id,
+            "resolved_person_id": result.person_id,
+            "resolved_person_name": result.person_name,
+            "track_id": track.track_id,
+            "distance": float(result.distance),
+        }
+        logger.info(
+            f"[{self.camera_id}] UNKNOWN RESOLVED: {track.unknown_label} "
+            f"(T{track.track_id}) is {result.person_name} "
+            f"(conf={result.confidence:.2f}) -- proposing merge for review"
+        )
+        if self.on_event:
+            self.on_event(payload)
+
     def _handle_unknown_face(
         self,
         frame: np.ndarray,
@@ -1541,9 +1737,15 @@ class VisionPipeline:
         centroid: Optional[Tuple[int, int]] = None,
         track_id: Optional[int] = None,
         landmarks: Optional[np.ndarray] = None,
-    ):
+        confirmed: bool = True,
+    ) -> Optional[str]:
         """
         Handle an unrecognised face: resolve to a STABLE identity, track, queue.
+
+        Returns the stable unknown id so the caller can bind it to the track.
+        A stranger who then turns away keeps that id instead of decaying into
+        an anonymous body -- which would count one human in both the
+        identified and unidentified lanes during a single visit.
 
         The identity comes from UnknownRegistry, which is seeded from the
         `unknown_faces` table. That is what makes the id survive a restart and
@@ -1551,14 +1753,24 @@ class VisionPipeline:
         sighting session and the label came from a per-pipeline counter, so the
         same stranger became a different "Unknown #1" every time.
 
-        Time-based maturation gate (UNKNOWN_MATURATION_SEC):
-          - A track must remain unrecognised for 500ms before persisting.
-          - Prevents premature unknowns when recognition hasn't stabilised.
-          - FPS-independent: uses wall-clock time, not frame count.
+        CONFIRMATION GATE (Step 2)
+        `confirmed` is the caller's verdict from N-of-M voting: several
+        non-matches spread over time, not one bad angle held for half a
+        second. Only a confirmed stranger gets an unknown_faces row, which is
+        what keeps someone who is merely hard to recognise from being minted
+        as a new identity.
+
+        Presence and the registry id are assigned either way -- an
+        unconfirmed stranger still shows up in "People Present"; they just do
+        not become a permanent row yet.
+
+        Call sites with no track (YOLO-assist, hybrid) pass confirmed=True:
+        they have no track state to vote with, which is the pre-Step-2
+        behaviour for those paths.
         """
         unknown_id, unknown_label, is_new = self.unknown_registry.resolve(encoding)
         if unknown_id is None:
-            return  # unusable (zero-norm) embedding
+            return None  # unusable (zero-norm) embedding
 
         # Appears in "People Present" under the stable identity either way.
         self.tracker.on_detection(
@@ -1570,23 +1782,27 @@ class VisionPipeline:
         )
 
         if not self.on_unknown:
-            return
+            return unknown_id
 
-        # ── Time-based maturation gate ──────────────────────────────
-        # Only applies when we have a track_id (ByteTrack-managed faces).
-        # Non-tracked call sites (YOLO-assist, hybrid) pass track_id=None
-        # and bypass the gate.
-        if track_id is not None and is_new:
-            now = time.monotonic()
-            if track_id not in self._unknown_maturation:
-                # First unknown frame for this track — start the timer
-                self._unknown_maturation[track_id] = now
-                return  # don't persist yet
-            elapsed = now - self._unknown_maturation[track_id]
-            if elapsed < settings.UNKNOWN_MATURATION_SEC:
-                return  # still maturing — identity hasn't stabilised
-            # Maturation complete — remove from dict, proceed to persist
-            self._unknown_maturation.pop(track_id, None)
+        # ── Confirmation gate ───────────────────────────────────────
+        # Only applies to tracked faces creating a NEW identity. A sighting of
+        # an identity that already exists is not in question.
+        if track_id is not None and is_new and not confirmed:
+            return unknown_id  # identified for this track, not yet persisted
+
+        # Views the registry learned since the last call. They must reach the
+        # database or they are lost on the next refresh -- which is exactly why
+        # cross-camera re-identification measured 0.0% before migration 012.
+        # Shipped independently of the sighting cooldown and of is_new: a
+        # person can easily be gone before the next sighting report is due.
+        new_views = self.unknown_registry.drain_new_views()
+        if new_views:
+            self.on_unknown({
+                "views_only": True,
+                "views": new_views,
+                "camera_id": self.camera_id,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            })
 
         if is_new:
             # First time anyone has seen this person. Copy the crops now: the
@@ -1629,6 +1845,8 @@ class VisionPipeline:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "sighting_only": True,
             })
+
+        return unknown_id
 
     def _pose_metadata(
         self,
@@ -1706,11 +1924,31 @@ class VisionPipeline:
         if self.on_event:
             self.on_event(event)
 
+    def _handle_unidentified_event(self, event: dict):
+        """
+        An unidentified occupant started or stopped being present.
+
+        Deliberately does NOT run the attribute enrichment that
+        _handle_entry_event does: that is keyed on person_id, and this event
+        has none by definition.
+
+        Emitted as event_type='detection' with an 'unidentified_*' subtype, so
+        main.py routes it at NORMAL priority (droppable under load, which is
+        right for occupancy telemetry) and no attendance/journey/footfall
+        query can pick it up -- they all filter on event_type in
+        ('entry', 'exit').
+        """
+        if not getattr(settings, "UNIDENTIFIED_EVENTS_ENABLED", True):
+            return
+        if self.on_event:
+            self.on_event(event)
+
     def _check_periodic_exits(self):
         """Periodically check for exits."""
         now = time.time()
         if now - self._last_exit_check >= self._exit_check_interval:
             self.tracker.check_exits(now)
+            self.tracker.expire_unidentified(now)
             self._last_exit_check = now
 
     # ==================================================================

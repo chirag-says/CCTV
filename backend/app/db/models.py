@@ -142,6 +142,14 @@ class DetectionEvent(Base):
     confidence = Column(Float, default=0.0)
     snapshot_url = Column(String(500), nullable=True)
     metadata_json = Column(JSON, default=dict)  # renamed from metadata to avoid SQLAlchemy conflicts
+
+    # Stable identity of an unenrolled person (migration 011).
+    # Deliberately NOT a foreign key to unknown_faces: that row can be
+    # enrolled or dismissed, and neither should cascade into or block the
+    # permanent event log. `person_id` and this are mutually exclusive --
+    # a subject is either enrolled or they are not.
+    unknown_person_id = Column(String(36), nullable=True, index=True)
+
     created_at = Column(DateTime(timezone=True), default=utcnow, index=True)
 
     # Relationships
@@ -152,6 +160,8 @@ class DetectionEvent(Base):
     __table_args__ = (
         Index("ix_events_type_created", "event_type", "created_at"),
         Index("ix_events_camera_created", "camera_id", "created_at"),
+        # "Where has this stranger been?" -- see migration 011.
+        Index("ix_events_unknown_created", "unknown_person_id", "created_at"),
     )
 
 
@@ -204,6 +214,40 @@ class UnknownFace(Base):
 
     # Relationships
     camera = relationship("Camera", back_populates="unknown_faces")
+
+
+# ── Unknown Face Views (multi-view re-identification) ────────────
+class UnknownFaceView(Base):
+    """
+    One additional face view of an unknown identity (migration 012).
+
+    WHY THIS EXISTS
+    `unknown_faces.face_encoding` holds a single vector: the first view ever
+    seen. UnknownRegistry matches best-of-K across SEVERAL views, so that a
+    stranger first seen frontally is still matched in profile -- but before
+    this table those extra views lived only in one camera thread's memory.
+    Every refresh, restart and second camera rebuilt the identity from that one
+    frozen vector, and best-of-K silently became best-of-1.
+
+    Measured consequence: 0.0% cross-camera re-identification across 7 cameras.
+
+    Mirrors `face_encodings`, which does the same job for enrolled people.
+    """
+    __tablename__ = "unknown_face_views"
+
+    id = Column(String(36), primary_key=True, default=gen_uuid)
+    unknown_face_id = Column(
+        String(36),
+        ForeignKey("unknown_faces.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    encoding = Column(LargeBinary, nullable=False)  # raw float32 bytes
+    # Pose/quality of THIS view. The Gallery Optimizer's diversity gate reads
+    # them when an unknown is eventually promoted to a person.
+    pose_bucket = Column(String(20), nullable=True)
+    quality = Column(Float, nullable=True)
+    created_at = Column(DateTime(timezone=True), default=utcnow)
 
 
 # ── Encoding Version (for incremental cache sync) ────────────────

@@ -29,6 +29,21 @@ class Settings(BaseSettings):
     # 1024 gives ~2.5x better resolution for small faces on 4MP frames.
     # On a 2560x1440 source, 1024 letterbox means 0.71x downscale
     # (vs 0.44x at 640), so a 60px face arrives at SCRFD as 43px not 26px.
+    # buffalo_l ships five models. The pipeline reads exactly two things:
+    # face.embedding (recognition) and face.kps -- and kps comes from SCRFD
+    # itself, not from the landmark models. Gender is computed by DeepFace in
+    # safety_analytics.py, not by insightface's genderage.
+    #
+    # Loading the default set therefore ran 1k3d68, 2d106det and genderage on
+    # every face for nothing. Measured at det=1024 with one face:
+    #   all five models     34.0 ms
+    #   detection+recognition  28.8 ms   (1.18x)
+    # and each removed model is one less GIL-held pre/post cycle per face,
+    # which matters more with 13 camera threads than the 18% suggests.
+    #
+    # Set to "" to restore insightface's default (all modules).
+    INSIGHTFACE_MODULES: str = "detection,recognition"
+
     INSIGHTFACE_DET_THRESH: float = 0.5  # Face detection confidence threshold
 
     # Face Recognition (ArcFace via insightface)
@@ -206,6 +221,31 @@ class Settings(BaseSettings):
     # when recognition hasn't stabilised yet (e.g. the very first frame
     # a face appears, before hysteresis / temporal voting can act).
     # Time-based (not frame-based) so behaviour is FPS-independent.
+    # -- Step 2: asymmetric identity voting -----------------------
+    # Evidence is not symmetric. Claiming someone IS Rahul and claiming they
+    # are NO LONGER Rahul carry different costs, so they need different bars.
+    #
+    # Promotion: a few confident matches for the SAME person, spread over time
+    # rather than arriving as one burst from a single good pose.
+    IDENTITY_PROMOTE_VOTES: int = 2
+    IDENTITY_PROMOTE_WINDOW_SEC: float = 8.0
+    IDENTITY_PROMOTE_MIN_SPAN_SEC: float = 0.5
+    # Demotion: only CONFIDENT contradiction counts -- a confident match to a
+    # different person, or a definitive non-match. A borderline (gray-zone)
+    # miss never demotes a confirmed identity, and neither does the absence of
+    # a face, which is the whole point of Step 1.
+    IDENTITY_DEMOTE_VOTES: int = 3
+    IDENTITY_DEMOTE_WINDOW_SEC: float = 10.0
+
+    # Unknown confirmation replaces the old UNKNOWN_MATURATION_SEC timer. A
+    # timer can be satisfied by a single bad angle held for half a second; a
+    # vote spread over a span cannot. Only a CONFIRMED unknown creates a row.
+    UNKNOWN_CONFIRM_VOTES: int = 3
+    UNKNOWN_CONFIRM_WINDOW_SEC: float = 6.0
+    UNKNOWN_CONFIRM_MIN_SPAN_SEC: float = 1.0
+
+    # Superseded by the vote gate above and no longer read by the pipeline.
+    # Kept so an existing .env setting it does not fail validation.
     UNKNOWN_MATURATION_SEC: float = 0.5
 
     # Shadow Gallery (background validation)
@@ -226,6 +266,55 @@ class Settings(BaseSettings):
     DETECTION_SCALE: float = 0.5
     EXIT_THRESHOLD_SECONDS: int = 30  # 30 seconds — avoids premature exits from brief occlusions
     ENTRY_THRESHOLD_SECONDS: int = 3
+
+    # -- Step 1.5: unidentified occupants -------------------------
+    # People the tracker can SEE but has never identified: a body detected by
+    # YOLO whose face never became readable. Before Step 1 these barely
+    # existed; with person tracking they are routine, so they need a lifecycle
+    # of their own instead of a synthetic `anon:<camera>:<track>` identity.
+    #
+    # They are counted, never named. They live in a separate lane inside
+    # PersonTracker, keyed on the integer ByteTrack id and expired by time --
+    # never in `_active_tracks`, which is keyed by identity and feeds
+    # attendance, presence and journeys.
+    UNIDENTIFIED_ENTRY_SEC: float = 5.0    # visible this long before it counts
+    UNIDENTIFIED_EXIT_SEC: float = 15.0    # absent this long and it is over
+    UNIDENTIFIED_MAX_TRACKS: int = 200     # hard bound per camera
+    # Emit an occupancy event when one starts/ends. Written as
+    # event_type='detection' with subtype='unidentified_entry'/'..._exit', so
+    # it can never be counted as footfall: every attendance, journey and
+    # analytics query filters on event_type in ('entry','exit'). Deliberately
+    # NOT a new event_type -- that CHECK constraint lives in a hand-applied
+    # migration, and a value the database rejects would break event writing.
+    UNIDENTIFIED_EVENTS_ENABLED: bool = True
+    # -- Step 3.5: unknown registry capacity ----------------------
+    # How many pending identities each pipeline holds resident, and how many
+    # it loads from the database on refresh. Both defaulted to 500 against a
+    # pool of 9,624, so a camera could match against 5% of the people it had
+    # already seen -- and the shortfall fed itself, because an unmatched
+    # stranger mints yet another identity.
+    #
+    # Memory: entries x views x 512 dims x 4 bytes.
+    #   5000 x 5 x 512 x 4 = ~51 MB per camera pipeline.
+    # Search cost is a single matvec over that matrix, so it stays flat.
+    #
+    # MEASURED on this machine (512-dim float32, 3000 x 5 = 15,000 views):
+    #   resolve(), match  0.17 ms
+    #   resolve(), mint   0.29 ms
+    #   refresh + build     42 ms, once every 60s and off the face path
+    #
+    # SEARCH IS NOT THE CONSTRAINT -- one BLAS matvec over the whole matrix is
+    # a fraction of a millisecond, and doubling the cap roughly doubles that.
+    # MEMORY IS: the buffer is per pipeline, so ~61 MB here becomes ~430 MB
+    # across seven cameras. Size this by how many distinct people the campus
+    # actually has, not by search cost.
+    UNKNOWN_REGISTRY_LOAD_LIMIT: int = 3000
+    UNKNOWN_REGISTRY_MAX_ENTRIES: int = 3000
+    # Views kept per identity, in memory and in unknown_face_views. Small on
+    # purpose: this is re-identification material, not a gallery, and every
+    # extra view is a row in every camera's search matrix forever.
+    UNKNOWN_REGISTRY_MAX_VIEWS: int = 5
+
     UNKNOWN_SIMILARITY_THRESHOLD: float = 0.70  # Cosine distance for unknown dedup (lower = merges more aggressively, reduces duplicates)
 
     # Face size thresholds — split detection gate from recognition gate
@@ -453,6 +542,12 @@ class Settings(BaseSettings):
 
     # ── Incidents ─────────────────────────────────────────────
     ALERT_SNAPSHOTS_ENABLED: bool = True    # Capture a frame with each alert
+    # How far BEFORE the window to read events when reconstructing presence.
+    # Someone who entered at 13:50 and left at 14:20 was present at 14:00 with
+    # no event near it; their entry has to be in range for the interval to be
+    # built at all. 30 minutes covers a class period without dragging in the
+    # whole day.
+    INCIDENT_PRESENCE_LOOKBACK_SEC: int = 1800
     INCIDENT_EVIDENCE_WINDOW_SEC: int = 120  # ± window for correlating unknown
                                               # faces seen on the same camera
 

@@ -48,6 +48,59 @@ def get_db() -> Session:
         db.close()
 
 
+def verify_schema() -> dict:
+    """
+    Report model columns that the live database does not have.
+
+    WHY THIS EXISTS
+    There is no Alembic here. `Base.metadata.create_all()` creates missing
+    TABLES but never adds a COLUMN to a table that already exists, so every
+    migration from 002 onward has to be applied by hand. When one is missed,
+    the model still lists the column, SQLAlchemy still puts it in every
+    INSERT, and Postgres rejects the statement.
+
+    For `detection_events` that is not a degraded mode -- it is total,
+    silent loss of the event log, discovered whenever somebody next looks at
+    a dashboard. A loud line at boot naming the missing column and the file
+    that adds it is worth far more than the failure it replaces.
+
+    Deliberately does NOT raise. A schema drift in one table should not stop
+    the cameras; it should be impossible to miss in the logs.
+
+    Returns {table: [missing columns]}, empty when the schema is current.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    missing: dict = {}
+    try:
+        inspector = sa_inspect(engine)
+        present_tables = set(inspector.get_table_names())
+        for table_name, table in Base.metadata.tables.items():
+            if table_name not in present_tables:
+                continue  # create_all() will make it
+            actual = {c["name"] for c in inspector.get_columns(table_name)}
+            gap = [c.name for c in table.columns if c.name not in actual]
+            if gap:
+                missing[table_name] = gap
+    except Exception as e:
+        logger.warning(f"Schema verification skipped: {e}")
+        return {}
+
+    if missing:
+        logger.critical("=" * 70)
+        logger.critical("DATABASE SCHEMA IS BEHIND THE CODE — a migration was not applied.")
+        for table_name, cols in sorted(missing.items()):
+            logger.critical(f"  {table_name}: missing {', '.join(sorted(cols))}")
+        logger.critical("")
+        logger.critical("  Writes to these tables WILL FAIL until this is fixed.")
+        logger.critical("  Apply the pending migrations from backend/, newest last:")
+        logger.critical("    python apply_migration.py app/migrations/<NNN>_<name>.sql")
+        logger.critical("  (list them with --list, re-check with --check)")
+        logger.critical("=" * 70)
+
+    return missing
+
+
 def init_db():
     """
     Create all tables if they don't exist.
@@ -56,6 +109,7 @@ def init_db():
     logger.info(f"Connecting to PostgreSQL at {settings.DB_HOST}:{settings.DB_PORT}/{settings.DB_NAME}")
     Base.metadata.create_all(bind=engine)
     logger.info("✅ Database tables created/verified successfully")
+    verify_schema()
 
 
 def create_default_admin():

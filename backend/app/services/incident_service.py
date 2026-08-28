@@ -14,8 +14,15 @@ analysis feature is upload-and-analyse, not capture. So evidence is what
 genuinely exists:
 
   * the alert snapshot   — the annotated frame at the moment of the alert
-  * related face crops   — unknown_faces first seen on the same camera within
-                           INCIDENT_EVIDENCE_WINDOW_SEC
+  * people present       — known AND unenrolled subjects who were in front of
+                           the camera during the window, reconstructed from
+                           entry/exit intervals in detection_events. This
+                           previously asked which unknown_faces rows were
+                           FIRST SEEN in the window, which found strangers who
+                           happened to be new that minute and missed every
+                           repeat visitor -- i.e. most of the people most
+                           likely to be involved.
+  * related face crops   — the images belonging to those people
   * full frames          — the wider context images saved with those faces
   * a timeline           — every event on that camera around the alert
 
@@ -41,6 +48,7 @@ from app.db.models import (
     Camera, DetectionEvent, IncidentReview, Person, UnknownFace,
 )
 from app.db.session import SessionLocal
+from app.services.attendance_service import normalise_stream_source
 from app.utils.time_utils import campus_day_bounds, utc_now
 
 logger = logging.getLogger(__name__)
@@ -311,45 +319,193 @@ class IncidentService:
                     ),
                 },
                 "evidence_window_sec": settings.INCIDENT_EVIDENCE_WINDOW_SEC,
+                "presence_lookback_sec": settings.INCIDENT_PRESENCE_LOOKBACK_SEC,
             }
         finally:
             db.close()
 
     @staticmethod
-    def _correlated_images(db: Session, camera_id: str, at) -> Dict[str, Any]:
+    def _sibling_camera_ids(db: Session, camera_id: str) -> List[str]:
         """
-        Faces captured on the same camera around the alert.
+        Every registration of the SAME PHYSICAL camera.
 
-        These are the people who were plausibly involved. unknown_faces rows
-        carry both a face crop and a wider full_frame, so both are offered.
+        One lens is routinely registered more than once -- this deployment has
+        MainGate/MainStream on one address, and `security cabin` twice. Events
+        for one person are then split across two camera_ids, so asking "who
+        was on camera X" by id alone silently loses half of them.
         """
-        window = timedelta(seconds=settings.INCIDENT_EVIDENCE_WINDOW_SEC)
-        faces = (
-            db.query(UnknownFace)
-            .filter(
-                UnknownFace.camera_id == camera_id,
-                UnknownFace.first_seen >= at - window,
-                UnknownFace.first_seen <= at + window,
+        cam = db.query(Camera).filter(Camera.id == camera_id).first()
+        if cam is None:
+            return [camera_id]
+        key = normalise_stream_source(cam.stream_url, cam.id)
+        ids = [
+            c.id for c in db.query(Camera).all()
+            if normalise_stream_source(c.stream_url, c.id) == key
+        ]
+        return ids or [camera_id]
+
+    @staticmethod
+    def _people_present(
+        db: Session, camera_ids: List[str], lo, hi, lookback
+    ) -> Dict[str, Any]:
+        """
+        Who was actually in front of this camera between `lo` and `hi`.
+
+        WHAT THIS REPLACES
+        The previous answer was "unknown_faces rows whose FIRST_SEEN falls in
+        the window". first_seen is the first moment that identity was ever
+        observed, anywhere -- so it found strangers who happened to be new
+        that day, and missed every repeat visitor, who is most of them. For an
+        incident review that is close to the worst possible failure: the
+        people most likely to be involved are the ones who come back.
+
+        Migration 011 made the real question answerable by promoting the
+        stranger's id out of JSON into an indexed column, so known and unknown
+        subjects can be selected together in one pass over detection_events.
+
+        PRESENCE IS AN INTERVAL, NOT A POINT
+        Someone who entered at 13:50 and left at 14:20 was present at 14:00
+        while having no event anywhere near it. Entry/exit pairs are therefore
+        reconstructed into intervals and tested for overlap, which is why the
+        query reaches `lookback` further back than the window it reports on.
+        """
+        rows = (
+            db.query(
+                DetectionEvent.person_id,
+                DetectionEvent.unknown_person_id,
+                DetectionEvent.event_type,
+                DetectionEvent.subtype,
+                DetectionEvent.created_at,
             )
-            .order_by(UnknownFace.first_seen.asc())
-            .limit(12)
+            .filter(
+                DetectionEvent.camera_id.in_(camera_ids),
+                DetectionEvent.created_at >= lo - lookback,
+                DetectionEvent.created_at <= hi,
+            )
+            .order_by(DetectionEvent.created_at.asc())
             .all()
         )
-        return {
-            "faces": [
-                {
+
+        subjects: Dict[tuple, List[tuple]] = {}
+        unidentified = 0
+        for person_id, unknown_id, event_type, subtype, ts in rows:
+            if subtype == "unidentified_entry" and lo <= ts <= hi:
+                # A tracked body that never became identifiable (Step 1.5).
+                # Counted, never named -- it cannot be attributed to anyone.
+                unidentified += 1
+                continue
+            if person_id:
+                key = ("known", person_id)
+            elif unknown_id:
+                key = ("unknown", unknown_id)
+            else:
+                continue
+            subjects.setdefault(key, []).append((ts, event_type))
+
+        present: Dict[tuple, Dict[str, Any]] = {}
+        for key, events in subjects.items():
+            intervals: List[tuple] = []
+            open_at = None
+            touched = False
+            for ts, event_type in events:
+                if lo <= ts <= hi:
+                    touched = True
+                if event_type == "entry":
+                    open_at = ts
+                elif event_type == "exit" and open_at is not None:
+                    intervals.append((open_at, ts))
+                    open_at = None
+            if open_at is not None:
+                # Still inside as far as the record goes.
+                intervals.append((open_at, hi))
+
+            overlaps = any(a <= hi and b >= lo for a, b in intervals)
+            if not (touched or overlaps):
+                continue
+
+            stamps = [ts for ts, _ in events]
+            present[key] = {
+                "first_seen": min(stamps).isoformat(),
+                "last_seen": max(stamps).isoformat(),
+                "events": len(events),
+                # How we concluded they were here. An operator reading this
+                # should be able to tell "seen during the window" from
+                # "entered before it and had not left".
+                "basis": "observed" if touched else "spanned",
+            }
+
+        known_ids = [k[1] for k in present if k[0] == "known"]
+        unknown_ids = [k[1] for k in present if k[0] == "unknown"]
+
+        known: List[Dict[str, Any]] = []
+        if known_ids:
+            for p in db.query(Person).filter(Person.id.in_(known_ids)).all():
+                known.append({
+                    "person_id": p.id,
+                    "name": p.name,
+                    "role": p.role,
+                    **present[("known", p.id)],
+                })
+
+        unknown: List[Dict[str, Any]] = []
+        if unknown_ids:
+            for f in db.query(UnknownFace).filter(UnknownFace.id.in_(unknown_ids)).all():
+                unknown.append({
                     "unknown_id": f.id,
+                    "label": f"Unknown-{f.id[:6]}",
                     "snapshot_url": f.snapshot_url,
                     "full_frame": f.full_frame,
                     "occurrence": f.occurrence,
-                    "first_seen": f.first_seen.isoformat() if f.first_seen else None,
+                    "status": f.status,
+                    **present[("unknown", f.id)],
+                })
+
+        known.sort(key=lambda r: r["first_seen"])
+        unknown.sort(key=lambda r: r["first_seen"])
+        return {
+            "known": known,
+            "unknown": unknown,
+            "unidentified_count": unidentified,
+            "total_identified": len(known) + len(unknown),
+        }
+
+    @staticmethod
+    def _correlated_images(db: Session, camera_id: str, at) -> Dict[str, Any]:
+        """
+        The people who were present around the alert, and their images.
+
+        Now derived from _people_present() rather than from unknown_faces
+        first_seen. `faces` and `full_frames` keep their shape because the
+        evidence grid renders them; what changed is WHICH people are in them
+        -- everyone actually present, instead of everyone who happened to be
+        newly discovered that minute.
+        """
+        window = timedelta(seconds=settings.INCIDENT_EVIDENCE_WINDOW_SEC)
+        lookback = timedelta(seconds=settings.INCIDENT_PRESENCE_LOOKBACK_SEC)
+        camera_ids = IncidentService._sibling_camera_ids(db, camera_id)
+
+        people = IncidentService._people_present(
+            db, camera_ids, at - window, at + window, lookback
+        )
+        unknown = people["unknown"]
+
+        return {
+            "people": people,
+            "cameras_correlated": len(camera_ids),
+            "faces": [
+                {
+                    "unknown_id": u["unknown_id"],
+                    "snapshot_url": u["snapshot_url"],
+                    "full_frame": u["full_frame"],
+                    "occurrence": u["occurrence"],
+                    "first_seen": u["first_seen"],
                 }
-                for f in faces if f.snapshot_url
-            ],
+                for u in unknown if u["snapshot_url"]
+            ][:12],
             "full_frames": [
-                {"unknown_id": f.id, "url": f.full_frame}
-                for f in faces if f.full_frame
-            ],
+                {"unknown_id": u["unknown_id"], "url": u["full_frame"]}
+                for u in unknown if u["full_frame"]
+            ][:12],
         }
 
     @staticmethod

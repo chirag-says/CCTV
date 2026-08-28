@@ -176,6 +176,9 @@ def _process_pipeline_event(event: dict):
 
             # ── FK Guard: use in-memory person ID cache instead of DB query ──
             person_id = event.get("person_id")
+            # Set by the FK guard below, and by events that carry a stranger's
+            # id directly (e.g. subtype='unknown_resolved' from the pipeline).
+            unknown_person_id = event.get("unknown_person_id")
             event_metadata = {
                 k: v for k, v in event.items()
                 if k not in ("person_id", "camera_id", "event_type", "confidence", "snapshot_url", "subtype")
@@ -188,9 +191,16 @@ def _process_pipeline_event(event: dict):
                     # handle into the permanent event log.
                     event_metadata["anonymous"] = True
                 else:
-                    # Stable unknown identity — no FK (no persons row), so it
-                    # lives in metadata. This id is now consistent across
-                    # restarts and cameras, so the same stranger is traceable.
+                    # Stable unknown identity. No FK is possible (there is no
+                    # persons row), so it goes in its own indexed column as of
+                    # migration 011 -- which is what makes an unknown person's
+                    # journey and the "who was in this room" query answerable.
+                    unknown_person_id = person_id
+                    # ALSO still written to metadata. Existing readers
+                    # (campus_summary_service._person_key,
+                    # analytics_service export) read it from there, and every
+                    # row written before 011 only has it there. Once those
+                    # readers move to the column this duplicate write can go.
                     event_metadata["unknown_person_id"] = person_id
                 person_id = None
 
@@ -199,6 +209,7 @@ def _process_pipeline_event(event: dict):
                 id=str(uuid4()),
                 person_id=person_id,
                 camera_id=camera_id,
+                unknown_person_id=unknown_person_id,
                 event_type=event.get("event_type", "detection"),
                 subtype=event.get("subtype"),
                 confidence=event.get("confidence", 0.0),
@@ -305,6 +316,23 @@ def _process_unknown_face(data: dict):
     # Carries no crops: the row already has snapshots. Only the visit counters
     # move. Previously every repeat wrote three JPEGs that were then orphaned
     # when the dedup merged the sighting into the existing row.
+    # ── Newly learned face views ──
+    # Extra angles the registry decided were worth keeping. Persisting them is
+    # what lets ANOTHER camera, or this one after a restart, recognise the
+    # person: without it every refresh rebuilt each identity from its single
+    # frozen first view and best-of-K matching degraded to best-of-1.
+    if data.get("views_only"):
+        from app.services.unknown_service import UnknownService
+        written = 0
+        for unknown_id, view in data.get("views", []):
+            written += UnknownService.add_views(unknown_id, [view])
+        if written:
+            logger.debug(
+                f"Stored {written} new face view(s) from camera "
+                f"{data.get('camera_id')}"
+            )
+        return
+
     if data.get("sighting_only"):
         from datetime import datetime as _dt, timezone as _tz
         from app.services.unknown_service import UnknownService
@@ -505,6 +533,21 @@ def _process_unknown_face(data: dict):
                     lighting=data.get("lighting"),
                 )
                 db.add(unknown)
+                # View #1, mirroring what migration 012 seeded for rows that
+                # already existed. Written here so unknown_face_views is the
+                # single source of matching material for EVERY identity, not
+                # only the ones that predate the migration -- otherwise a new
+                # stranger silently matches at best-of-1 until their second
+                # view is learned.
+                from app.db.models import UnknownFaceView as _UFV
+                db.add(_UFV(
+                    id=str(uuid4()),
+                    unknown_face_id=unknown.id,
+                    encoding=encoding_bytes,
+                    pose_bucket=data.get("pose_bucket"),
+                    quality=data.get("quality"),
+                    created_at=ts,
+                ))
                 db.commit()
                 # Same id, but the pipeline still needs to know the row exists:
                 # until it does, the entry stays unpersisted and is protected
