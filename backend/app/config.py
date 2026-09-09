@@ -294,7 +294,22 @@ class Settings(BaseSettings):
     ENABLE_PIPELINE_BENCHMARKS: bool = True       # Log per-stage timing every 100 frames
 
     # Performance Profiler (structured aggregate reports)
-    ENABLE_PROFILING: bool = True                 # Enable performance profiler (disable in production)
+    # ── Phase 2 item 0b: profiler off by default ──────────────
+    # The profiler is a process-wide singleton holding one lock, and every
+    # camera thread takes it several times per analysed frame -- measure()
+    # around each stage, plus a dozen record_*() counters. With one camera
+    # that is free. With 20 threads on a GIL it is a rendezvous point on the
+    # hot path, and the Phase 1 acceptance run showed the GPU 81 percent idle
+    # while the target was missed, so contention is exactly what needs ruling
+    # out before the remaining CPU is blamed on inference.
+    #
+    # It also emits a "SLOW" warning line per stage over threshold, which
+    # under 20-camera load is thousands of formatted log lines a minute.
+    #
+    # Disabled, measure() yields without taking the lock and every record_*
+    # returns immediately, so this is a real removal rather than a quieter
+    # log. True restores it for debugging a single camera.
+    ENABLE_PROFILING: bool = False                # process-wide lock on the hot path
     DEBUG_LOGS: bool = False                      # Enable DEBUG-level app logs (independent of uvicorn reload)
 
     # ── Item 1: encode JPEG only while someone is watching ────
