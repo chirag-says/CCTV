@@ -1,0 +1,95 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5070",
+  "vram_total_mb": 12227,
+  "torch": "2.11.0+cu128",
+  "python": "3.11.9",
+  "iters": 60,
+  "stages": {
+    "decode_720p_h264_cpu": {
+      "mean_ms": 1.22,
+      "p50_ms": 0,
+      "p95_ms": 0
+    },
+    "resize_1080_to_720_cpu": {
+      "mean_ms": 0.97,
+      "p50_ms": 0.97,
+      "p95_ms": 1.03
+    },
+    "jpeg_encode_720p_cpu": {
+      "mean_ms": 8.93,
+      "p50_ms": 8.9,
+      "p95_ms": 9.2
+    },
+    "scrfd_det10g_640": {
+      "mean_ms": 8.84,
+      "p50_ms": 8.69,
+      "p95_ms": 9.78
+    },
+    "scrfd_det10g_1024": {
+      "mean_ms": 20.41,
+      "p50_ms": 20.35,
+      "p95_ms": 21.13
+    },
+    "arcface_r50_per_face": {
+      "mean_ms": 3.44,
+      "p50_ms": 3.13,
+      "p95_ms": 4.32
+    },
+    "yolov8n_640_fp16_b1": {
+      "mean_ms": 6.35,
+      "p50_ms": 6.04,
+      "p95_ms": 8.75
+    },
+    "yolov8n_640_fp16_b8_per_frame": {
+      "mean_ms": 2.09,
+      "p50_ms": 2.08,
+      "p95_ms": 2.18
+    },
+    "yolo11m_640_fp16_b1": {
+      "mean_ms": 8.83,
+      "p50_ms": 8.69,
+      "p95_ms": 9.79
+    },
+    "yolo11m_640_fp16_b8_per_frame": {
+      "mean_ms": 3.29,
+      "p50_ms": 3.29,
+      "p95_ms": 3.42
+    },
+    "rfdetr_nano_b1": {
+      "mean_ms": 31.72,
+      "p50_ms": 33.97,
+      "p95_ms": 38.5
+    },
+    "rfdetr_base_b1": {
+      "mean_ms": 33.33,
+      "p50_ms": 35.53,
+      "p95_ms": 37.85
+    },
+    "reid_resnet50_b1": {
+      "mean_ms": 4.33,
+      "p50_ms": 4.09,
+      "p95_ms": 5.32
+    },
+    "reid_resnet50_b8_per_crop": {
+      "mean_ms": 0.51,
+      "p50_ms": 0.51,
+      "p95_ms": 0.55
+    },
+    "easyocr_plate_crop": {
+      "mean_ms": 9.7,
+      "p50_ms": 9.57,
+      "p95_ms": 10.39
+    }
+  },
+  "vram_after_mb": {
+    "scrfd": 1750,
+    "arcface": 2038,
+    "yolov8n": 2162,
+    "yolo11m": 2528,
+    "rfdetr_nano": 2588,
+    "rfdetr_base": 2348,
+    "reid": 2230,
+    "easyocr": 2316
+  },
+  "vram_peak_mb": 2316
+}

@@ -8,7 +8,7 @@ All prices INR. Cloud and leased-line figures exclude 18% GST; hardware
 figures are retail (GST included). Sources in the accompanying message.
 """
 import argparse, json, math
-from cost_model import tier_loads, cams_per_gpu, INR_PER_USD, UTIL, FPS
+from cost_model import tier_loads, cams_per_gpu, bench_key, INR_PER_USD, UTIL, FPS
 
 DAYS = 30
 MONTHS = 36
@@ -43,8 +43,8 @@ MAINT_PCT_YEAR = 0.08      # spares, drives, fans
 
 def money(x): return f"{x:,.0f}"
 
-def cloud(n, hours, ms):
-    per_gpu = cams_per_gpu(ms, "L4")
+def cloud(n, hours, ms, bk):
+    per_gpu = cams_per_gpu(ms, "L4", bk)
     gpus = math.ceil(n / per_gpu)
     gpu_m = gpus * L4_USD_HR * hours * DAYS
     app_m = (APP_USD_HR + DB_USD_HR) * 24 * DAYS + DB_EBS_GB * EBS_USD_GB
@@ -58,8 +58,8 @@ def cloud(n, hours, ms):
             "s3": s3_m * INR_PER_USD, "egress": egress_m * INR_PER_USD, "ill": ILL_INR_MONTH[n],
             "month": inr, "uplink_mbps": n * STREAM_MBPS, "gateway": GATEWAY_INR}
 
-def onprem(n, hours, ms):
-    per_gpu = cams_per_gpu(ms, "RTX 5070")
+def onprem(n, hours, ms, bk):
+    per_gpu = cams_per_gpu(ms, "RTX 5070", bk)
     gpus = math.ceil(n / per_gpu)
     nodes = math.ceil(gpus / GPUS_PER_NODE) + 1          # N+1 spare node
     node_inr = GPUS_PER_NODE * GPU_INR + NODE_PLATFORM_INR
@@ -76,16 +76,17 @@ def onprem(n, hours, ms):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--bench", default="bench_NVIDIA_GeForce_GTX_1650.json")
+    ap.add_argument("--bench", default="bench_NVIDIA_GeForce_RTX_5070.json")
     ap.add_argument("--hours", type=int, default=12)
     ap.add_argument("--cams", type=int, nargs="+", default=[300, 400])
     a = ap.parse_args()
-    tiers = tier_loads(json.load(open(a.bench)))
+    bench = json.load(open(a.bench)); tiers = tier_loads(bench); bk = bench_key(bench)
+    print(f"benchmark GPU: {bench['gpu']}")
     print(f"{a.hours} h/day, {DAYS} days/month, {FPS} analysed fps/camera, {int(UTIL*100)}% GPU utilisation, INR {INR_PER_USD}/USD\n")
     for n in a.cams:
         print(f"=== {n} cameras ===")
         for t, ms in tiers.items():
-            c, o = cloud(n, a.hours, ms), onprem(n, a.hours, ms)
+            c, o = cloud(n, a.hours, ms, bk), onprem(n, a.hours, ms, bk)
             print(f"\n{t}")
             print(f"  CLOUD  AWS Mumbai: {c['gpus']} x g6.xlarge L4 ({c['per_gpu']:.1f} cams/GPU) for {a.hours} h/day")
             print(f"         GPU {money(c['gpu'])} + app/DB {money(c['app'])} + S3 {money(c['s3'])} + egress {money(c['egress'])} + leased line {money(c['ill'])}")
