@@ -78,27 +78,30 @@ class HazardDetector:
 
     def __init__(
         self,
-        model_path: str = "yolov8n.pt",
+        model_path: str = "yolo11m.pt",
         frame_interval: int = 30,
         alert_cooldown_sec: float = 30.0,
         on_alert: Optional[Callable] = None,
         max_workers: int = 1,
-        rfdetr_model_size: str = "large",
+        rfdetr_model_size: str = "nano",
+        prefer: str = "yolo",
     ):
         """
         Args:
-            model_path: Path to YOLO model weights (fallback)
+            model_path: YOLO weights for the weapons classes
             frame_interval: Only process every Nth frame
             alert_cooldown_sec: Minimum seconds between alerts for same object class
             on_alert: Callback(alert_dict) when a threat is detected
             max_workers: Thread pool size (1 is usually enough)
-            rfdetr_model_size: RF-DETR model size — "nano", "base", or "large"
+            rfdetr_model_size: RF-DETR size — "nano", "base", or "large"
+            prefer: which backend to try first — "yolo" or "rfdetr"
         """
         self.model_path = model_path
         self.frame_interval = frame_interval
         self.alert_cooldown_sec = alert_cooldown_sec
         self.on_alert = on_alert
         self.rfdetr_model_size = rfdetr_model_size
+        self.prefer = prefer if prefer in ("yolo", "rfdetr") else "yolo"
 
         self._model = None
         self._model_loaded = False
@@ -123,82 +126,89 @@ class HazardDetector:
         self._last_inference_ms = 0.0
 
         logger.info(
-            f"HazardDetector initialized: rfdetr_size={rfdetr_model_size}, "
-            f"yolo_fallback={model_path}, interval={frame_interval}, "
-            f"cooldown={alert_cooldown_sec}s"
+            f"HazardDetector initialized: prefer={self.prefer}, "
+            f"yolo={model_path}, rfdetr_size={rfdetr_model_size}, "
+            f"interval={frame_interval}, cooldown={alert_cooldown_sec}s"
         )
 
     def _load_model(self) -> bool:
-        """Lazy-load RF-DETR model (with YOLO fallback). Thread-safe."""
+        """Lazy-load the preferred backend, falling back to the other. Thread-safe.
+
+        WHY YOLO IS THE DEFAULT NOW
+        RF-DETR Large was tried first, unconditionally, and this object is
+        per camera. Twenty cameras meant twenty RF-DETR Large models: the
+        20-camera baseline on this 12 GB card sat at 12,024 MB of VRAM with
+        the GPU only 66% busy -- out of memory long before it was out of
+        compute.
+
+        YOLO11m finds the same COCO threat classes for a fraction of that,
+        and it composes: VisionPipeline._load_yolo_person_detector() reuses
+        this model when the backend is "yolo", so a camera ends up loading
+        one detector instead of two.
+
+        settings.HAZARD_BACKEND="rfdetr" restores the old order.
+        """
         with self._model_lock:
             if self._model_loaded:
                 return self._model_available
 
-            # ── Try RF-DETR first (superior accuracy) ────────────────────
-            try:
-                from rfdetr import RFDETRBase, RFDETRLarge
+            order = (["rfdetr", "yolo"] if self.prefer == "rfdetr"
+                     else ["yolo", "rfdetr"])
+            for backend in order:
+                loader = self._load_rfdetr if backend == "rfdetr" else self._load_yolo
                 try:
-                    from rfdetr import RFDETRNano
-                except ImportError:
-                    RFDETRNano = RFDETRBase  # Fallback if nano not available
+                    if loader():
+                        self._model_loaded = True
+                        return True
+                except Exception as e:
+                    logger.warning(f"Hazard {backend} load failed: {e}")
 
-                model_map = {
-                    "nano": RFDETRNano,
-                    "base": RFDETRBase,
-                    "large": RFDETRLarge,
-                }
+            self._model_available = False
+            self._model_loaded = True
+            logger.error(
+                "Hazard detection disabled: neither ultralytics nor rfdetr "
+                "could provide a model."
+            )
+            return False
 
-                model_cls = model_map.get(self.rfdetr_model_size, RFDETRLarge)
-                logger.info(
-                    f"Loading RF-DETR ({self.rfdetr_model_size}) for hazard detection..."
-                )
+    def _load_yolo(self) -> bool:
+        """Load the weapons model. False (not an exception) if no ultralytics."""
+        try:
+            import torch
+            from ultralytics import YOLO
+        except ImportError:
+            logger.info("ultralytics not installed; trying RF-DETR for hazards")
+            return False
 
-                self._model = model_cls()
-                self._model_available = True
-                self._model_backend = "rfdetr"
-                self._model_loaded = True
+        self._device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._model = YOLO(self.model_path)
+        self._model_available = True
+        self._model_backend = "yolo"
+        logger.info(
+            f"Hazard detector: YOLO {self.model_path} on {self._device}"
+        )
+        return True
 
-                logger.info(
-                    f"✅ RF-DETR ({self.rfdetr_model_size}) loaded for hazard detection — "
-                    f"62+ mAP accuracy, DINOv2 backbone"
-                )
-                return True
+    def _load_rfdetr(self) -> bool:
+        """Load RF-DETR at the configured size. False if rfdetr is absent."""
+        try:
+            from rfdetr import RFDETRBase, RFDETRLarge
+        except ImportError:
+            logger.info("rfdetr not installed; trying YOLO for hazards")
+            return False
+        try:
+            from rfdetr import RFDETRNano
+        except ImportError:
+            RFDETRNano = RFDETRBase  # older rfdetr has no nano
 
-            except ImportError:
-                logger.info(
-                    "rfdetr not installed — falling back to YOLOv8. "
-                    "Install with: pip install rfdetr"
-                )
-            except Exception as e:
-                logger.warning(f"RF-DETR load failed: {e}, falling back to YOLOv8")
-
-            # ── Fallback to YOLOv8 ───────────────────────────────────────
-            try:
-                import torch
-                from ultralytics import YOLO
-
-                self._device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                logger.info(
-                    f"Loading YOLOv8 fallback: {self.model_path} on {self._device}"
-                )
-                self._model = YOLO(self.model_path)
-                self._model_available = True
-                self._model_backend = "yolo"
-                logger.info(f"YOLOv8 fallback loaded on {self._device}")
-
-            except ImportError:
-                self._model_available = False
-                logger.warning(
-                    "Neither rfdetr nor ultralytics installed — "
-                    "hazard detection disabled."
-                )
-            except Exception as e:
-                self._model_available = False
-                logger.error(f"Failed to load any detection model: {e}")
-            finally:
-                self._model_loaded = True
-
-            return self._model_available
+        model_map = {"nano": RFDETRNano, "base": RFDETRBase, "large": RFDETRLarge}
+        model_cls = model_map.get(self.rfdetr_model_size, RFDETRNano)
+        logger.info(f"Loading RF-DETR ({self.rfdetr_model_size}) for hazard detection...")
+        self._model = model_cls()
+        self._model_available = True
+        self._model_backend = "rfdetr"
+        logger.info(f"Hazard detector: RF-DETR {self.rfdetr_model_size}")
+        return True
 
     def submit_frame(
         self,

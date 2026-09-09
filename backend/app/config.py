@@ -400,9 +400,22 @@ class Settings(BaseSettings):
     LOITER_TIME_WINDOW_SEC: float = 300.0    # 5 minutes
     LOITER_ALERT_COOLDOWN_SEC: float = 600.0 # 10 min re-alert cooldown
 
-    # Hazard Detection (YOLOv8)
+    # ── Item 5: hazard / weapons detection ────────────────────
+    # HAZARD_BACKEND picks which model is TRIED FIRST. It was RF-DETR Large,
+    # unconditionally, and HazardDetector is constructed per camera -- so
+    # twenty cameras meant twenty RF-DETR Large models. The 20-camera baseline
+    # on this 5070 ran out of VRAM (12,024 MB of 12 GB) with the GPU only 66%
+    # busy, and three runs at identical load then returned 0.46, 0.14 and 2.17
+    # analysis fps: at the ceiling, throughput stops being reproducible.
+    #
+    # YOLO11m covers the same COCO threat classes for far less, and it
+    # composes -- VisionPipeline._load_yolo_person_detector() reuses this model
+    # when the backend is "yolo", so a camera loads one detector instead of
+    # two. Set "rfdetr" to restore the previous order.
     ENABLE_HAZARD_DETECTION: bool = True
-    HAZARD_MODEL_PATH: str = "yolov8n.pt"
+    HAZARD_BACKEND: str = "yolo"              # "yolo" or "rfdetr"
+    WEAPON_MODEL_PATH: str = "yolo11m.pt"     # weights for the threat classes
+    HAZARD_MODEL_PATH: str = "yolov8n.pt"     # legacy alias, still honoured
     HAZARD_FRAME_INTERVAL: int = 30      # Process every 30th frame
     HAZARD_ALERT_COOLDOWN_SEC: float = 30.0
 
@@ -412,7 +425,12 @@ class Settings(BaseSettings):
     PIPELINE_MODE: str = "hybrid"
 
     # ── RF-DETR (Real-Time Detection Transformer) ─────────────
-    RFDETR_MODEL_SIZE: str = "large"          # "nano", "base", or "large"
+    # WAS "large", AND WAS NEVER READ. HazardDetector and TrafficMonitor each
+    # defaulted the size to "large" in their own signature, and the pipeline
+    # passed neither, so editing this setting changed no model anywhere. Both
+    # call sites now receive it (app/vision/pipeline.py), which is what makes
+    # this line load a model rather than merely describe one.
+    RFDETR_MODEL_SIZE: str = "nano"           # "nano", "base", or "large"
     RFDETR_CONFIDENCE_THRESHOLD: float = 0.40
     RFDETR_DEVICE: str = "auto"               # "auto", "cuda", or "cpu"
 

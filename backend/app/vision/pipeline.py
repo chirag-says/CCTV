@@ -241,11 +241,18 @@ class VisionPipeline:
         # Hazard Detection (YOLOv8)
         self.hazard_detector: Optional[HazardDetector] = None
         if settings.ENABLE_HAZARD_DETECTION:
+            # RFDETR_MODEL_SIZE and the backend choice are passed EXPLICITLY.
+            # They were not before: HazardDetector and TrafficMonitor each
+            # defaulted the size to "large" in their own signature, so
+            # settings.RFDETR_MODEL_SIZE was a knob wired to nothing.
             self.hazard_detector = HazardDetector(
-                model_path=settings.HAZARD_MODEL_PATH,
+                model_path=getattr(settings, "WEAPON_MODEL_PATH", None)
+                           or settings.HAZARD_MODEL_PATH,
                 frame_interval=settings.HAZARD_FRAME_INTERVAL,
                 alert_cooldown_sec=settings.HAZARD_ALERT_COOLDOWN_SEC,
                 on_alert=self._handle_security_alert,
+                rfdetr_model_size=settings.RFDETR_MODEL_SIZE,
+                prefer=getattr(settings, "HAZARD_BACKEND", "yolo"),
             )
             logger.info(f"[{camera_id}] Hazard Detection enabled")
 
@@ -276,6 +283,7 @@ class VisionPipeline:
                 alert_cooldown_sec=settings.TRAFFIC_ALERT_COOLDOWN_SEC,
                 on_alert=self._handle_security_alert,
                 on_vehicle_count=self._handle_vehicle_count,
+                rfdetr_model_size=settings.RFDETR_MODEL_SIZE,
             )
             logger.info(f"[{camera_id}] Traffic Monitor enabled (proximity={settings.TRAFFIC_PROXIMITY_PX}px)")
 
