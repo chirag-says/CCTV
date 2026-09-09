@@ -156,6 +156,25 @@ class Settings(BaseSettings):
     # owns EXISTENCE, not what owns IDENTITY.
     TRACKING_MODE: str = "person"
     PERSON_DET_CONF: float = 0.35   # YOLO person confidence floor for tracking
+
+    # ── Phase 2 item 0a: run the person detector in fp16, at a fixed size ──
+    # The person YOLO call passed neither `half` nor `imgsz`, so ultralytics
+    # used its defaults: fp32, and an imgsz it re-derives from each frame's
+    # shape. On this card yolov8n at 640 is 6.35 ms per frame at batch 1, and
+    # this is the single hottest GPU call in Basic -- it is the ONLY model
+    # Basic runs, once per analysed frame per camera.
+    #
+    # fp16 is not free of consequence, so item 0a is measured on outputs as
+    # well as time: person-box counts and ByteTrack id churn, before and
+    # after, on the same footage. See PHASE2_REPORT.md.
+    #
+    # PERSON_DET_IMGSZ pins the letterbox target. Leaving it to ultralytics
+    # meant the network input size followed the camera resolution, so two
+    # cameras of different resolutions ran the same model at different costs
+    # and different effective detection scales -- and neither was stated
+    # anywhere.
+    PERSON_DET_HALF: bool = True    # fp16 person detection
+    PERSON_DET_IMGSZ: int = 640     # letterbox target for the person detector
     # A face is bound to a person track when its centre falls inside the person
     # box. Person boxes are looser than face boxes, so a small pad tolerates
     # the usual jitter without letting a neighbour's face bind to the wrong body.

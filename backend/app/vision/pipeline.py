@@ -2519,12 +2519,19 @@ class VisionPipeline:
             return []
 
         try:
+            # half and imgsz are passed EXPLICITLY (item 0a). Without them
+            # ultralytics runs fp32 and re-derives the input size from each
+            # frame's shape, so the cost and the effective detection scale
+            # both followed the camera resolution and neither was stated
+            # anywhere in this repo.
             results = self._yolo_person_detector(
                 frame,
                 conf=0.25,
                 classes=[0],  # person class only
                 verbose=False,
                 device=getattr(self, '_yolo_person_device', 'cpu'),
+                half=getattr(settings, "PERSON_DET_HALF", True),
+                imgsz=getattr(settings, "PERSON_DET_IMGSZ", 640),
             )
 
             persons = []
