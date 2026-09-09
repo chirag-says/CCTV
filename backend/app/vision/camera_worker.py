@@ -58,6 +58,12 @@ class CameraWorker:
         self._jpeg_slot_lock = threading.Lock()
         self._jpeg_slot_event = threading.Event()  # Signals encoder that a frame is ready
         self._jpeg_thread: Optional[threading.Thread] = None
+        # Instrumentation. `_jpeg_encodes` counts frames actually encoded;
+        # `_jpeg_skipped` counts frames handed over and then not encoded.
+        # Both are read by load_test.py -- the whole point of gating the
+        # encoder is a number, and a number needs a counter.
+        self._jpeg_encodes = 0
+        self._jpeg_skipped = 0
 
     def start(self):
         """Start the camera worker and its JPEG encoder thread."""
@@ -180,6 +186,8 @@ class CameraWorker:
                     jpeg_q = getattr(self.pipeline, '_jpeg_quality_override', None) or 80
                     jpeg_bytes = frame_to_jpeg_bytes(frame, quality=jpeg_q)
                     self.pipeline._last_jpeg = jpeg_bytes
+
+                self._jpeg_encodes += 1
 
                 # Record WebSocket frame size for stats
                 if jpeg_bytes:

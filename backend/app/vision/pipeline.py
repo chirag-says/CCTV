@@ -318,6 +318,11 @@ class VisionPipeline:
         self._fps = 0.0
         self._last_fps_time = time.time()
         self._fps_frame_count = 0
+        # Monotonic count of ANALYSIS frames (frames that ran detection, not
+        # frames decoded). `_fps` above is a one-second sliding rate and is
+        # therefore stale on a camera that has stalled -- which is exactly the
+        # camera a load test needs to see. This counter cannot lie about that.
+        self._analysis_frames = 0
 
         # Auto-refresh encodings: safety net for out-of-process enrollment (e.g., seed_teachers.py)
         # Normal enrollment triggers instant reload via camera_manager.load_encodings_all()
@@ -2264,7 +2269,13 @@ class VisionPipeline:
         return url_path
 
     def _update_fps(self):
-        """Calculate processing FPS."""
+        """Calculate processing FPS.
+
+        Called once per ANALYSIS frame -- never on a frame-skipped one -- so
+        both `_fps` and `_analysis_frames` measure the detection rate, which
+        is the rate ANALYSIS_FPS and the capacity model are stated in.
+        """
+        self._analysis_frames += 1
         self._fps_frame_count += 1
         now = time.time()
         elapsed = now - self._last_fps_time
