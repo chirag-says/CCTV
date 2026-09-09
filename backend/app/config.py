@@ -865,6 +865,11 @@ class Settings(BaseSettings):
     # ICE candidates go2rtc advertises. "stun:8555" makes go2rtc discover its
     # own public address; a fixed "host:8555" is what a LAN deployment wants.
     GO2RTC_CANDIDATES: str = "stun:8555"
+    # Where go2rtc should find ffmpeg. Empty means "on PATH", which is right
+    # in the container and wrong on a Windows dev box, where ffmpeg is a zip
+    # somebody unpacked rather than something installed. File cameras are the
+    # only source that needs it.
+    GO2RTC_FFMPEG_BIN: str = ""
     GO2RTC_LOG_LEVEL: str = "warn"
     GO2RTC_STARTUP_TIMEOUT_SEC: float = 15.0
 

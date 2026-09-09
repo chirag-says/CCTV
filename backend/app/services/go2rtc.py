@@ -19,11 +19,19 @@ WHAT THIS MODULE OWNS
   * saying where a browser should signal for a given camera
 
 FILE CAMERAS
-Development runs on .mp4 files, not on cameras. go2rtc cannot serve a file as
-a live stream on its own, so a file source is wrapped in ffmpeg with
-`-stream_loop -1 -re`: loop forever, at real time. That makes a file behave
-exactly like a camera all the way to the browser, which is the only way the
-live-view feature can be developed or demonstrated without a camera wall.
+Development runs on .mp4 files, not on cameras. Left alone go2rtc plays a file
+once and stops, so the FILE INPUT TEMPLATE is overridden to add
+`-stream_loop -1`: loop forever, paced by `-re` at the file's own frame rate.
+A file then behaves exactly like a camera all the way to the browser, which is
+the only way the live-view feature can be developed or demonstrated without a
+camera wall.
+
+That override is global rather than per-source on purpose. go2rtc 1.9 accepts
+a per-source `#input=` and then does not use it -- the default template still
+wins and the leftover tokens are appended AFTER `-i`, where `-stream_loop` is
+not an input option any more and ffmpeg exits on it. The `ffmpeg.file`
+template is the lever that actually works, and "a file camera loops" is a
+property of file cameras, not of one of them.
 """
 
 from __future__ import annotations
@@ -44,6 +52,24 @@ logger = logging.getLogger(__name__)
 
 # Extensions we treat as "a file pretending to be a camera".
 _VIDEO_FILE_EXT = (".mp4", ".mkv", ".mov", ".avi", ".m4v", ".webm", ".ts")
+
+# go2rtc's own file template, with looping added and the initial burst raised.
+# Every token before `-i` is an INPUT option, which is the whole reason this
+# has to be a template and not something appended to a source string.
+#   -readrate_initial_burst  seconds of media to read flat out before `-re`
+#                            starts pacing. go2rtc ships 0.001, which is fine
+#                            for a stream it copies and far too small for one
+#                            it TRANSCODES: the encoder then produces its first
+#                            frames at real time, and go2rtc gives up waiting
+#                            for the producer before any arrive. Two file
+#                            cameras cold-starting together on a box that is
+#                            also running the analysis pipelines is enough to
+#                            hit that, and it surfaces as "NO RELAY" in the UI.
+#                            One second of front-loaded video costs one second
+#                            of encoding and removes the race.
+#   -re                      play at the clip's frame rate, not disk speed
+#   -stream_loop -1          start over at EOF, forever
+FFMPEG_FILE_TEMPLATE = "-readrate_initial_burst 1 -re -stream_loop -1 -i {input}"
 
 
 def _yaml_quote(value: str) -> str:
@@ -85,15 +111,10 @@ def source_for(stream_url: str) -> Optional[str]:
         # inside a #-delimited go2rtc source, and a backslash there is one
         # more escaping layer than either parser needs.
         path = os.path.abspath(url).replace(chr(92), "/")
-        # `-stream_loop -1` before `-i` loops the input forever; `-re` paces
-        # it at the file's own frame rate instead of decoding it as fast as
-        # the disk allows. Without -re the whole clip is relayed in seconds
-        # and the browser sees a burst, not a live stream.
-        return (
-            f"ffmpeg:{path}"
-            "#input=-re -stream_loop -1 -i {input}"
-            "#video=h264"
-        )
+        # Looping comes from FFMPEG_FILE_TEMPLATE below, not from here. `h264`
+        # is what WebRTC needs; go2rtc copies rather than transcodes when the
+        # file already carries it.
+        return f"ffmpeg:{path}#video=h264"
 
     if url.startswith(("rtsp://", "rtsps://", "rtmp://", "http://", "https://")):
         return url
@@ -128,6 +149,14 @@ def build_config(cameras: List[dict]) -> str:
     ]
     for candidate in settings.go2rtc_candidates_list:
         lines.append(f"    - {_yaml_quote(candidate)}")
+
+    # The input template every FILE source is built from. See the module
+    # docstring: this is where a dev clip becomes an endless camera.
+    lines += ["", "ffmpeg:", f"  file: {_yaml_quote(FFMPEG_FILE_TEMPLATE)}"]
+    if settings.GO2RTC_FFMPEG_BIN:
+        lines.append(
+            f"  bin: {_yaml_quote(os.path.abspath(settings.GO2RTC_FFMPEG_BIN).replace(chr(92), '/'))}"
+        )
 
     lines += ["", "log:", f"  level: {_yaml_quote(settings.GO2RTC_LOG_LEVEL)}", "", "streams:"]
 
@@ -167,6 +196,7 @@ class Go2RtcSupervisor:
         self._streams: Dict[str, str] = {}
         self._restarts = 0
         self._last_error: Optional[str] = None
+        self._log_path: Optional[str] = None
 
     # ── lifecycle ─────────────────────────────────────────────────────
 
@@ -256,11 +286,27 @@ class Go2RtcSupervisor:
         return shutil.which(configured)
 
     def _spawn(self, binary: str) -> bool:
+        # go2rtc's output goes to a file beside its config, NOT to DEVNULL.
+        # Everything that can go wrong with a relayed camera -- a source that
+        # will not open, credentials the camera rejects, an ffmpeg that cannot
+        # start a transcode before the producer times out -- is reported by
+        # go2rtc and by nothing else. Discarding that stream makes every one of
+        # those failures show up as an unexplained "NO RELAY" in the UI with
+        # no way to find out why.
+        try:
+            self._log_path = os.path.join(
+                os.path.dirname(self._config_path) or ".", "go2rtc.log"
+            )
+            log = open(self._log_path, "ab", buffering=0)
+        except Exception:
+            self._log_path = None
+            log = subprocess.DEVNULL
+
         try:
             proc = subprocess.Popen(
                 [binary, "-config", self._config_path],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
                 cwd=os.path.dirname(self._config_path) or None,
             )
         except Exception as e:                                  # noqa: BLE001
@@ -270,14 +316,18 @@ class Go2RtcSupervisor:
 
         with self._lock:
             self._proc = proc
-        logger.info(f"go2rtc started (pid={proc.pid}) with {self._config_path}")
+        logger.info(
+            f"go2rtc started (pid={proc.pid}) with {self._config_path}"
+            + (f", log {self._log_path}" if self._log_path else "")
+        )
 
         if self.wait_healthy(settings.GO2RTC_STARTUP_TIMEOUT_SEC):
             self._last_error = None
             logger.info(f"go2rtc healthy at {settings.GO2RTC_INTERNAL_URL}")
             return True
 
-        self._last_error = "started but never became healthy"
+        if not self._last_error:
+            self._last_error = "started but never became healthy"
         logger.warning(f"go2rtc: {self._last_error}")
         # Left running regardless: it may still come up, and killing it here
         # would guarantee it does not.
@@ -298,6 +348,7 @@ class Go2RtcSupervisor:
             logger.warning(
                 f"go2rtc exited (code={proc.returncode}); "
                 f"restart #{self._restarts} in {backoff:.0f}s"
+                f"{self._log_tail()}"
             )
             if self._stop.wait(backoff):
                 return
@@ -307,18 +358,71 @@ class Go2RtcSupervisor:
             if binary:
                 self._spawn(binary)
 
+    def _log_tail(self, lines: int = 3) -> str:
+        """The last few lines go2rtc wrote, for the message that reports a death.
+
+        Nothing is logged at the default `warn` level while go2rtc is happy, so
+        an empty tail is the normal case and reads correctly as one.
+        """
+        if not self._log_path:
+            return ""
+        try:
+            with open(self._log_path, "r", encoding="utf-8", errors="replace") as fh:
+                tail = [ln.strip() for ln in fh.readlines()[-lines:] if ln.strip()]
+        except Exception:
+            return ""
+        return ("; last output: " + " | ".join(tail)) if tail else ""
+
     # ── health ────────────────────────────────────────────────────────
 
-    def healthy(self) -> bool:
+    def api_responds(self) -> bool:
+        """Is SOMETHING answering go2rtc's API on the configured address?"""
         try:
             with urlopen(f"{settings.GO2RTC_INTERNAL_URL}/api/streams", timeout=1.5) as r:
                 return 200 <= r.status < 300
         except Exception:
             return False
 
+    def healthy(self) -> bool:
+        """Is OUR go2rtc up?
+
+        Both halves are required, and the second one is the one that bites.
+        Asking only whether :1984 answers makes any other process on that port
+        -- most often a go2rtc orphaned by a previous hard-killed backend --
+        look like a healthy child. The supervisor then reports "healthy"
+        immediately after spawning a process that in fact exited because the
+        port was already taken, and restarts it forever, two seconds at a time,
+        while the UI is served by a relay holding a stale camera list.
+
+        When this process is not the one managing go2rtc there is no child to
+        check and the API answering is the whole of the question.
+        """
+        if settings.GO2RTC_MANAGED:
+            with self._lock:
+                proc = self._proc
+            if proc is None or proc.poll() is not None:
+                return False
+        return self.api_responds()
+
     def wait_healthy(self, timeout: float) -> bool:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            with self._lock:
+                proc = self._proc
+            if settings.GO2RTC_MANAGED and proc is not None and proc.poll() is not None:
+                # Died during startup. Waiting out the rest of the timeout
+                # would only delay a diagnosis we already have.
+                self._last_error = (
+                    f"exited during startup (code={proc.returncode})"
+                    + (f"; see {self._log_path}" if self._log_path else "")
+                )
+                if self.api_responds():
+                    self._last_error += (
+                        f" -- and something else is already answering on "
+                        f"{settings.GO2RTC_INTERNAL_URL}, most likely an "
+                        f"orphaned go2rtc holding the port"
+                    )
+                return False
             if self.healthy():
                 return True
             if self._stop.wait(0.25):
@@ -346,6 +450,7 @@ class Go2RtcSupervisor:
             "pid": proc.pid if proc and proc.poll() is None else None,
             "restarts": self._restarts,
             "config_path": self._config_path,
+            "log_path": self._log_path,
             "streams": sorted(self._streams),
             "last_error": self._last_error,
         }
