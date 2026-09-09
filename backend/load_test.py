@@ -510,6 +510,7 @@ def main():
     after = {w.camera_id: _snapshot(w) for w in workers}
     sampler.stop.set()
     sampler.join(timeout=5)
+    contenders_end = gpu_contenders()
 
     print("stopping cameras...")
     for w in workers:
@@ -571,7 +572,14 @@ def main():
         "gpu_at_start": vram_start,
         "gpu_at_end": gpu_memory(),
         "gpu_contenders": contenders,
-        "gpu_exclusive": not contenders,
+        # Checked again AFTER the window, because a start-of-run check is not
+        # enough: in Phase 1 the dev server came back up mid-measurement and
+        # Ollama reloaded behind it, and the run looked fine until the sample
+        # timestamps were lined up against the restart. A run is only clean if
+        # it was clean at both ends.
+        "gpu_contenders_at_end": contenders_end,
+        "gpu_exclusive": not contenders and not contenders_end,
+        "contaminated_during_run": bool(contenders_end) and not contenders,
         "host": {
             "platform": platform.platform(),
             "python": platform.python_version(),
@@ -607,6 +615,7 @@ def main():
             "max_traffic_queue_depth": sampler.max_traffic_q,
             "events_emitted": events["n"],
             "external_network_calls": len(net),
+            "_dirty": bool(contenders_end) and not contenders,
             "external_network_sample": net[:20],
         },
         "cameras": cams,
@@ -639,6 +648,12 @@ def main():
     print(f"external net calls {t['external_network_calls']}")
     if behind:
         print(f"BEHIND TARGET      {len(behind)} camera(s): {', '.join(behind[:6])}")
+    if res["totals"].get("_dirty"):
+        print()
+        print("*** RUN CONTAMINATED: a GPU consumer appeared DURING the window.")
+        for c in contenders_end:
+            print(f"    {c['match']}: {c['cmdline'][:110]}")
+        print("    Discard this result and re-run.")
     print(f"\nwrote {out}")
 
 
