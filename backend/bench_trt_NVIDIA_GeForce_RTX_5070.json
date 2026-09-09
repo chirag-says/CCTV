@@ -2,20 +2,30 @@
   "gpu": "NVIDIA GeForce RTX 5070",
   "results": {
     "yolov8n_b1": {
-      "pytorch_fp16_ms": 6.35,
-      "tensorrt_fp16_ms": 2.67,
-      "speedup": 2.38
+      "pytorch_fp16_ms": 5.31,
+      "tensorrt_fp16_ms": 2.59,
+      "speedup": 2.05
     },
     "yolov8n_b8": {
-      "pytorch_fp16_ms": 2.09,
-      "tensorrt_fp16_ms": 1.2,
-      "speedup": 1.74
+      "pytorch_fp16_ms": 1.41,
+      "tensorrt_fp16_ms": 1.15,
+      "speedup": 1.23
     },
     "yolov8n_b16": {
-      "pytorch_fp16_ms": null,
-      "tensorrt_fp16_ms": 1.09,
-      "speedup_vs_b8_pytorch": 1.92
+      "pytorch_fp16_ms": 1.26,
+      "tensorrt_fp16_ms": 1.08,
+      "speedup": 1.17
     },
-    "note": "end-to-end ultralytics predict(); face stack not yet measured on this GPU"
+    "scrfd_640": {
+      "ort_cuda_fp32_ms": 4.18,
+      "ort_tensorrt_fp16_ms": 1.35,
+      "speedup": 3.1
+    },
+    "arcface": {
+      "ort_cuda_fp32_ms": 3.11,
+      "ort_tensorrt_fp16_ms": 1.12,
+      "speedup": 2.78
+    },
+    "note": "raw session.run for face models (no insightface Python pre/post); ultralytics predict() end-to-end for yolov8n"
   }
 }

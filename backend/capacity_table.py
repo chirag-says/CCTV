@@ -10,24 +10,33 @@ DECODE_CAP_720 = 80   # one NVDEC on the 5070, 720p30 streams
 DECODE_CAP_1080 = 35
 FACE_FPS, ANPR_FPS, WEAPON_FPS, REID_PER_S = 5, 2, 1, 2   # fixed rates, do not scale with tracking fps
 
-# Speedups applied on top of the measured "today" numbers. On the 5070 the PyTorch YOLO path
-# already uses fp16 tensor cores, so TensorRT gains less than the 5.3x measured on the 1650.
-# The face stack runs in ONNX Runtime fp32 and gained only 3x from the 1650 to the 5070,
-# so it has the most headroom.
-TRT_GAIN = {"person": 1.92, "face": 4.0, "anpr": 2.5, "weapon": 2.0, "reid": 1.5}   # person measured on 5070 (2.09 -> 1.09 ms); rest estimates
-RUST_GAIN = {"person": 1.5, "face": 1.25, "anpr": 1.25, "weapon": 1.25, "reid": 1.25}
-CPU_MS = {"today": 4.0, "py_trt": 2.0, "rust_trt": 0.3}   # CPU ms per tracked frame
+# Three software states, ms per frame on the bench GPU:
+#   today    measured end-to-end (bench_pipeline.py)
+#   py_trt   engines swapped to TensorRT fp16, Python glue unchanged (bench_trt.py, measured on the 5070)
+#   native   raw engine time plus GPU-side pre/post, i.e. a C++/DeepStream/Rust hot loop (engine times measured, glue estimated)
+GLUE_MS = 0.5   # per-frame residual in a native pipeline (decode handoff, GPU letterbox, tracker)
+CPU_MS = {"today": 4.0, "py_trt": 2.0, "native": 0.3}   # CPU ms per tracked frame
 
 def load(path):
     b = json.load(open(path)); S = {k: v["mean_ms"] for k, v in b["stages"].items()}
+    T = json.load(open(path.replace("bench_", "bench_trt_")))["results"]   # measured TensorRT results
+    person_trt = T["yolov8n_b16"]["tensorrt_fp16_ms"]
+    face_raw_cuda = T["scrfd_640"]["ort_cuda_fp32_ms"] + T["arcface"]["ort_cuda_fp32_ms"]
+    face_raw_trt = T["scrfd_640"]["ort_tensorrt_fp16_ms"] + T["arcface"]["ort_tensorrt_fp16_ms"]
     today = {"person": S["yolov8n_640_fp16_b8_per_frame"],
              "face": S["scrfd_det10g_640"] + S["arcface_r50_per_face"],
              "anpr": S["yolov8n_640_fp16_b8_per_frame"] + S["easyocr_plate_crop"],
              "weapon": S["yolo11m_640_fp16_b8_per_frame"],
              "reid": S["reid_resnet50_b8_per_crop"]}
-    py_trt = {k: v / TRT_GAIN[k] for k, v in today.items()}
-    rust = {k: v / RUST_GAIN[k] for k, v in py_trt.items()}
-    return b["gpu"], {"today": today, "py_trt": py_trt, "rust_trt": rust}
+    py_trt = {"person": person_trt,
+              "face": today["face"] - face_raw_cuda + face_raw_trt,        # swap engines, keep insightface Python decode
+              "anpr": person_trt + S["easyocr_plate_crop"] / 2.0,           # OCR TensorRT gain estimated
+              "weapon": today["weapon"] / 1.3, "reid": today["reid"] / 1.2}  # estimated
+    native = {"person": GLUE_MS + 0.4,                                        # 0.4 ms engine time estimated from 1.08 e2e
+              "face": GLUE_MS + face_raw_trt,
+              "anpr": GLUE_MS + 0.4 + S["easyocr_plate_crop"] / 2.0,
+              "weapon": GLUE_MS + today["weapon"] / 2.0, "reid": today["reid"] / 1.5}
+    return b["gpu"], {"today": today, "py_trt": py_trt, "native": native}
 
 def cams(s, tier, fps):
     load_ms = s["person"] * fps
@@ -47,8 +56,8 @@ def table(path="bench_NVIDIA_GeForce_RTX_5070.json", res=720):
 if __name__ == "__main__":
     gpu, out = table(sys.argv[1] if len(sys.argv) > 1 else "bench_NVIDIA_GeForce_RTX_5070.json")
     print(f"Cameras per {gpu} (70% util), decode cap {DECODE_CAP_720} @720p\n")
-    print(f"{'plan':6s} {'fps':>4s} | {'today':>7s} {'Py+TRT':>7s} {'Rust+TRT':>8s} | {'CPU cores Py':>12s} {'Rust':>5s}")
+    print(f"{'plan':6s} {'fps':>4s} | {'today':>7s} {'Py+TRT':>7s} {'native':>8s} | {'CPU cores Py':>12s} {'nat.':>5s}")
     for (tier, fps), r in out.items():
-        print(f"{tier:6s} {fps:4d} | {r['today']:7.1f} {r['py_trt']:7.1f} {r['rust_trt']:8.1f} | "
-              f"{r['py_trt']*fps*CPU_MS['py_trt']/1000:12.1f} {r['rust_trt']*fps*CPU_MS['rust_trt']/1000:5.1f}")
+        print(f"{tier:6s} {fps:4d} | {r['today']:7.1f} {r['py_trt']:7.1f} {r['native']:8.1f} | "
+              f"{r['py_trt']*fps*CPU_MS['py_trt']/1000:12.1f} {r['native']*fps*CPU_MS['native']/1000:5.1f}")
         if fps == 30: print()
