@@ -65,6 +65,11 @@ async def _broadcast_event(event: dict):
     await ws_manager.broadcast_event(event)
 
 
+async def _broadcast_metadata(camera_id: str, message: dict):
+    """Forward one frame's detection metadata to that camera's subscribers."""
+    await ws_manager.broadcast_metadata(camera_id, message)
+
+
 def handle_frame(camera_id: str, frame):
     """
     Legacy callback — JPEG encoding is now done in the camera worker thread
@@ -80,6 +85,23 @@ def handle_pipeline_event(event: dict):
     NON-BLOCKING: enqueues event for async processing.
     """
     event_type = event.get('event_type', 'unknown')
+
+    # Detection metadata is one message per analysed frame per camera. It is
+    # live-view data with no meaning a second later: broadcast to whoever is
+    # watching that camera and dropped otherwise. It never touches the event
+    # queue, and it is never persisted -- the events table already records
+    # what happened; this only says where to draw a rectangle right now.
+    if event_type == "frame_metadata":
+        camera_id = event.get("camera_id", "")
+        if _main_loop and ws_manager.has_metadata_subscribers(camera_id):
+            payload = {k: v for k, v in event.items() if k != "event_type"}
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    _broadcast_metadata(camera_id, payload), _main_loop
+                )
+            except Exception:
+                pass
+        return
 
     # vehicle_count events are high-frequency — broadcast only, don't persist
     if event_type == "vehicle_count":
@@ -624,6 +646,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"⚠️  Could not load encodings: {e}")
 
+    # ── Live-view relay (go2rtc) ──────────────────────────────
+    # Generated from the cameras table, so the relay's stream list and the
+    # analyser's camera list cannot drift apart. Failure here is not fatal:
+    # without go2rtc the monitor page falls back to MJPEG, and every other
+    # part of the system is unaffected.
+    try:
+        from app.services.camera_service import CameraService
+        from app.services.go2rtc import go2rtc
+        go2rtc.start(CameraService.list_cameras())
+    except Exception as e:
+        logger.warning(f"⚠️  go2rtc relay unavailable: {e}")
+
     logger.info(f"🌐 API Server: http://{settings.HOST}:{settings.PORT}")
     logger.info(f"📖 Docs: http://{settings.HOST}:{settings.PORT}/docs")
     logger.info("📷 Cameras will start when triggered from the dashboard")
@@ -669,6 +703,11 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
     camera_manager.stop_all()
+    try:
+        from app.services.go2rtc import go2rtc
+        go2rtc.stop()
+    except Exception:
+        pass
     eq.stop()  # Drain remaining events before exit
     logger.info("✅ All cameras stopped. Event queue drained. Goodbye!")
 

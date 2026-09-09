@@ -837,6 +837,54 @@ class Settings(BaseSettings):
     INCIDENT_EVIDENCE_WINDOW_SEC: int = 120  # ± window for correlating unknown
                                               # faces seen on the same camera
 
+    # ── Phase 3: live view via go2rtc (WebRTC) ────────────────
+    # Video no longer passes through this process. go2rtc pulls RTSP from the
+    # camera and hands the browser WebRTC; the pipeline reads the same URL
+    # separately for analysis. What the application sends to the browser is
+    # detection METADATA, which is roughly 200 bytes where an annotated JPEG
+    # was 60 KB and 8.9 ms of CPU.
+    GO2RTC_ENABLED: bool = True
+    # False when something else owns the process -- the compose sidecar, or a
+    # system service. The config file is still generated either way, because
+    # the cameras table is still the only place the stream list exists.
+    GO2RTC_MANAGED: bool = True
+    GO2RTC_BINARY: str = "go2rtc"            # PATH name, or an absolute path
+    # A directory of its own, not a loose file beside the code: compose
+    # mounts this into the go2rtc container, and Docker creates a DIRECTORY
+    # where a bind-mounted file does not exist yet. Mounting the directory
+    # means a fresh clone comes up before anything has generated the file.
+    GO2RTC_CONFIG_PATH: str = "config/go2rtc.yaml"
+    GO2RTC_API_LISTEN: str = ":1984"
+    GO2RTC_RTSP_LISTEN: str = ":8554"
+    GO2RTC_WEBRTC_LISTEN: str = ":8555"
+    # Where THIS process reaches go2rtc (health checks).
+    GO2RTC_INTERNAL_URL: str = "http://127.0.0.1:1984"
+    # Where the BROWSER reaches go2rtc. Different from the internal URL as
+    # soon as anything is containerised or behind a proxy.
+    GO2RTC_PUBLIC_URL: str = "http://localhost:1984"
+    # ICE candidates go2rtc advertises. "stun:8555" makes go2rtc discover its
+    # own public address; a fixed "host:8555" is what a LAN deployment wants.
+    GO2RTC_CANDIDATES: str = "stun:8555"
+    GO2RTC_LOG_LEVEL: str = "warn"
+    GO2RTC_STARTUP_TIMEOUT_SEC: float = 15.0
+
+    # ── Detection metadata channel ────────────────────────────
+    # One WebSocket message per ANALYSED frame per camera: timestamp, track
+    # ids, normalised boxes, labels, identities. Person and face only -- see
+    # app/vision/frame_metadata.py for why that filter lives there.
+    METADATA_STREAM_ENABLED: bool = True
+
+    # ── JPEG: fallback and snapshots only ─────────────────────
+    # The per-camera JPEG encoder thread no longer starts with the camera.
+    # It is started on demand by an MJPEG fallback viewer (?fallback=1 on the
+    # stream socket), and the snapshot endpoint encodes inline when no thread
+    # is running. Set True to restore a thread per camera at startup.
+    JPEG_THREAD_ALWAYS_ON: bool = False
+
+    @property
+    def go2rtc_candidates_list(self) -> List[str]:
+        return [c.strip() for c in self.GO2RTC_CANDIDATES.split(",") if c.strip()]
+
     @property
     def cors_origins_list(self) -> List[str]:
         return [origin.strip() for origin in self.CORS_ORIGINS.split(",")]
