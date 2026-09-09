@@ -47,13 +47,20 @@ def tier_loads(bench):
         "Pro    (Plus + ANPR + weapons + cross-camera ReID)": person + face + anpr + weapon + reid,
     }
 
-def cams_per_gpu(ms_per_s, gpu):
-    return 1000.0 * UTIL / (ms_per_s / GPU_FACTOR[gpu])
+BENCH_KEY = "GTX 1650"   # set by main()/callers from the JSON's gpu name
+
+def bench_key(bench):
+    return next(k for k in GPU_FACTOR if k in bench["gpu"])
+
+def cams_per_gpu(ms_per_s, gpu, bench=BENCH_KEY):
+    """ms_per_s is measured on `bench`; scale to `gpu` by the factor ratio (1.0 when they match)."""
+    return 1000.0 * UTIL / (ms_per_s * GPU_FACTOR[bench] / GPU_FACTOR[gpu])
 
 def main(path):
     b = json.load(open(path))
     print(f"Benchmark GPU: {b['gpu']}   (analysed {FPS} fps/camera, {int(UTIL*100)}% utilisation)\n")
     tiers = tier_loads(b)
+    bk = bench_key(b)
     print("GPU load per camera on benchmark GPU (ms of GPU time per second of video):")
     for t, ms in tiers.items():
         print(f"  {t:55s} {ms:7.1f} ms/s")
@@ -63,7 +70,7 @@ def main(path):
     print(f"{'host':32s} {'tier':8s} {'cams/GPU':>9s} {'INR/hr':>8s} {'INR/day':>8s} {'INR/month':>10s}")
     for name, gpu, usd, note in CLOUD:
         for t, ms in tiers.items():
-            n = cams_per_gpu(ms, gpu)
+            n = cams_per_gpu(ms, gpu, bk)
             hr = usd * INR_PER_USD / n
             print(f"{name:32s} {t[:6]:8s} {n:9.1f} {hr:8.2f} {hr*24:8.0f} {hr*HOURS_PER_MONTH:10.0f}")
         print(f"{'':32s} {note}")
@@ -73,10 +80,10 @@ def main(path):
     for name, gpu, hw, months, watts, tariff in EDGE:
         box_month = hw / months + watts / 1000 * 24 * 30 * tariff
         for t, ms in tiers.items():
-            n = cams_per_gpu(ms, gpu)
+            n = cams_per_gpu(ms, gpu, bk)
             m = box_month / n
             print(f"{name:32s} {t[:6]:8s} {n:9.1f} {m/HOURS_PER_MONTH:8.2f} {m/30:8.0f} {m:10.0f}")
         print(f"{'':32s} box cost {box_month:,.0f} INR/month = hardware {hw/months:,.0f} + power {watts/1000*24*30*tariff:,.0f}")
 
 if __name__ == "__main__":
-    main(sys.argv[1] if len(sys.argv) > 1 else "bench_NVIDIA_GeForce_GTX_1650.json")
+    main(sys.argv[1] if len(sys.argv) > 1 else "bench_NVIDIA_GeForce_RTX_5070.json")

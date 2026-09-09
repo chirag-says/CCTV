@@ -13,8 +13,10 @@ import math
 
 PRICE = {"Basic": 1000, "Plus": 2000, "Pro": 4000}     # INR per camera per month (genuine pricing)
 MIX = {"Basic": 0.7, "Plus": 0.2, "Pro": 0.1}           # camera mix across clients
-CAP = {"B": {"Basic": 24.6, "Plus": 12.2, "Pro": 7.1},
-       "C": {"Basic": 47.8, "Plus": 28.8, "Pro": 19.1}}  # cameras per RTX 5070
+from capacity_table import table as _cap_table
+_gpu, _t = _cap_table()
+CAP = {"B": {k: _t[(k, 10)]["today"] for k in ("Basic", "Plus", "Pro")},    # measured, today's code, 10 fps
+       "C": {k: _t[(k, 30)]["native"] for k in ("Basic", "Plus", "Pro")}}   # projected, native hot loop + TensorRT, 30 fps
 GPUS_PER_NODE = 2
 NODE_INR = 194_000
 SPARE_NODES = 1

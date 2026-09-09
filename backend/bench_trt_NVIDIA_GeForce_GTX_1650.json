@@ -1,0 +1,30 @@
+{
+  "gpu": "NVIDIA GeForce GTX 1650",
+  "results": {
+    "yolov8n_b1": {
+      "pytorch_fp16_ms": 21.66,
+      "tensorrt_fp16_ms": 6.64,
+      "speedup": 3.26
+    },
+    "yolov8n_b8": {
+      "pytorch_fp16_ms": 19.0,
+      "tensorrt_fp16_ms": 4.6,
+      "speedup": 4.13
+    },
+    "yolov8n_b16": {
+      "pytorch_fp16_ms": 18.33,
+      "tensorrt_fp16_ms": 4.16,
+      "speedup": 4.41
+    },
+    "scrfd_640": {
+      "ort_cuda_fp32_ms": 21.06,
+      "ort_tensorrt_fp16_ms": 9.32,
+      "speedup": 2.26
+    },
+    "arcface": {
+      "ort_cuda_fp32_ms": 12.89,
+      "ort_tensorrt_fp16_ms": 5.36,
+      "speedup": 2.4
+    }
+  }
+}
