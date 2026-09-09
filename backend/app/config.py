@@ -175,6 +175,90 @@ class Settings(BaseSettings):
     # anywhere.
     PERSON_DET_HALF: bool = True    # fp16 person detection
     PERSON_DET_IMGSZ: int = 640     # letterbox target for the person detector
+
+    # ── Phase 2 item 1: TensorRT engines for the YOLO models ──
+    # yolov8n on this card: 6.35 ms per frame at batch 1 in PyTorch, 2.59 ms
+    # as an engine; 1.26 vs 1.08 ms at batch 16
+    # (bench_trt_NVIDIA_GeForce_RTX_5070.json).
+    #
+    # The engine is not by itself the Phase 2 win -- the 20-camera baseline
+    # has the GPU 67 percent idle, so inference time is not what caps
+    # throughput -- but item 3 runs one batched call per GPU tick for all
+    # cameras, and doing that in PyTorch would leave most of it unclaimed.
+    #
+    # Engines are build artefacts: specific to the GPU, the driver, the
+    # TensorRT version and the build parameters, and named for all of them, so
+    # a changed card simply misses the cache and rebuilds. Built on first use,
+    # which takes minutes and happens once. *.engine and trt_cache/ are
+    # gitignored.
+    #
+    # False loads the .pt through PyTorch exactly as before.
+    USE_TENSORRT_ENGINES: bool = True
+    TRT_BUILD_ON_START: bool = True  # build a missing engine rather than fall back
+
+    # TWO PROFILES, AND THE REASON IS MEASURED.
+    # TensorRT sizes an execution context's activation memory for the MAXIMUM
+    # batch in its profile, whatever batch you actually run. Measured on this
+    # card with yolov8n:
+    #
+    #   batch-32 engine   1,131 MiB per execution context
+    #   batch-1  engine      50 MiB per execution context
+    #
+    # Every camera worker holds its own context today, so a batch-32 engine
+    # per camera would want 22.6 GB on a 12 GB card. It is not a tuning
+    # choice, it simply does not load.
+    #
+    # So the per-camera path uses batch 1 (20 cameras, about 1 GB total), and
+    # the batch-32 profile is built for item 3, where ONE inference server
+    # holds ONE context and batches every camera's pending frames into it.
+    # That is the shape of the win: batching is worth ~3x per frame, and it is
+    # only affordable once there is one consumer instead of twenty.
+    TRT_PERCAM_BATCH: int = 1       # per-camera contexts: cheap profile
+    TRT_MAX_BATCH: int = 32         # item 3's shared server: dynamic up to this
+
+    # PER-CAMERA ENGINES ARE OFF, BECAUSE THEY MEASURED SLOWER.
+    # In isolation the engine is decisively faster -- one context, batch 1,
+    # 720p frame, this card:
+    #
+    #   PyTorch .pt        14.75 ms
+    #   engine, b1 profile  6.26 ms      2.4x
+    #
+    # But with one context per camera at 20 cameras, throughput went the other
+    # way: 2.16 -> 1.60 analysis fps, a 26 percent regression, while GPU
+    # utilisation ROSE from 32.3 to 37 percent. More GPU time for less work is
+    # what contention looks like -- twenty TensorRT execution contexts taking
+    # turns cost more than they save.
+    #
+    # That is not a reason to abandon engines; it is the argument for item 3.
+    # One inference server holding ONE context, batching every camera's frames
+    # into it, gets the 2.4x without the contention and can use the batch-32
+    # profile that a per-camera design cannot afford. So the machinery stays,
+    # built and cached, and the per-camera path stays on PyTorch until there
+    # is one consumer instead of twenty.
+    #
+    # True restores per-camera engines; the regression above is what to expect.
+    TRT_PERCAM_ENGINES: bool = False
+
+    # ── Phase 2 items 3 and 4: one inference loop, cameras in processes ──
+    # "server"  cameras run in processes doing decode, tracking and rules; one
+    #           InferenceServer per GPU owns the engines and the ONNX Runtime
+    #           sessions, batches every camera's pending frame each tick, and
+    #           routes results back by camera id.
+    # "thread"  the previous shape: a thread per camera, each owning its own
+    #           models. Kept reachable.
+    #
+    # Why: twenty camera threads in one interpreter serialise on the GIL, and
+    # twenty batch-1 inference calls throw away roughly 3x against batch 8.
+    # Both have the same fix, which is one consumer instead of twenty.
+    INFERENCE_MODE: str = "server"          # "server" or "thread"
+    CAMERAS_PER_PROCESS: int = 8
+    INFERENCE_TICK_MS: float = 20.0         # clamped to 10..33 by the server
+    INFERENCE_BATCH_CAP: int = 32           # matches the engines' batch profile
+    INFERENCE_TIMEOUT_SEC: float = 2.0      # a lost result is an empty detection
+    INFERENCE_SLOTS_PER_CAMERA: int = 3     # shared-memory frames in flight
+    # Slot size. 1920x1080x3 covers a 1080p frame; anything larger raises at
+    # submit rather than corrupting a neighbouring slot.
+    INFERENCE_MAX_FRAME_PIXELS: int = 1920 * 1080
     # A face is bound to a person track when its centre falls inside the person
     # box. Person boxes are looser than face boxes, so a small pad tolerates
     # the usual jitter without letting a neighbour's face bind to the wrong body.

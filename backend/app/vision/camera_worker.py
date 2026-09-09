@@ -264,9 +264,34 @@ class CameraManager:
         self._event_callback = on_event
         self._unknown_callback = on_unknown
         self._frame_callback = on_frame
+        if self._server_mode():
+            from app.vision.process_manager import process_camera_manager
+            process_camera_manager.set_callbacks(on_event, on_unknown, on_frame)
+
+    def start_all(self):
+        """Bring up whatever was registered. Only server mode needs this."""
+        if self._server_mode():
+            from app.vision.process_manager import process_camera_manager
+            process_camera_manager.start()
+
+    @staticmethod
+    def _server_mode() -> bool:
+        return str(getattr(settings, "INFERENCE_MODE", "thread")).lower() == "server"
 
     def start_camera(self, camera_id: str, stream_source: str) -> bool:
-        """Start processing for a camera."""
+        """Start processing for a camera.
+
+        In server mode a camera is registered with the process manager and
+        started when start_all() runs, because cameras are grouped into
+        processes and a process cannot be spawned one camera at a time. In
+        thread mode this keeps its original behaviour exactly.
+        """
+        if self._server_mode():
+            from app.vision.process_manager import process_camera_manager
+            process_camera_manager.add_camera(camera_id, stream_source)
+            logger.info(f"Camera {camera_id} registered for server mode")
+            return True
+
         if camera_id in self._workers:
             if self._workers[camera_id].is_running:
                 logger.warning(f"Camera {camera_id} already running")
@@ -328,6 +353,9 @@ class CameraManager:
 
     def stop_all(self):
         """Stop all camera workers."""
+        if self._server_mode():
+            from app.vision.process_manager import process_camera_manager
+            process_camera_manager.stop()
         for camera_id in list(self._workers.keys()):
             self.stop_camera(camera_id)
 
@@ -335,6 +363,9 @@ class CameraManager:
         """Load face encodings into all active pipeline recognizers and cache for future cameras."""
         # Cache encodings so newly started cameras automatically get them
         self._cached_encodings = encodings_data
+        if self._server_mode():
+            from app.vision.process_manager import process_camera_manager
+            process_camera_manager.load_encodings_all(encodings_data)
 
         for worker in self._workers.values():
             worker.pipeline.recognizer.load_encodings(encodings_data)
@@ -367,6 +398,9 @@ class CameraManager:
 
     def get_all_status(self) -> dict:
         """Get status for all cameras."""
+        if self._server_mode():
+            from app.vision.process_manager import process_camera_manager
+            return process_camera_manager.get_all_status()
         return {
             "cameras": {
                 cid: worker.status for cid, worker in self._workers.items()
@@ -377,6 +411,9 @@ class CameraManager:
 
     def get_active_camera_ids(self) -> list:
         """Get IDs of all active cameras."""
+        if self._server_mode():
+            from app.vision.process_manager import process_camera_manager
+            return process_camera_manager.get_active_camera_ids()
         return list(self._workers.keys())
 
     def get_all_occupancy(self) -> int:

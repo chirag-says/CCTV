@@ -168,6 +168,9 @@ class VisionPipeline:
         self._unknown_confirm_window = getattr(settings, "UNKNOWN_CONFIRM_WINDOW_SEC", 6.0)
         self._unknown_confirm_span = getattr(settings, "UNKNOWN_CONFIRM_MIN_SPAN_SEC", 1.0)
         self._frame_person_dets: List[dict] = []
+        # Set by attach_inference_client() in the process path; None means this
+        # pipeline owns its own models, which is the thread path.
+        self._inference_client = None
 
         # Identity layer, sitting ABOVE the tracker. ByteTrack stays
         # geometry-only; this owns the track_id -> identity binding.
@@ -690,9 +693,14 @@ class VisionPipeline:
         # (sub-stage timing: scrfd_preprocess/scrfd_inference/scrfd_postprocess
         #  is recorded inside detector.detect_faces_with_embeddings)
         if settings.PLAN_ALLOWS_FACE:
-            face_locations, embeddings, face_landmarks, rgb_frame = (
-                self.detector.detect_faces_with_embeddings(frame)
-            )
+            _client = getattr(self, "_inference_client", None)
+            if _client is not None:
+                face_locations, embeddings, face_landmarks = _client.faces(frame)
+                rgb_frame = None
+            else:
+                face_locations, embeddings, face_landmarks, rgb_frame = (
+                    self.detector.detect_faces_with_embeddings(frame)
+                )
         else:
             # Basic plan: no SCRFD, no ArcFace. Person mode treats "no faces
             # this frame" as the ordinary case -- a person facing away -- so
@@ -2375,6 +2383,16 @@ class VisionPipeline:
         _, url_path = save_snapshot(image, prefix)
         return url_path
 
+    def attach_inference_client(self, client):
+        """Route this pipeline's model calls at the shared inference server.
+
+        The ONLY behavioural difference between the thread path and the process
+        path. Everything else -- tracking, identity, the unknown registry,
+        rules, events, drawing -- is the same code either way, which is the
+        point: the process split must not fork the product's behaviour.
+        """
+        self._inference_client = client
+
     def _resolve_analysis_fps(self) -> float:
         """How many frames per second this camera should analyse.
 
@@ -2505,9 +2523,17 @@ class VisionPipeline:
                     import torch
                     device = 'cuda' if torch.cuda.is_available() else 'cpu'
                     model_path = getattr(settings, 'HAZARD_MODEL_PATH', 'yolov8n.pt')
-                    self._yolo_person_detector = YOLO(model_path)
+                    # Item 1: prefer a TensorRT engine. resolve_weights returns
+                    # the .pt unchanged when engines are off, unavailable, or
+                    # the build failed -- a slower path, never a dead one.
+                    from app.vision.engines import resolve_weights
+                    load_path = resolve_weights(model_path)
+                    self._yolo_person_detector = YOLO(load_path)
                     self._yolo_person_device = device
-                    logger.info(f"[{self.camera_id}] YOLO person detector loaded on {device}")
+                    logger.info(
+                        f"[{self.camera_id}] YOLO person detector loaded on "
+                        f"{device}: {load_path}"
+                    )
             except Exception as e:
                 logger.warning(f"[{self.camera_id}] YOLO person detector unavailable: {e}")
                 self._yolo_person_detector = None
@@ -2520,6 +2546,10 @@ class VisionPipeline:
         Run YOLO person detection on a frame (FACE mode only).
         Returns list of person detection dicts with 'bbox' and 'confidence'.
         """
+        client = getattr(self, "_inference_client", None)
+        if client is not None:
+            return client.persons(frame)
+
         if not self._load_yolo_person_detector():
             return []
 
@@ -2912,9 +2942,14 @@ class VisionPipeline:
 
         if self._frame_count % settings.FRAME_SKIP == 0:
             if settings.PLAN_ALLOWS_FACE:
-                face_locations, embeddings, face_landmarks, rgb_frame = (
-                    self.detector.detect_faces_with_embeddings(clean_frame)
-                )
+                _client = getattr(self, "_inference_client", None)
+                if _client is not None:
+                    face_locations, embeddings, face_landmarks = _client.faces(clean_frame)
+                    rgb_frame = None
+                else:
+                    face_locations, embeddings, face_landmarks, rgb_frame = (
+                        self.detector.detect_faces_with_embeddings(clean_frame)
+                    )
             else:
                 face_locations, embeddings, face_landmarks, rgb_frame = [], [], [], None
 
