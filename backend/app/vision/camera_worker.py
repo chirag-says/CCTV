@@ -22,13 +22,22 @@ class CameraWorker:
     """
     Wraps a VisionPipeline and runs it in a dedicated thread.
 
-    Architecture (post-optimization):
+    Architecture:
       Main thread:  capture → detect → track → recognize → [hand off frame]
       JPEG thread:  [receive frame] → resize → encode → write _last_jpeg
 
-    The main loop no longer blocks on JPEG encoding (~28ms saved per frame).
-    A single-slot latest-frame-wins design ensures the encoder always works
-    on the most recent frame and never builds up a backlog.
+    THE JPEG THREAD IS NO LONGER PART OF THE DEFAULT PATH.
+    Since Phase 3 live video reaches the browser from go2rtc over WebRTC, and
+    this process publishes detections as metadata. Nothing reads _last_jpeg on
+    a normal page load, so nothing starts an encoder: the thread is created on
+    demand by an MJPEG fallback viewer (ensure_jpeg_encoder), and the snapshot
+    endpoint encodes inline when no thread is running.
+
+    JPEG_THREAD_ALWAYS_ON=true restores a thread per camera at startup.
+
+    The single-slot latest-frame-wins handoff below is unchanged: when the
+    encoder does run, it always works on the newest frame and never builds up
+    a backlog.
     """
 
     def __init__(
@@ -66,19 +75,17 @@ class CameraWorker:
         self._jpeg_skipped = 0
 
     def start(self):
-        """Start the camera worker and its JPEG encoder thread."""
+        """Start the camera worker. No JPEG encoder thread on this path."""
         logger.info(f"Starting camera worker: {self.camera_id}")
         self.pipeline.start()
         self._stop_event.clear()
-
-        # Start the JPEG encoder thread BEFORE the main loop
         self._jpeg_slot_event.clear()
-        self._jpeg_thread = threading.Thread(
-            target=self._jpeg_encoder_loop,
-            name=f"jpeg-{self.camera_id}",
-            daemon=True,
-        )
-        self._jpeg_thread.start()
+
+        # Only if something has explicitly asked for the old behaviour. The
+        # default live view needs no JPEG at all, and a thread per camera that
+        # encodes nothing is still a thread per camera.
+        if getattr(settings, "JPEG_THREAD_ALWAYS_ON", False):
+            self.ensure_jpeg_encoder()
 
         self._thread = threading.Thread(
             target=self._run_loop,
@@ -87,8 +94,30 @@ class CameraWorker:
         )
         self._thread.start()
 
+    def ensure_jpeg_encoder(self):
+        """Start the JPEG encoder thread if it is not already running.
+
+        Called when an MJPEG fallback viewer connects. Idempotent, and safe to
+        call from the event loop: starting a daemon thread does not block.
+        """
+        if self._stop_event.is_set():
+            return
+        if self._jpeg_thread is not None and self._jpeg_thread.is_alive():
+            return
+        self._jpeg_thread = threading.Thread(
+            target=self._jpeg_encoder_loop,
+            name=f"jpeg-{self.camera_id}",
+            daemon=True,
+        )
+        self._jpeg_thread.start()
+        logger.info(f"JPEG encoder started on demand: {self.camera_id}")
+
+    @property
+    def jpeg_encoder_running(self) -> bool:
+        return self._jpeg_thread is not None and self._jpeg_thread.is_alive()
+
     def stop(self):
-        """Stop the camera worker and JPEG encoder thread."""
+        """Stop the camera worker and JPEG encoder thread, if one is running."""
         logger.info(f"Stopping camera worker: {self.camera_id}")
         self._stop_event.set()
         # Wake the JPEG thread so it can exit
@@ -122,12 +151,17 @@ class CameraWorker:
                     profiler.record_frame_received()
                     frame = self.pipeline.process_frame()
                     if frame is not None:
-                        # Hand frame to JPEG encoder thread (non-blocking).
-                        # Uses latest-frame-wins: overwrites any pending frame
-                        # so the encoder always works on the newest data.
-                        with self._jpeg_slot_lock:
-                            self._jpeg_slot_frame = frame
-                        self._jpeg_slot_event.set()  # Wake encoder
+                        # Hand frame to the JPEG encoder thread, if one is
+                        # running. On the default path there is none, and the
+                        # frame is simply not handed anywhere -- leaving it in
+                        # the slot would pin a 1080p buffer forever for a
+                        # consumer that does not exist.
+                        if self._jpeg_thread is not None:
+                            # Latest-frame-wins: overwrites any pending frame
+                            # so the encoder always works on the newest data.
+                            with self._jpeg_slot_lock:
+                                self._jpeg_slot_frame = frame
+                            self._jpeg_slot_event.set()  # Wake encoder
                     else:
                         profiler.record_frame_dropped()
 
