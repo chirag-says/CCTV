@@ -402,17 +402,26 @@ class Settings(BaseSettings):
     TRAFFIC_PROXIMITY_PX: int = 50       # Pixel proximity for danger alert
     TRAFFIC_ALERT_COOLDOWN_SEC: float = 15.0
 
-    # ── Roboflow Indian Vehicles Detection API ────────────────
+    # ── Item 2: Roboflow is OFF; local models are the path ────
+    # Roboflow was the PRIMARY vehicle and person detector. Every processed
+    # frame went to serverless.roboflow.com: about 750 ms of round trip, a
+    # metered bill, and a copy of the frame leaving the site -- to do a job
+    # YOLOv8n does locally in 1.26 ms.
+    #
+    # Both flags now default False, so TrafficMonitor._load_model() falls
+    # straight through to its RF-DETR / YOLOv8 chain. The Roboflow branch is
+    # still wired behind them, so True restores the cloud path exactly as it
+    # was, without a deploy.
     ROBOFLOW_API_KEY: str = ""  # MUST be set via .env
     ROBOFLOW_MODEL_ID: str = "indian-vehicles-dataset/2"
     ROBOFLOW_API_URL: str = "https://serverless.roboflow.com"
     ROBOFLOW_CONFIDENCE_THRESHOLD: float = 0.50
-    ENABLE_ROBOFLOW_DETECTION: bool = True  # Use Roboflow as primary vehicle detector
+    ENABLE_ROBOFLOW_DETECTION: bool = False
 
     # ── Roboflow Person Detection API ─────────────────────────
     ROBOFLOW_PERSON_MODEL_ID: str = "people-detection-o4rdr/10"
     ROBOFLOW_PERSON_CONFIDENCE: float = 0.50
-    ENABLE_ROBOFLOW_PERSON: bool = True  # Use Roboflow person model for person detection
+    ENABLE_ROBOFLOW_PERSON: bool = False
 
     # ── Video Analysis ────────────────────────────────────────
     VIDEO_UPLOAD_DIR: str = "./uploads/videos"

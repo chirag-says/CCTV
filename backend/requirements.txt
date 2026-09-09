@@ -27,8 +27,12 @@ easyocr>=1.7.0
 rfdetr>=1.0.0
 supervision>=0.25.0
 
-# Roboflow Indian Vehicles Detection API
-inference-sdk>=1.0.0
+# Roboflow detection API — OPTIONAL, and off by default.
+# ENABLE_ROBOFLOW_DETECTION / ENABLE_ROBOFLOW_PERSON default False, so nothing
+# imports this on a normal install. TrafficMonitor's Roboflow branch is still
+# wired behind those flags and degrades to RF-DETR / YOLO when the package is
+# absent, so leaving it uninstalled is a supported configuration.
+# inference-sdk>=1.0.0
 
 # Database (PostgreSQL)
 sqlalchemy>=2.0.0
