@@ -61,6 +61,7 @@ from app.vision.traffic import TrafficMonitor
 from app.vision.reid import get_reid_tracker, ReIDTracker
 from app.vision.unknown_registry import make_label as make_unknown_label
 from app.vision.stream_health import StreamHealthMonitor, StreamState
+from app.vision.frame_metadata import build_frame_metadata
 
 # Ã¢â€â‚¬Ã¢â€â‚¬ Internal: Utilities Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
 from app.utils.image_utils import frame_to_jpeg_bytes, save_snapshot
@@ -728,6 +729,11 @@ class VisionPipeline:
                 for draw_args in coast:
                     self._draw_box(display_frame, *draw_args)
 
+            # Still an ANALYSED frame, so it still gets a message -- an empty
+            # `objects` list is the only way the overlay learns the boxes are
+            # gone rather than merely late.
+            self._publish_metadata(frame, self._track_metadata_entries([]))
+
             self._run_safety_analytics()
             self._check_periodic_exits()
             self._update_fps()
@@ -1226,6 +1232,15 @@ class VisionPipeline:
                         )
             except Exception as e:
                 logger.debug(f"YOLO-assisted detection error: {e}")
+
+        # Boxes for the browser. Built from the tracks rather than from the
+        # draw tuples so each one keeps its track id, and published BEFORE the
+        # optional YOLO-assist pass so overlay latency does not depend on it.
+        self._publish_metadata(
+            frame,
+            self._track_metadata_entries(active_tracks)
+            + self._face_metadata_entries(face_locations),
+        )
 
         # ── Load-tier degradation ─────────────────────────────────
         # Adjust pipeline parameters based on current face count.
@@ -2383,6 +2398,96 @@ class VisionPipeline:
         _, url_path = save_snapshot(image, prefix)
         return url_path
 
+    # ── Detection metadata (Phase 3) ──────────────────────────
+    #
+    # The browser plays video from go2rtc, not from us. What it needs from
+    # this process is where the boxes go -- once per ANALYSED frame, as data.
+    # Boxes here are still in FULL-RES detection coordinates, which is what
+    # the camera actually emits and therefore what go2rtc relays; normalising
+    # against the frame's own size makes the numbers survive every resize
+    # between here and the canvas.
+
+    def _track_metadata_entries(self, active_tracks) -> List[dict]:
+        """Raw metadata entries for the tracks this frame saw.
+
+        The label mirrors what _draw_box would render for the same track:
+        a confirmed name, else a stable unknown label, else the track handle.
+        Reading it off the track rather than off boxes_to_draw keeps the id
+        attached -- the draw tuples deliberately carry no track id, because
+        nothing about drawing needs one.
+        """
+        kind = "person" if self._tracking_mode == "person" else "face"
+        entries = []
+
+        for track in active_tracks or ():
+            name = getattr(track, "person_name", None)
+            unknown_label = getattr(track, "unknown_label", None)
+            entries.append({
+                "kind": kind,
+                "box": track.to_location(),
+                "track_id": getattr(track, "track_id", None),
+                "label": name or unknown_label or f"Track #{getattr(track, 'track_id', '?')}",
+                "identity": name,
+            })
+
+        # Tracks ByteTrack has lost but not forgotten are drawn, so they are
+        # published too -- with the same `coasting` flag the overlay uses to
+        # dash them, rather than being passed off as a live observation.
+        for entry in self._coasting_boxes():
+            location, label, _color, _conf = entry[:4]
+            entries.append({
+                "kind": kind,
+                "box": location,
+                "track_id": None,
+                "label": label,
+                "identity": label if not str(label).startswith("Track #") else None,
+                "coasting": True,
+            })
+
+        return entries
+
+    def _face_metadata_entries(self, face_locations) -> List[dict]:
+        """Face boxes, as faces.
+
+        Only meaningful in person mode: there the track box is a BODY, so the
+        face is a separate rectangle the overlay can draw inside it. In face
+        mode the track box IS the face box and publishing both would put two
+        identical rectangles on the canvas.
+        """
+        if self._tracking_mode != "person":
+            return []
+        return [
+            {"kind": "face", "box": loc, "track_id": None,
+             "label": "face", "identity": None}
+            for loc in (face_locations or ())
+        ]
+
+    def _publish_metadata(self, frame, entries) -> None:
+        """Hand one frame's detections to the event path. Never raises.
+
+        Goes out as an ordinary pipeline event so it works unchanged in both
+        deployments: in thread mode on_event is main.handle_pipeline_event, and
+        in server mode it is the camera process's event queue, which the parent
+        pumps into the very same function. Neither knew about live view before
+        and neither has to now.
+        """
+        if not getattr(settings, "METADATA_STREAM_ENABLED", True):
+            return
+        if self.on_event is None or frame is None:
+            return
+        try:
+            h, w = frame.shape[:2]
+            message = build_frame_metadata(
+                camera_id=self.camera_id,
+                frame_width=w,
+                frame_height=h,
+                entries=entries,
+                frame_id=self._frame_count,
+            )
+            self.on_event({"event_type": "frame_metadata", **message})
+        except Exception as e:
+            logger.debug(f"[{self.camera_id}] metadata publish failed: {e}")
+
     def attach_inference_client(self, client):
         """Route this pipeline's model calls at the shared inference server.
 
@@ -3080,6 +3185,17 @@ class VisionPipeline:
             scaled_boxes.append((scaled_loc, label, color, conf))
 
         self._last_face_draws = scaled_boxes
+
+        # Hybrid mode recognises faces directly, without ByteTrack, so these
+        # entries carry no track id. Vehicle and plate boxes drawn by the
+        # traffic modules above are NOT included: build_frame_metadata drops
+        # every kind but person and face, and nothing here claims either.
+        self._publish_metadata(frame, [
+            {"kind": "face", "box": location, "track_id": None,
+             "label": label,
+             "identity": None if str(label).startswith("UNKNOWN") else label}
+            for (location, label, _color, _conf) in boxes_to_draw
+        ])
 
         from app.utils.image_utils import resize_frame
         display_frame = resize_frame(frame, self._stream_max_w, self._stream_max_h)

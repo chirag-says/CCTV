@@ -20,6 +20,12 @@ class ConnectionManager:
         self._event_connections: List[WebSocket] = []
         # Camera-specific stream subscribers: camera_id -> [websockets]
         self._stream_connections: Dict[str, List[WebSocket]] = {}
+        # Camera-specific DETECTION METADATA subscribers: camera_id -> [ws].
+        # Deliberately a separate table from _stream_connections. A metadata
+        # subscriber is watching go2rtc's video, not ours, so it must NOT make
+        # is_watched() true -- doing so would restart the JPEG encoder for
+        # every camera on the monitor page, which is the cost Phase 3 removes.
+        self._metadata_connections: Dict[str, List[WebSocket]] = {}
         self._lock = asyncio.Lock()
         # camera_id -> monotonic deadline until which a pull-based viewer
         # (the /feed snapshot endpoint) still counts as watching. A polling
@@ -61,6 +67,58 @@ class ConnectionManager:
                     self._stream_connections[camera_id].remove(websocket)
                 if not self._stream_connections[camera_id]:
                     del self._stream_connections[camera_id]
+
+    # ── Detection metadata (Phase 3) ──────────────────────────────
+
+    async def connect_metadata(self, camera_id: str, websocket: WebSocket):
+        """Register an already-accepted socket as a metadata subscriber.
+
+        As with connect_stream, the caller owns accept(): authentication has
+        to happen before the handshake completes.
+        """
+        async with self._lock:
+            self._metadata_connections.setdefault(camera_id, []).append(websocket)
+        logger.info(f"Metadata WebSocket connected for camera {camera_id}")
+
+    async def disconnect_metadata(self, camera_id: str, websocket: WebSocket):
+        async with self._lock:
+            conns = self._metadata_connections.get(camera_id)
+            if not conns:
+                return
+            if websocket in conns:
+                conns.remove(websocket)
+            if not conns:
+                del self._metadata_connections[camera_id]
+
+    def has_metadata_subscribers(self, camera_id: str) -> bool:
+        """Read from worker threads without a lock, like is_watched(): the
+        pipeline asks this to decide whether building a message is worth it,
+        and a one-frame-stale answer costs nothing."""
+        return bool(self._metadata_connections.get(camera_id))
+
+    async def broadcast_metadata(self, camera_id: str, message: dict):
+        """Send one frame's detections to that camera's subscribers.
+
+        JSON text, never bytes. Nothing on this channel is an image.
+        """
+        conns = self._metadata_connections.get(camera_id)
+        if not conns:
+            return
+
+        payload = json.dumps(message)
+        disconnected = []
+        for connection in list(conns):
+            try:
+                await connection.send_text(payload)
+            except Exception:
+                disconnected.append(connection)
+
+        for conn in disconnected:
+            await self.disconnect_metadata(camera_id, conn)
+
+    @property
+    def metadata_counts(self) -> Dict[str, int]:
+        return {k: len(v) for k, v in self._metadata_connections.items()}
 
     async def broadcast_event(self, event_data: dict):
         """Broadcast an event to all connected event subscribers."""
