@@ -172,3 +172,7 @@ pdf1_text.txt
 pdf2_text.txt
 SOA_SentinelAI_CCTV.*
 soa_diagram_sentinelai.png
+
+# TensorRT engines are GPU-specific build artifacts
+*.engine
+backend/trt_cache/
