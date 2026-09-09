@@ -332,6 +332,8 @@ class VisionPipeline:
         self._grab_lock = threading.Lock()
         self._grabber_thread: Optional[threading.Thread] = None
         self._grabber_stop = threading.Event()
+        # Frames decoded and then dropped because nothing wanted them.
+        self._grabber_dropped = 0
 
         # ── Stream Health Monitor ─────────────────────────────────────────
         # Detects frozen/dead streams and manages auto-reconnection.
@@ -340,6 +342,18 @@ class VisionPipeline:
             camera_id=camera_id,
             on_event=on_event,
         )
+
+        # -- Analysis rate (item 6) --------------------------------
+        # The rate this camera is SUPPOSED to analyse at, in frames per
+        # second, resolved once: explicit per-camera config, else the gate
+        # default if this is a gate camera, else the global default.
+        self._analysis_fps = self._resolve_analysis_fps()
+        self._analysis_interval = (
+            1.0 / self._analysis_fps if self._analysis_fps > 0 else 0.0
+        )
+        # perf_counter() of the last analysed frame. Starts at zero so the first
+        # frame to arrive is analysed rather than waiting out an interval.
+        self._last_analysis_at = 0.0
 
         # Performance metrics
         self._fps = 0.0
@@ -367,6 +381,34 @@ class VisionPipeline:
         self._suggestion_cooldowns: Dict[str, float] = {}  # person_id → last_suggestion_time
 
         logger.info(f"Pipeline created for camera {camera_id}: source={stream_source}, mode={self.pipeline_mode}")
+
+    def _frame_wanted(self) -> bool:
+        """Is there any consumer for the frame just read?
+
+        Two of them: the analyser, when its interval has elapsed, and a
+        viewer, who wants display frames at the camera's own rate regardless
+        of the analysis rate. With neither, the frame is decoded and dropped.
+        """
+        # LEGACY FRAME_SKIP MODE MUST KEEP EVERY FRAME.
+        # There, "due" means `_frame_count % skip == 0`, and _frame_count only
+        # advances inside process_frame. Asking here before anything has been
+        # consumed freezes the counter: frame 1 fails the test, so the grabber
+        # drops it, so process_frame never runs, so the counter never moves,
+        # so every later frame fails the same test. The pipeline deadlocks
+        # after exactly one frame -- measured as 0.00 analysis fps and 1.3%
+        # GPU across all 20 cameras, which is how this was found.
+        #
+        # Only a wall-clock rate can be evaluated by a thread that does not
+        # consume, because only the clock advances on its own.
+        if not getattr(settings, "ANALYSIS_RATE_BY_CLOCK", True):
+            return True
+        if self._analysis_due():
+            return True
+        try:
+            from app.core.websocket import ws_manager
+            return ws_manager.is_watched(self.camera_id)
+        except Exception:
+            return True  # never drop a frame over a bookkeeping error
 
     def _grabber_loop(self):
         """
@@ -421,8 +463,21 @@ class VisionPipeline:
             if ret:
                 is_new = self.stream_health.on_frame_read(frame)
                 if is_new:
-                    with self._grab_lock:
-                        self._grabbed_frame = frame
+                    # Item 6: drop here rather than downstream. A frame that is
+                    # neither due for analysis nor wanted by a viewer has no
+                    # consumer at all, and carrying it costs a 1080p resize, a
+                    # redraw and a JPEG slot handoff in process_frame.
+                    #
+                    # The READ above always happens. An RTSP connection has to
+                    # be drained or it backs up, and a decoder fed
+                    # discontiguous frames produces artefacts -- so this skips
+                    # the WORK, never the decode, which is also why it cannot
+                    # break tracking.
+                    if self._frame_wanted():
+                        with self._grab_lock:
+                            self._grabbed_frame = frame
+                    else:
+                        self._grabber_dropped += 1
             else:
                 self.stream_health.on_read_failure()
                 # Brief pause on read failure to avoid busy-spin
@@ -599,10 +654,12 @@ class VisionPipeline:
             except Exception as e:
                 logger.debug(f"Hazard detection submission failed: {e}")
 
-        # Frame skip for performance (load-tier override or config default)
-        effective_skip = self._frame_skip_override or settings.FRAME_SKIP
-        if self._frame_count % effective_skip != 0:
-            # Draw previously cached boxes on the display frame
+        # Analysis rate: wall clock (item 6), or legacy frame count.
+        if not self._analysis_due(consume=True):
+            # Not an analysis frame, but still a DISPLAY frame: redraw the
+            # boxes the tracker last knew about, so a viewer sees continuous
+            # overlays at the camera's frame rate rather than at the
+            # analysis rate.
             for draw_args in self._last_face_draws:
                 self._draw_box(display_frame, *draw_args)
             self._last_frame = display_frame
@@ -2294,6 +2351,82 @@ class VisionPipeline:
         """Save a snapshot image to disk. Returns URL-accessible path."""
         _, url_path = save_snapshot(image, prefix)
         return url_path
+
+    def _resolve_analysis_fps(self) -> float:
+        """How many frames per second this camera should analyse.
+
+        Read once at construction, from cameras.config when a row exists for
+        this camera. A missing row is normal rather than an error -- the load
+        test and browser sessions have none -- so it falls back to the global
+        default instead of refusing to start.
+        """
+        default = float(getattr(settings, "ANALYSIS_FPS", 10.0) or 0)
+        try:
+            from app.db.session import SessionLocal
+            from app.db.models import Camera
+            with SessionLocal() as db:
+                row = db.query(Camera).filter(Camera.id == self.camera_id).first()
+                cfg = (row.config or {}) if row else {}
+        except Exception as e:
+            logger.debug(f"[{self.camera_id}] no camera config for analysis fps: {e}")
+            cfg = {}
+
+        explicit = cfg.get("analysis_fps")
+        if explicit:
+            try:
+                return float(explicit)
+            except (TypeError, ValueError):
+                logger.warning(
+                    f"[{self.camera_id}] config analysis_fps={explicit!r} is not "
+                    f"a number; using {default}"
+                )
+        if cfg.get("is_gate"):
+            return float(getattr(settings, "ANALYSIS_FPS_GATE", default) or default)
+        return default
+
+    def _analysis_due(self, consume: bool = False) -> bool:
+        """Should this frame be analysed?
+
+        Wall clock, so the answer does not depend on the camera's frame rate,
+        on how many frames the decoder managed, or on how far behind we fell
+        earlier. Called with consume=False from the grabber, which uses it to
+        decide whether a frame is worth keeping at all, and with consume=True
+        from process_frame, the only caller allowed to mark the interval spent.
+
+        The two callers race by design: the grabber may keep a frame that
+        process_frame then declines. That costs one stored reference and can
+        never skip an analysis, so it does not justify a lock on this path.
+        """
+        if not getattr(settings, "ANALYSIS_RATE_BY_CLOCK", True):
+            # Legacy behaviour: every Nth decoded frame.
+            effective_skip = self._frame_skip_override or settings.FRAME_SKIP
+            return self._frame_count % effective_skip == 0
+
+        if self._analysis_interval <= 0:
+            return True  # ANALYSIS_FPS=0 means analyse everything
+
+        # The load tier still has a say. Its frame-skip override is a request
+        # to analyse less often under burst load, applied here as a longer
+        # interval rather than as a frame count.
+        interval = self._analysis_interval
+        skip = self._frame_skip_override
+        if skip and settings.FRAME_SKIP:
+            interval *= max(1.0, skip / float(settings.FRAME_SKIP))
+
+        # perf_counter, NOT monotonic. time.monotonic() on Windows resolves to
+        # 15.625 ms (measured: time.get_clock_info). A 10 fps target is a 100 ms
+        # interval, which that clock can only express in 15.6 ms steps -- so the
+        # gate would fire at the first tick at or past 100 ms, anywhere up to
+        # 115.6 ms, and the achieved rate would sit 0-13% under target for
+        # reasons no amount of spare GPU could fix. It also capped the
+        # expressible rate at about 64 fps. perf_counter is monotonic too, and
+        # resolves to 100 ns.
+        now = time.perf_counter()
+        if now - self._last_analysis_at < interval:
+            return False
+        if consume:
+            self._last_analysis_at = now
+        return True
 
     def _update_fps(self):
         """Calculate processing FPS.

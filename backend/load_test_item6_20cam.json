@@ -1,0 +1,1512 @@
+{
+  "label": "item 6: wall-clock analysis rate, ANALYSIS_FPS=25, plan=pro, quiet GPU",
+  "written_at": "2026-09-09T06:11:22.545081+00:00",
+  "git_head": "8c4d532",
+  "host": {
+    "platform": "Windows-10-10.0.26200-SP0",
+    "python": "3.11.9",
+    "cpu_logical": 32,
+    "cpu_physical": 24,
+    "gpu": "NVIDIA GeForce RTX 5070"
+  },
+  "run": {
+    "cameras": 20,
+    "videos": [
+      "uploads/videos\\d29c283e-f61e-4db2-a45d-f47da1994b62.mp4"
+    ],
+    "warmup_sec": 150.0,
+    "measured_sec": 120.0,
+    "viewers": 0,
+    "total_startup_sec": 273.4
+  },
+  "config": {
+    "PIPELINE_MODE": "face",
+    "TRACKING_MODE": "person",
+    "FRAME_SKIP": 4,
+    "ANALYSIS_FPS": 25.0,
+    "INSIGHTFACE_DET_SIZE": 640,
+    "INSIGHTFACE_DET_THRESH": 0.6,
+    "DETECTION_SCALE": 0.75,
+    "ENABLE_ATTRIBUTE_RECOGNITION": false,
+    "ENABLE_CROWD_DETECTION": true,
+    "ENABLE_LOITERING_DETECTION": true,
+    "ENABLE_HAZARD_DETECTION": true,
+    "ENABLE_ANPR": true,
+    "ENABLE_TRAFFIC_MONITOR": true,
+    "ENABLE_REID": true,
+    "ENABLE_ROBOFLOW_DETECTION": false,
+    "ENABLE_ROBOFLOW_PERSON": false,
+    "RFDETR_MODEL_SIZE": "nano",
+    "HAZARD_MODEL_PATH": "yolov8n.pt",
+    "ENABLE_PROFILING": true,
+    "JPEG_ENCODE_ON_DEMAND": true,
+    "ALLOW_CPU_INFERENCE": false,
+    "WEAPON_MODEL_PATH": "yolo11m.pt"
+  },
+  "totals": {
+    "analysis_fps_target": 25.0,
+    "analysis_fps_mean": 3.41,
+    "analysis_fps_min": 3.33,
+    "analysis_fps_max": 3.48,
+    "analysis_fps_total": 68.25,
+    "source_fps_mean": 29.34,
+    "cameras_below_target": [
+      "loadtest-00",
+      "loadtest-01",
+      "loadtest-02",
+      "loadtest-03",
+      "loadtest-04",
+      "loadtest-05",
+      "loadtest-06",
+      "loadtest-07",
+      "loadtest-08",
+      "loadtest-09",
+      "loadtest-10",
+      "loadtest-11",
+      "loadtest-12",
+      "loadtest-13",
+      "loadtest-14",
+      "loadtest-15",
+      "loadtest-16",
+      "loadtest-17",
+      "loadtest-18",
+      "loadtest-19"
+    ],
+    "cpu_percent": {
+      "mean": 855.0,
+      "p50": 954.4,
+      "p95": 1096.1,
+      "max": 1217.7
+    },
+    "cpu_cores": {
+      "mean": 8.55,
+      "p50": 9.54,
+      "p95": 10.96,
+      "max": 12.18
+    },
+    "cpu_cores_available": 32,
+    "gpu_util_percent": {
+      "mean": 33.6,
+      "p50": 36,
+      "p95": 45,
+      "max": 49
+    },
+    "gpu_mem_used_mb": {
+      "mean": 8431.1,
+      "p50": 8430,
+      "p95": 8433,
+      "max": 8433
+    },
+    "rss_mb": {
+      "mean": 5119.7,
+      "p50": 5127,
+      "p95": 5181,
+      "max": 5291
+    },
+    "threads": {
+      "mean": 475,
+      "p50": 475,
+      "p95": 475,
+      "max": 475
+    },
+    "max_hazard_queue_depth": 1,
+    "max_traffic_queue_depth": 0,
+    "events_emitted": 0,
+    "external_network_calls": 0,
+    "external_network_sample": []
+  },
+  "cameras": {
+    "loadtest-00": {
+      "source_fps": 29.34,
+      "analysis_fps": 3.42,
+      "consumed_fps": 3.42,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 411,
+      "frames_served": 3521,
+      "frames_consumed": 411,
+      "grabber_dropped": 3110,
+      "loops": 4
+    },
+    "loadtest-01": {
+      "source_fps": 29.34,
+      "analysis_fps": 3.48,
+      "consumed_fps": 3.48,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 418,
+      "frames_served": 3521,
+      "frames_consumed": 418,
+      "grabber_dropped": 3103,
+      "loops": 4
+    },
+    "loadtest-02": {
+      "source_fps": 29.32,
+      "analysis_fps": 3.37,
+      "consumed_fps": 3.37,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 405,
+      "frames_served": 3518,
+      "frames_consumed": 405,
+      "grabber_dropped": 3113,
+      "loops": 4
+    },
+    "loadtest-03": {
+      "source_fps": 29.36,
+      "analysis_fps": 3.41,
+      "consumed_fps": 3.41,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 409,
+      "frames_served": 3523,
+      "frames_consumed": 409,
+      "grabber_dropped": 3114,
+      "loops": 4
+    },
+    "loadtest-04": {
+      "source_fps": 29.34,
+      "analysis_fps": 3.39,
+      "consumed_fps": 3.39,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 407,
+      "frames_served": 3521,
+      "frames_consumed": 407,
+      "grabber_dropped": 3114,
+      "loops": 4
+    },
+    "loadtest-05": {
+      "source_fps": 29.33,
+      "analysis_fps": 3.42,
+      "consumed_fps": 3.42,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 411,
+      "frames_served": 3520,
+      "frames_consumed": 411,
+      "grabber_dropped": 3109,
+      "loops": 4
+    },
+    "loadtest-06": {
+      "source_fps": 29.36,
+      "analysis_fps": 3.47,
+      "consumed_fps": 3.47,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 416,
+      "frames_served": 3523,
+      "frames_consumed": 416,
+      "grabber_dropped": 3107,
+      "loops": 4
+    },
+    "loadtest-07": {
+      "source_fps": 29.32,
+      "analysis_fps": 3.4,
+      "consumed_fps": 3.4,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 408,
+      "frames_served": 3519,
+      "frames_consumed": 408,
+      "grabber_dropped": 3111,
+      "loops": 4
+    },
+    "loadtest-08": {
+      "source_fps": 29.32,
+      "analysis_fps": 3.4,
+      "consumed_fps": 3.4,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 408,
+      "frames_served": 3519,
+      "frames_consumed": 408,
+      "grabber_dropped": 3111,
+      "loops": 4
+    },
+    "loadtest-09": {
+      "source_fps": 29.32,
+      "analysis_fps": 3.41,
+      "consumed_fps": 3.41,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 409,
+      "frames_served": 3519,
+      "frames_consumed": 409,
+      "grabber_dropped": 3110,
+      "loops": 4
+    },
+    "loadtest-10": {
+      "source_fps": 29.34,
+      "analysis_fps": 3.42,
+      "consumed_fps": 3.42,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 411,
+      "frames_served": 3521,
+      "frames_consumed": 411,
+      "grabber_dropped": 3110,
+      "loops": 4
+    },
+    "loadtest-11": {
+      "source_fps": 29.35,
+      "analysis_fps": 3.4,
+      "consumed_fps": 3.4,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 408,
+      "frames_served": 3522,
+      "frames_consumed": 408,
+      "grabber_dropped": 3114,
+      "loops": 4
+    },
+    "loadtest-12": {
+      "source_fps": 29.35,
+      "analysis_fps": 3.41,
+      "consumed_fps": 3.41,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 409,
+      "frames_served": 3522,
+      "frames_consumed": 409,
+      "grabber_dropped": 3113,
+      "loops": 4
+    },
+    "loadtest-13": {
+      "source_fps": 29.34,
+      "analysis_fps": 3.42,
+      "consumed_fps": 3.42,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 410,
+      "frames_served": 3521,
+      "frames_consumed": 410,
+      "grabber_dropped": 3111,
+      "loops": 4
+    },
+    "loadtest-14": {
+      "source_fps": 29.37,
+      "analysis_fps": 3.42,
+      "consumed_fps": 3.42,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 410,
+      "frames_served": 3524,
+      "frames_consumed": 410,
+      "grabber_dropped": 3114,
+      "loops": 4
+    },
+    "loadtest-15": {
+      "source_fps": 29.32,
+      "analysis_fps": 3.41,
+      "consumed_fps": 3.41,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 409,
+      "frames_served": 3519,
+      "frames_consumed": 409,
+      "grabber_dropped": 3110,
+      "loops": 4
+    },
+    "loadtest-16": {
+      "source_fps": 29.35,
+      "analysis_fps": 3.33,
+      "consumed_fps": 3.33,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 400,
+      "frames_served": 3522,
+      "frames_consumed": 400,
+      "grabber_dropped": 3122,
+      "loops": 4
+    },
+    "loadtest-17": {
+      "source_fps": 29.35,
+      "analysis_fps": 3.42,
+      "consumed_fps": 3.42,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 410,
+      "frames_served": 3522,
+      "frames_consumed": 410,
+      "grabber_dropped": 3112,
+      "loops": 4
+    },
+    "loadtest-18": {
+      "source_fps": 29.33,
+      "analysis_fps": 3.43,
+      "consumed_fps": 3.43,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 412,
+      "frames_served": 3520,
+      "frames_consumed": 412,
+      "grabber_dropped": 3108,
+      "loops": 4
+    },
+    "loadtest-19": {
+      "source_fps": 29.34,
+      "analysis_fps": 3.42,
+      "consumed_fps": 3.42,
+      "jpeg_fps": 0.0,
+      "jpeg_encodes_skipped": 411,
+      "frames_served": 3521,
+      "frames_consumed": 411,
+      "grabber_dropped": 3110,
+      "loops": 4
+    }
+  },
+  "samples": [
+    {
+      "t": 1788934161.84,
+      "proc_cpu_pct": 913.5,
+      "sys_cpu_pct": 35.0,
+      "rss_mb": 5153,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 19,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934162.85,
+      "proc_cpu_pct": 1016.5,
+      "sys_cpu_pct": 39.3,
+      "rss_mb": 5143,
+      "threads": 475,
+      "gpu_util_pct": 42,
+      "gpu_mem_util_pct": 19,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934163.87,
+      "proc_cpu_pct": 908.3,
+      "sys_cpu_pct": 35.2,
+      "rss_mb": 5182,
+      "threads": 475,
+      "gpu_util_pct": 37,
+      "gpu_mem_util_pct": 13,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934164.88,
+      "proc_cpu_pct": 759.7,
+      "sys_cpu_pct": 31.9,
+      "rss_mb": 5127,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 15,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934165.9,
+      "proc_cpu_pct": 292.2,
+      "sys_cpu_pct": 14.7,
+      "rss_mb": 5035,
+      "threads": 475,
+      "gpu_util_pct": 0,
+      "gpu_mem_util_pct": 0,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934166.91,
+      "proc_cpu_pct": 363.3,
+      "sys_cpu_pct": 18.9,
+      "rss_mb": 5055,
+      "threads": 475,
+      "gpu_util_pct": 29,
+      "gpu_mem_util_pct": 7,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934167.92,
+      "proc_cpu_pct": 442.2,
+      "sys_cpu_pct": 18.3,
+      "rss_mb": 5052,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 9,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934168.93,
+      "proc_cpu_pct": 433.7,
+      "sys_cpu_pct": 20.6,
+      "rss_mb": 5101,
+      "threads": 475,
+      "gpu_util_pct": 39,
+      "gpu_mem_util_pct": 10,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934169.94,
+      "proc_cpu_pct": 952.9,
+      "sys_cpu_pct": 36.7,
+      "rss_mb": 5043,
+      "threads": 475,
+      "gpu_util_pct": 45,
+      "gpu_mem_util_pct": 24,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934170.95,
+      "proc_cpu_pct": 947.3,
+      "sys_cpu_pct": 35.7,
+      "rss_mb": 5107,
+      "threads": 475,
+      "gpu_util_pct": 39,
+      "gpu_mem_util_pct": 17,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934171.96,
+      "proc_cpu_pct": 1146.9,
+      "sys_cpu_pct": 41.8,
+      "rss_mb": 5093,
+      "threads": 475,
+      "gpu_util_pct": 32,
+      "gpu_mem_util_pct": 10,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934172.98,
+      "proc_cpu_pct": 1048.8,
+      "sys_cpu_pct": 45.2,
+      "rss_mb": 5146,
+      "threads": 475,
+      "gpu_util_pct": 31,
+      "gpu_mem_util_pct": 9,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934173.99,
+      "proc_cpu_pct": 945.2,
+      "sys_cpu_pct": 37.3,
+      "rss_mb": 5150,
+      "threads": 475,
+      "gpu_util_pct": 42,
+      "gpu_mem_util_pct": 22,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934175.01,
+      "proc_cpu_pct": 1119.6,
+      "sys_cpu_pct": 41.0,
+      "rss_mb": 5159,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 17,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934176.03,
+      "proc_cpu_pct": 1035.0,
+      "sys_cpu_pct": 39.9,
+      "rss_mb": 5132,
+      "threads": 475,
+      "gpu_util_pct": 42,
+      "gpu_mem_util_pct": 22,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934177.05,
+      "proc_cpu_pct": 1046.8,
+      "sys_cpu_pct": 38.0,
+      "rss_mb": 5139,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934178.06,
+      "proc_cpu_pct": 1059.6,
+      "sys_cpu_pct": 44.6,
+      "rss_mb": 5134,
+      "threads": 475,
+      "gpu_util_pct": 39,
+      "gpu_mem_util_pct": 20,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934179.07,
+      "proc_cpu_pct": 912.9,
+      "sys_cpu_pct": 37.0,
+      "rss_mb": 5099,
+      "threads": 475,
+      "gpu_util_pct": 27,
+      "gpu_mem_util_pct": 10,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934180.09,
+      "proc_cpu_pct": 1047.3,
+      "sys_cpu_pct": 40.2,
+      "rss_mb": 5178,
+      "threads": 475,
+      "gpu_util_pct": 30,
+      "gpu_mem_util_pct": 12,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934181.1,
+      "proc_cpu_pct": 1033.5,
+      "sys_cpu_pct": 39.9,
+      "rss_mb": 5153,
+      "threads": 475,
+      "gpu_util_pct": 39,
+      "gpu_mem_util_pct": 20,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934182.12,
+      "proc_cpu_pct": 1096.1,
+      "sys_cpu_pct": 42.0,
+      "rss_mb": 5171,
+      "threads": 475,
+      "gpu_util_pct": 37,
+      "gpu_mem_util_pct": 19,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934183.14,
+      "proc_cpu_pct": 853.9,
+      "sys_cpu_pct": 35.7,
+      "rss_mb": 5181,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934184.16,
+      "proc_cpu_pct": 988.3,
+      "sys_cpu_pct": 37.5,
+      "rss_mb": 5139,
+      "threads": 475,
+      "gpu_util_pct": 33,
+      "gpu_mem_util_pct": 14,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934185.17,
+      "proc_cpu_pct": 1078.1,
+      "sys_cpu_pct": 40.8,
+      "rss_mb": 5154,
+      "threads": 475,
+      "gpu_util_pct": 32,
+      "gpu_mem_util_pct": 13,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934186.19,
+      "proc_cpu_pct": 1020.3,
+      "sys_cpu_pct": 36.5,
+      "rss_mb": 5155,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 19,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934187.2,
+      "proc_cpu_pct": 891.3,
+      "sys_cpu_pct": 35.4,
+      "rss_mb": 5181,
+      "threads": 475,
+      "gpu_util_pct": 40,
+      "gpu_mem_util_pct": 20,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934188.21,
+      "proc_cpu_pct": 985.8,
+      "sys_cpu_pct": 40.7,
+      "rss_mb": 5173,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 17,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934189.23,
+      "proc_cpu_pct": 1033.5,
+      "sys_cpu_pct": 41.8,
+      "rss_mb": 5173,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 13,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934190.24,
+      "proc_cpu_pct": 1140.7,
+      "sys_cpu_pct": 41.2,
+      "rss_mb": 5151,
+      "threads": 475,
+      "gpu_util_pct": 34,
+      "gpu_mem_util_pct": 11,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934191.27,
+      "proc_cpu_pct": 440.6,
+      "sys_cpu_pct": 19.9,
+      "rss_mb": 5170,
+      "threads": 475,
+      "gpu_util_pct": 0,
+      "gpu_mem_util_pct": 0,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934192.34,
+      "proc_cpu_pct": 270.7,
+      "sys_cpu_pct": 12.6,
+      "rss_mb": 5169,
+      "threads": 475,
+      "gpu_util_pct": 8,
+      "gpu_mem_util_pct": 2,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934193.46,
+      "proc_cpu_pct": 295.8,
+      "sys_cpu_pct": 15.7,
+      "rss_mb": 5252,
+      "threads": 475,
+      "gpu_util_pct": 4,
+      "gpu_mem_util_pct": 1,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934194.49,
+      "proc_cpu_pct": 415.3,
+      "sys_cpu_pct": 17.5,
+      "rss_mb": 5169,
+      "threads": 475,
+      "gpu_util_pct": 29,
+      "gpu_mem_util_pct": 8,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934195.52,
+      "proc_cpu_pct": 890.3,
+      "sys_cpu_pct": 33.8,
+      "rss_mb": 5175,
+      "threads": 475,
+      "gpu_util_pct": 34,
+      "gpu_mem_util_pct": 11,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934196.54,
+      "proc_cpu_pct": 954.4,
+      "sys_cpu_pct": 39.7,
+      "rss_mb": 5127,
+      "threads": 475,
+      "gpu_util_pct": 32,
+      "gpu_mem_util_pct": 12,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934197.56,
+      "proc_cpu_pct": 573.6,
+      "sys_cpu_pct": 27.9,
+      "rss_mb": 5036,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 11,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934198.57,
+      "proc_cpu_pct": 175.5,
+      "sys_cpu_pct": 9.3,
+      "rss_mb": 5033,
+      "threads": 475,
+      "gpu_util_pct": 0,
+      "gpu_mem_util_pct": 0,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934199.58,
+      "proc_cpu_pct": 345.3,
+      "sys_cpu_pct": 14.4,
+      "rss_mb": 5035,
+      "threads": 475,
+      "gpu_util_pct": 19,
+      "gpu_mem_util_pct": 4,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934200.59,
+      "proc_cpu_pct": 429.1,
+      "sys_cpu_pct": 19.1,
+      "rss_mb": 5081,
+      "threads": 475,
+      "gpu_util_pct": 27,
+      "gpu_mem_util_pct": 6,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934201.6,
+      "proc_cpu_pct": 518.3,
+      "sys_cpu_pct": 22.1,
+      "rss_mb": 5058,
+      "threads": 475,
+      "gpu_util_pct": 34,
+      "gpu_mem_util_pct": 10,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934202.62,
+      "proc_cpu_pct": 1142.2,
+      "sys_cpu_pct": 44.6,
+      "rss_mb": 5073,
+      "threads": 475,
+      "gpu_util_pct": 40,
+      "gpu_mem_util_pct": 19,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934203.63,
+      "proc_cpu_pct": 864.3,
+      "sys_cpu_pct": 37.0,
+      "rss_mb": 5055,
+      "threads": 475,
+      "gpu_util_pct": 46,
+      "gpu_mem_util_pct": 26,
+      "gpu_mem_used_mb": 8431
+    },
+    {
+      "t": 1788934204.65,
+      "proc_cpu_pct": 1019.6,
+      "sys_cpu_pct": 37.6,
+      "rss_mb": 5068,
+      "threads": 475,
+      "gpu_util_pct": 48,
+      "gpu_mem_util_pct": 27,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934205.67,
+      "proc_cpu_pct": 957.8,
+      "sys_cpu_pct": 36.0,
+      "rss_mb": 5111,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934206.69,
+      "proc_cpu_pct": 920.6,
+      "sys_cpu_pct": 36.4,
+      "rss_mb": 5120,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 15,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934207.7,
+      "proc_cpu_pct": 1043.8,
+      "sys_cpu_pct": 39.3,
+      "rss_mb": 5132,
+      "threads": 475,
+      "gpu_util_pct": 39,
+      "gpu_mem_util_pct": 19,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934208.71,
+      "proc_cpu_pct": 875.1,
+      "sys_cpu_pct": 34.2,
+      "rss_mb": 5145,
+      "threads": 475,
+      "gpu_util_pct": 43,
+      "gpu_mem_util_pct": 21,
+      "gpu_mem_used_mb": 8431
+    },
+    {
+      "t": 1788934209.71,
+      "proc_cpu_pct": 1017.2,
+      "sys_cpu_pct": 39.0,
+      "rss_mb": 5157,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 17,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934210.72,
+      "proc_cpu_pct": 953.5,
+      "sys_cpu_pct": 38.5,
+      "rss_mb": 5142,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934211.74,
+      "proc_cpu_pct": 989.8,
+      "sys_cpu_pct": 38.1,
+      "rss_mb": 5136,
+      "threads": 475,
+      "gpu_util_pct": 34,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934212.75,
+      "proc_cpu_pct": 1071.9,
+      "sys_cpu_pct": 40.3,
+      "rss_mb": 5115,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 18,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934213.77,
+      "proc_cpu_pct": 966.0,
+      "sys_cpu_pct": 37.3,
+      "rss_mb": 5139,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 18,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934214.79,
+      "proc_cpu_pct": 1086.8,
+      "sys_cpu_pct": 40.5,
+      "rss_mb": 5137,
+      "threads": 475,
+      "gpu_util_pct": 33,
+      "gpu_mem_util_pct": 15,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934215.81,
+      "proc_cpu_pct": 895.1,
+      "sys_cpu_pct": 35.9,
+      "rss_mb": 5152,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934216.82,
+      "proc_cpu_pct": 997.5,
+      "sys_cpu_pct": 36.8,
+      "rss_mb": 5131,
+      "threads": 475,
+      "gpu_util_pct": 40,
+      "gpu_mem_util_pct": 21,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934217.84,
+      "proc_cpu_pct": 1090.4,
+      "sys_cpu_pct": 41.1,
+      "rss_mb": 5141,
+      "threads": 475,
+      "gpu_util_pct": 40,
+      "gpu_mem_util_pct": 21,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934218.84,
+      "proc_cpu_pct": 1010.4,
+      "sys_cpu_pct": 40.3,
+      "rss_mb": 5139,
+      "threads": 475,
+      "gpu_util_pct": 37,
+      "gpu_mem_util_pct": 19,
+      "gpu_mem_used_mb": 8431
+    },
+    {
+      "t": 1788934219.85,
+      "proc_cpu_pct": 870.3,
+      "sys_cpu_pct": 34.2,
+      "rss_mb": 5182,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 11,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934220.87,
+      "proc_cpu_pct": 880.5,
+      "sys_cpu_pct": 34.8,
+      "rss_mb": 5144,
+      "threads": 475,
+      "gpu_util_pct": 32,
+      "gpu_mem_util_pct": 14,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934221.89,
+      "proc_cpu_pct": 945.8,
+      "sys_cpu_pct": 36.8,
+      "rss_mb": 5123,
+      "threads": 475,
+      "gpu_util_pct": 44,
+      "gpu_mem_util_pct": 23,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934222.91,
+      "proc_cpu_pct": 962.4,
+      "sys_cpu_pct": 37.4,
+      "rss_mb": 5110,
+      "threads": 475,
+      "gpu_util_pct": 40,
+      "gpu_mem_util_pct": 18,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934223.93,
+      "proc_cpu_pct": 908.9,
+      "sys_cpu_pct": 36.6,
+      "rss_mb": 5151,
+      "threads": 475,
+      "gpu_util_pct": 49,
+      "gpu_mem_util_pct": 28,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934224.95,
+      "proc_cpu_pct": 1065.3,
+      "sys_cpu_pct": 38.2,
+      "rss_mb": 5150,
+      "threads": 475,
+      "gpu_util_pct": 33,
+      "gpu_mem_util_pct": 15,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934225.96,
+      "proc_cpu_pct": 1031.9,
+      "sys_cpu_pct": 40.1,
+      "rss_mb": 5135,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 19,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934226.98,
+      "proc_cpu_pct": 1010.4,
+      "sys_cpu_pct": 37.7,
+      "rss_mb": 5143,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 15,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934228.0,
+      "proc_cpu_pct": 971.4,
+      "sys_cpu_pct": 38.1,
+      "rss_mb": 5146,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 14,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934229.01,
+      "proc_cpu_pct": 338.3,
+      "sys_cpu_pct": 15.2,
+      "rss_mb": 5028,
+      "threads": 475,
+      "gpu_util_pct": 5,
+      "gpu_mem_util_pct": 1,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934230.03,
+      "proc_cpu_pct": 229.1,
+      "sys_cpu_pct": 12.9,
+      "rss_mb": 5018,
+      "threads": 475,
+      "gpu_util_pct": 17,
+      "gpu_mem_util_pct": 4,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934231.04,
+      "proc_cpu_pct": 460.3,
+      "sys_cpu_pct": 18.9,
+      "rss_mb": 5064,
+      "threads": 475,
+      "gpu_util_pct": 27,
+      "gpu_mem_util_pct": 6,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934232.05,
+      "proc_cpu_pct": 407.5,
+      "sys_cpu_pct": 16.6,
+      "rss_mb": 5061,
+      "threads": 475,
+      "gpu_util_pct": 27,
+      "gpu_mem_util_pct": 6,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934233.06,
+      "proc_cpu_pct": 823.6,
+      "sys_cpu_pct": 32.5,
+      "rss_mb": 5063,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 17,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934234.08,
+      "proc_cpu_pct": 1028.9,
+      "sys_cpu_pct": 37.6,
+      "rss_mb": 5082,
+      "threads": 475,
+      "gpu_util_pct": 45,
+      "gpu_mem_util_pct": 23,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934235.09,
+      "proc_cpu_pct": 1102.7,
+      "sys_cpu_pct": 43.3,
+      "rss_mb": 5088,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934236.11,
+      "proc_cpu_pct": 962.1,
+      "sys_cpu_pct": 36.8,
+      "rss_mb": 5092,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 15,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934237.13,
+      "proc_cpu_pct": 1001.2,
+      "sys_cpu_pct": 36.9,
+      "rss_mb": 5117,
+      "threads": 475,
+      "gpu_util_pct": 33,
+      "gpu_mem_util_pct": 14,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934238.14,
+      "proc_cpu_pct": 1062.5,
+      "sys_cpu_pct": 40.1,
+      "rss_mb": 5091,
+      "threads": 475,
+      "gpu_util_pct": 30,
+      "gpu_mem_util_pct": 13,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934239.16,
+      "proc_cpu_pct": 991.1,
+      "sys_cpu_pct": 37.7,
+      "rss_mb": 5126,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 18,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934240.17,
+      "proc_cpu_pct": 1079.6,
+      "sys_cpu_pct": 41.5,
+      "rss_mb": 5138,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 17,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934241.19,
+      "proc_cpu_pct": 1011.4,
+      "sys_cpu_pct": 38.5,
+      "rss_mb": 5137,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 17,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934242.21,
+      "proc_cpu_pct": 1070.4,
+      "sys_cpu_pct": 40.0,
+      "rss_mb": 5112,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934243.22,
+      "proc_cpu_pct": 1041.2,
+      "sys_cpu_pct": 38.4,
+      "rss_mb": 5134,
+      "threads": 475,
+      "gpu_util_pct": 41,
+      "gpu_mem_util_pct": 21,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934244.24,
+      "proc_cpu_pct": 1217.7,
+      "sys_cpu_pct": 44.4,
+      "rss_mb": 5114,
+      "threads": 475,
+      "gpu_util_pct": 40,
+      "gpu_mem_util_pct": 20,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934245.26,
+      "proc_cpu_pct": 1002.7,
+      "sys_cpu_pct": 39.5,
+      "rss_mb": 5141,
+      "threads": 475,
+      "gpu_util_pct": 44,
+      "gpu_mem_util_pct": 24,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934246.27,
+      "proc_cpu_pct": 862.8,
+      "sys_cpu_pct": 36.7,
+      "rss_mb": 5089,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 18,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934247.29,
+      "proc_cpu_pct": 962.1,
+      "sys_cpu_pct": 36.9,
+      "rss_mb": 5138,
+      "threads": 475,
+      "gpu_util_pct": 37,
+      "gpu_mem_util_pct": 19,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934248.3,
+      "proc_cpu_pct": 956.6,
+      "sys_cpu_pct": 40.1,
+      "rss_mb": 5131,
+      "threads": 475,
+      "gpu_util_pct": 40,
+      "gpu_mem_util_pct": 22,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934249.32,
+      "proc_cpu_pct": 956.0,
+      "sys_cpu_pct": 35.7,
+      "rss_mb": 5112,
+      "threads": 475,
+      "gpu_util_pct": 45,
+      "gpu_mem_util_pct": 25,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934250.33,
+      "proc_cpu_pct": 950.4,
+      "sys_cpu_pct": 39.2,
+      "rss_mb": 5121,
+      "threads": 475,
+      "gpu_util_pct": 40,
+      "gpu_mem_util_pct": 22,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934251.38,
+      "proc_cpu_pct": 556.6,
+      "sys_cpu_pct": 26.4,
+      "rss_mb": 5159,
+      "threads": 475,
+      "gpu_util_pct": 10,
+      "gpu_mem_util_pct": 3,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934252.49,
+      "proc_cpu_pct": 367.7,
+      "sys_cpu_pct": 17.1,
+      "rss_mb": 5126,
+      "threads": 475,
+      "gpu_util_pct": 9,
+      "gpu_mem_util_pct": 3,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934253.63,
+      "proc_cpu_pct": 297.2,
+      "sys_cpu_pct": 15.1,
+      "rss_mb": 5235,
+      "threads": 475,
+      "gpu_util_pct": 11,
+      "gpu_mem_util_pct": 3,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934254.65,
+      "proc_cpu_pct": 542.9,
+      "sys_cpu_pct": 20.9,
+      "rss_mb": 5291,
+      "threads": 475,
+      "gpu_util_pct": 20,
+      "gpu_mem_util_pct": 5,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934255.67,
+      "proc_cpu_pct": 968.3,
+      "sys_cpu_pct": 36.2,
+      "rss_mb": 5122,
+      "threads": 475,
+      "gpu_util_pct": 43,
+      "gpu_mem_util_pct": 23,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934256.69,
+      "proc_cpu_pct": 930.4,
+      "sys_cpu_pct": 35.4,
+      "rss_mb": 5160,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 15,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934257.7,
+      "proc_cpu_pct": 851.3,
+      "sys_cpu_pct": 34.0,
+      "rss_mb": 5122,
+      "threads": 475,
+      "gpu_util_pct": 32,
+      "gpu_mem_util_pct": 10,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934258.71,
+      "proc_cpu_pct": 933.5,
+      "sys_cpu_pct": 38.2,
+      "rss_mb": 5126,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 18,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934259.73,
+      "proc_cpu_pct": 902.7,
+      "sys_cpu_pct": 38.4,
+      "rss_mb": 5149,
+      "threads": 475,
+      "gpu_util_pct": 39,
+      "gpu_mem_util_pct": 18,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934260.74,
+      "proc_cpu_pct": 651.2,
+      "sys_cpu_pct": 30.8,
+      "rss_mb": 5028,
+      "threads": 475,
+      "gpu_util_pct": 23,
+      "gpu_mem_util_pct": 6,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934261.76,
+      "proc_cpu_pct": 199.9,
+      "sys_cpu_pct": 9.4,
+      "rss_mb": 5027,
+      "threads": 475,
+      "gpu_util_pct": 14,
+      "gpu_mem_util_pct": 3,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934262.77,
+      "proc_cpu_pct": 441.4,
+      "sys_cpu_pct": 19.3,
+      "rss_mb": 5050,
+      "threads": 475,
+      "gpu_util_pct": 42,
+      "gpu_mem_util_pct": 13,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934263.78,
+      "proc_cpu_pct": 528.0,
+      "sys_cpu_pct": 20.9,
+      "rss_mb": 5078,
+      "threads": 475,
+      "gpu_util_pct": 44,
+      "gpu_mem_util_pct": 12,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934264.8,
+      "proc_cpu_pct": 504.4,
+      "sys_cpu_pct": 21.1,
+      "rss_mb": 5060,
+      "threads": 475,
+      "gpu_util_pct": 43,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934265.81,
+      "proc_cpu_pct": 1017.5,
+      "sys_cpu_pct": 40.0,
+      "rss_mb": 5008,
+      "threads": 475,
+      "gpu_util_pct": 36,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8430
+    },
+    {
+      "t": 1788934266.83,
+      "proc_cpu_pct": 873.4,
+      "sys_cpu_pct": 34.3,
+      "rss_mb": 5077,
+      "threads": 475,
+      "gpu_util_pct": 34,
+      "gpu_mem_util_pct": 15,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934267.84,
+      "proc_cpu_pct": 988.7,
+      "sys_cpu_pct": 38.3,
+      "rss_mb": 5065,
+      "threads": 475,
+      "gpu_util_pct": 32,
+      "gpu_mem_util_pct": 14,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934268.86,
+      "proc_cpu_pct": 973.4,
+      "sys_cpu_pct": 38.8,
+      "rss_mb": 5057,
+      "threads": 475,
+      "gpu_util_pct": 45,
+      "gpu_mem_util_pct": 25,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934269.87,
+      "proc_cpu_pct": 891.3,
+      "sys_cpu_pct": 36.6,
+      "rss_mb": 5067,
+      "threads": 475,
+      "gpu_util_pct": 32,
+      "gpu_mem_util_pct": 11,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934270.88,
+      "proc_cpu_pct": 852.0,
+      "sys_cpu_pct": 35.1,
+      "rss_mb": 5113,
+      "threads": 475,
+      "gpu_util_pct": 43,
+      "gpu_mem_util_pct": 23,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934271.9,
+      "proc_cpu_pct": 942.7,
+      "sys_cpu_pct": 40.3,
+      "rss_mb": 5155,
+      "threads": 475,
+      "gpu_util_pct": 33,
+      "gpu_mem_util_pct": 11,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934272.92,
+      "proc_cpu_pct": 871.3,
+      "sys_cpu_pct": 33.9,
+      "rss_mb": 5138,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 14,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934273.93,
+      "proc_cpu_pct": 1073.4,
+      "sys_cpu_pct": 40.1,
+      "rss_mb": 5119,
+      "threads": 475,
+      "gpu_util_pct": 31,
+      "gpu_mem_util_pct": 12,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934274.94,
+      "proc_cpu_pct": 989.8,
+      "sys_cpu_pct": 39.4,
+      "rss_mb": 5121,
+      "threads": 475,
+      "gpu_util_pct": 32,
+      "gpu_mem_util_pct": 12,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934275.96,
+      "proc_cpu_pct": 925.8,
+      "sys_cpu_pct": 35.3,
+      "rss_mb": 5074,
+      "threads": 475,
+      "gpu_util_pct": 38,
+      "gpu_mem_util_pct": 15,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934276.97,
+      "proc_cpu_pct": 1024.2,
+      "sys_cpu_pct": 39.6,
+      "rss_mb": 5116,
+      "threads": 475,
+      "gpu_util_pct": 30,
+      "gpu_mem_util_pct": 13,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934277.99,
+      "proc_cpu_pct": 1066.8,
+      "sys_cpu_pct": 40.6,
+      "rss_mb": 5116,
+      "threads": 475,
+      "gpu_util_pct": 35,
+      "gpu_mem_util_pct": 16,
+      "gpu_mem_used_mb": 8433
+    },
+    {
+      "t": 1788934279.0,
+      "proc_cpu_pct": 1004.7,
+      "sys_cpu_pct": 37.1,
+      "rss_mb": 5142,
+      "threads": 475,
+      "gpu_util_pct": 31,
+      "gpu_mem_util_pct": 11,
+      "gpu_mem_used_mb": 8432
+    },
+    {
+      "t": 1788934280.01,
+      "proc_cpu_pct": 976.6,
+      "sys_cpu_pct": 36.2,
+      "rss_mb": 5163,
+      "threads": 475,
+      "gpu_util_pct": 47,
+      "gpu_mem_util_pct": 27,
+      "gpu_mem_used_mb": 8432
+    }
+  ]
+}

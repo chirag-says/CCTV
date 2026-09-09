@@ -293,7 +293,46 @@ class Settings(BaseSettings):
     # Set False to restore unconditional encoding.
     JPEG_ENCODE_ON_DEMAND: bool = True
 
-    FRAME_SKIP: int = 3
+    # ── Item 6: analysis rate by wall clock, not frame count ──
+    # FRAME_SKIP analysed every Nth DECODED frame, which means the analysis
+    # rate was whatever the camera's frame rate divided by N happened to be.
+    # A 25 fps camera and a 30 fps camera on FRAME_SKIP=4 ran at 6.25 and 7.5
+    # analyses per second; a camera that dropped to 12 fps silently halved its
+    # own detection rate, and no setting in this file said what rate any
+    # camera was actually running at.
+    #
+    # ANALYSIS_FPS states the rate directly, and the pipeline holds it against
+    # the clock. It is also the unit everything else is already expressed in:
+    # the capacity table, the cost model, and the Phase 1 acceptance test all
+    # say "at 10 fps".
+    #
+    # Per camera, most specific first:
+    #   cameras.config["analysis_fps"]   explicit override
+    #   ANALYSIS_FPS_GATE                if cameras.config["is_gate"]
+    #   ANALYSIS_FPS                     everything else
+    #
+    # Gate cameras keep the lower rate on purpose: they watch a choke point
+    # people walk through slowly, so 5 fps still catches every face, and
+    # there are more gate cameras than anything else.
+    #
+    # ANALYSIS_FPS is 25, not the 10 in OPTIMIZATION_BRIEF.md item 6. That is
+    # a deliberate override: 25 matches the source frame rate of the cameras
+    # this deploys against, so a camera analyses every frame it is sent rather
+    # than two in five.
+    #
+    # A TARGET IS A CEILING, NOT A PROMISE. This says "do not analyse more
+    # often than 25 times a second"; it cannot make the GPU faster. At 20
+    # cameras on one 5070 the measured rate is well below 25, so on that node
+    # this setting removes the throttle rather than raising the rate, and the
+    # achieved figure is whatever the hardware gives. It becomes a real
+    # ceiling again at lower camera counts, and after the Phase 2 engine work.
+    #
+    # Set ANALYSIS_RATE_BY_CLOCK=False to go back to FRAME_SKIP.
+    ANALYSIS_RATE_BY_CLOCK: bool = True
+    ANALYSIS_FPS: float = 25.0
+    ANALYSIS_FPS_GATE: float = 5.0
+
+    FRAME_SKIP: int = 3          # only used when ANALYSIS_RATE_BY_CLOCK=False
     DETECTION_SCALE: float = 0.5
     EXIT_THRESHOLD_SECONDS: int = 30  # 30 seconds — avoids premature exits from brief occlusions
     ENTRY_THRESHOLD_SECONDS: int = 3
