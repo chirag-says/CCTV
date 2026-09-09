@@ -367,18 +367,18 @@ def main():
         except Exception as e:
             print(f"could not load encodings ({e}); running with an empty gallery")
 
-    # Viewers, for the on-demand JPEG gate. register_viewer() only exists once
-    # item 1 has landed; before that every camera encodes unconditionally and
-    # this is a no-op.
-    viewer_tokens = []
+    # Fake viewers for the on-demand JPEG gate (item 1). A viewer is a
+    # WebSocket in ws_manager's stream table; the manager never calls anything
+    # on the object, so a bare sentinel is a faithful stand-in.
+    viewers = []
     if args.viewers:
-        try:
-            from app.vision.viewers import viewer_registry
-            for w in workers[:args.viewers]:
-                viewer_tokens.append(viewer_registry.attach(w.camera_id))
-            print(f"attached {len(viewer_tokens)} fake viewer(s)")
-        except ImportError:
-            print("no viewer registry in this build; --viewers ignored")
+        import asyncio
+        from app.core.websocket import ws_manager
+        for w in workers[:args.viewers]:
+            sock = object()
+            asyncio.run(ws_manager.connect_stream(w.camera_id, sock))
+            viewers.append((w.camera_id, sock))
+        print(f"attached {len(viewers)} fake viewer(s)")
 
     t_start = time.time()
     for w in workers:
@@ -404,11 +404,11 @@ def main():
             w.stop()
         except Exception as e:
             print(f"  stop {w.camera_id}: {e}")
-    for tok in viewer_tokens:
-        try:
-            tok.release()
-        except Exception:
-            pass
+    if viewers:
+        import asyncio
+        from app.core.websocket import ws_manager
+        for cam_id, sock in viewers:
+            asyncio.run(ws_manager.disconnect_stream(cam_id, sock))
 
     # ── per-camera results ────────────────────────────────────────────
     target = float(getattr(settings, "ANALYSIS_FPS", 0) or 0)
@@ -467,7 +467,7 @@ def main():
             "videos": videos,
             "warmup_sec": args.warmup,
             "measured_sec": round(elapsed, 2),
-            "viewers": len(viewer_tokens),
+            "viewers": len(viewers),
             "total_startup_sec": round(time.time() - t_start, 1),
         },
         "config": cfg,

@@ -7,6 +7,7 @@ from typing import Dict, List, Set
 import json
 import logging
 import asyncio
+import time
 
 logger = logging.getLogger(__name__)
 
@@ -20,6 +21,11 @@ class ConnectionManager:
         # Camera-specific stream subscribers: camera_id -> [websockets]
         self._stream_connections: Dict[str, List[WebSocket]] = {}
         self._lock = asyncio.Lock()
+        # camera_id -> monotonic deadline until which a pull-based viewer
+        # (the /feed snapshot endpoint) still counts as watching. A polling
+        # <img> holds no connection, so it cannot be counted by presence;
+        # it has to be counted by recency.
+        self._snapshot_viewers: Dict[str, float] = {}
 
     async def connect_events(self, websocket: WebSocket):
         """Accept a WebSocket connection for live events."""
@@ -36,8 +42,11 @@ class ConnectionManager:
         logger.info(f"Event WebSocket disconnected. Total: {len(self._event_connections)}")
 
     async def connect_stream(self, camera_id: str, websocket: WebSocket):
-        """Accept a WebSocket connection for a camera stream."""
-        await websocket.accept()
+        """Register an already-accepted WebSocket as a viewer of a camera.
+
+        The caller owns accept(): the stream endpoint has to authenticate
+        before accepting, so it cannot delegate that here.
+        """
         async with self._lock:
             if camera_id not in self._stream_connections:
                 self._stream_connections[camera_id] = []
@@ -93,6 +102,35 @@ class ConnectionManager:
     @property
     def stream_counts(self) -> Dict[str, int]:
         return {k: len(v) for k, v in self._stream_connections.items()}
+
+    # ── Viewer presence ───────────────────────────────────────────
+    # Read from camera worker threads, not from the event loop, so these
+    # take no lock. Both structures are plain dicts mutated by whole-key
+    # assignment, which is atomic under the GIL; a viewer that appears or
+    # vanishes one frame early is not worth a lock on the hot path.
+
+    def note_snapshot_request(self, camera_id: str, ttl_sec: float = 2.0):
+        """Record that someone pulled a still of this camera.
+
+        Called by the /feed endpoint. The TTL has to outlast the client's
+        polling interval, or a steadily-polling viewer would look idle
+        between requests and the encoder would stop underneath it.
+        """
+        self._snapshot_viewers[camera_id] = time.monotonic() + ttl_sec
+
+    def is_watched(self, camera_id: str) -> bool:
+        """True if anything is currently consuming this camera's video."""
+        if self._stream_connections.get(camera_id):
+            return True
+        deadline = self._snapshot_viewers.get(camera_id)
+        return deadline is not None and deadline > time.monotonic()
+
+    def viewer_count(self, camera_id: str) -> int:
+        n = len(self._stream_connections.get(camera_id) or ())
+        deadline = self._snapshot_viewers.get(camera_id)
+        if deadline is not None and deadline > time.monotonic():
+            n += 1
+        return n
 
 
 # Singleton instance

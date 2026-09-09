@@ -155,11 +155,30 @@ class CameraWorker:
         and writes the result to pipeline._last_jpeg.
 
         This thread is the ONLY writer of _last_jpeg after startup.
+
+        With settings.JPEG_ENCODE_ON_DEMAND it encodes only while somebody is
+        watching this camera. Encoding a 720p frame costs 8.9 ms of CPU, so a
+        camera nobody is looking at was spending about 270 ms of CPU per
+        second producing images that were then discarded. The frame is still
+        received and dropped rather than left in the slot, so the main loop's
+        handoff stays non-blocking and the next viewer gets a live frame, not
+        the one that happened to be sitting there.
+
+        _last_jpeg is deliberately NOT cleared when the viewers leave: the
+        /feed snapshot endpoint should still be able to answer with the last
+        thing this camera saw. Stale frames on a DEAD stream are a separate
+        concern and are still handled by the grabber, which clears _last_jpeg
+        whenever stream health leaves LIVE.
         """
         from app.utils.image_utils import frame_to_jpeg_bytes
         from app.core.profiler import profiler
+        from app.core.websocket import ws_manager
 
-        logger.info(f"JPEG encoder thread started: {self.camera_id}")
+        on_demand = getattr(settings, "JPEG_ENCODE_ON_DEMAND", True)
+        logger.info(
+            f"JPEG encoder thread started: {self.camera_id} "
+            f"(on_demand={on_demand})"
+        )
 
         while not self._stop_event.is_set():
             # Wait for a frame to be available (with timeout to check stop)
@@ -174,6 +193,11 @@ class CameraWorker:
             self._jpeg_slot_event.clear()
 
             if frame is None:
+                continue
+
+            # Nobody is watching: drop the frame instead of encoding it.
+            if on_demand and not ws_manager.is_watched(self.camera_id):
+                self._jpeg_skipped += 1
                 continue
 
             try:

@@ -262,6 +262,21 @@ class Settings(BaseSettings):
     ENABLE_PROFILING: bool = True                 # Enable performance profiler (disable in production)
     DEBUG_LOGS: bool = False                      # Enable DEBUG-level app logs (independent of uvicorn reload)
 
+    # ── Item 1: encode JPEG only while someone is watching ────
+    # Every camera used to encode every displayed frame whether or not a
+    # viewer existed. Measured on this machine: 8.9 ms of CPU per 720p
+    # frame, so a camera at 30 fps burned 270 ms of CPU per second doing
+    # nothing but producing images nobody looked at. That capped a node at
+    # roughly 16 cameras before the GPU was even reached.
+    #
+    # With this on, the encoder thread drops the frame unless ws_manager
+    # reports a viewer for that camera (a live WebSocket, or a recent /feed
+    # pull). The last encoded frame is kept, so a snapshot after an idle
+    # period still returns an image rather than nothing.
+    #
+    # Set False to restore unconditional encoding.
+    JPEG_ENCODE_ON_DEMAND: bool = True
+
     FRAME_SKIP: int = 3
     DETECTION_SCALE: float = 0.5
     EXIT_THRESHOLD_SECONDS: int = 30  # 30 seconds — avoids premature exits from brief occlusions

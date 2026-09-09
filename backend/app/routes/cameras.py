@@ -205,6 +205,11 @@ async def camera_feed(
     """
     from fastapi.responses import Response
 
+    # Count this as a viewer BEFORE the early returns: a client polling a
+    # camera that is briefly not LIVE is still watching, and if we only
+    # registered on the success path the encoder would never restart.
+    ws_manager.note_snapshot_request(camera_id)
+
     worker = camera_manager._workers.get(camera_id)
     if not worker or not worker.pipeline:
         return Response(content=b"", status_code=204)
@@ -253,6 +258,10 @@ async def camera_stream(
         return  # already closed with 4001
 
     await websocket.accept()
+    # Register as a viewer of this camera. Until this existed, nothing ever
+    # populated ws_manager's stream table, so the worker had no way to know
+    # whether anyone was looking -- and encoded JPEG for all of them anyway.
+    await ws_manager.connect_stream(camera_id, websocket)
     logger.info(f"Stream WebSocket connected for camera: {camera_id}")
 
     last_jpeg_id = None  # Track which JPEG blob we last sent
@@ -316,6 +325,7 @@ async def camera_stream(
     except Exception as e:
         logger.error(f"Stream WebSocket error for camera {camera_id}: {e}")
     finally:
+        await ws_manager.disconnect_stream(camera_id, websocket)
         try:
             await websocket.close()
         except Exception:
