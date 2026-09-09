@@ -1,0 +1,790 @@
+{
+  "source": "snapshots/faces/*.jpg",
+  "image_count": 37,
+  "gallery_encodings": 113,
+  "pad_frac": 0.5,
+  "frames": [
+    {
+      "index": "student_abhitha_1.jpg",
+      "faces": [
+        {
+          "bbox": [
+            413,
+            572,
+            1137,
+            1595
+          ],
+          "w": 724,
+          "h": 1023,
+          "match": {
+            "matched": true,
+            "person_name": "Abhitha",
+            "distance": 0.0391,
+            "confidence": 0.961,
+            "margin": 0.8019,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.322233
+        }
+      ]
+    },
+    {
+      "index": "student_abhitha_2.jpg",
+      "faces": [
+        {
+          "bbox": [
+            416,
+            604,
+            1221,
+            1687
+          ],
+          "w": 805,
+          "h": 1083,
+          "match": {
+            "matched": true,
+            "person_name": "Abhitha",
+            "distance": 0.053,
+            "confidence": 0.947,
+            "margin": 0.7759,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.005693
+        }
+      ]
+    },
+    {
+      "index": "student_abhitha_3.jpg",
+      "faces": []
+    },
+    {
+      "index": "student_abhitha_4.jpg",
+      "faces": [
+        {
+          "bbox": [
+            439,
+            712,
+            1276,
+            1849
+          ],
+          "w": 837,
+          "h": 1137,
+          "match": {
+            "matched": true,
+            "person_name": "Abhitha",
+            "distance": 0.0477,
+            "confidence": 0.952,
+            "margin": 0.761,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.860811
+        }
+      ]
+    },
+    {
+      "index": "student_abhitha_5.jpg",
+      "faces": []
+    },
+    {
+      "index": "student_chirag_1.jpg",
+      "faces": [
+        {
+          "bbox": [
+            399,
+            632,
+            1112,
+            1747
+          ],
+          "w": 713,
+          "h": 1115,
+          "match": {
+            "matched": true,
+            "person_name": "Chirag",
+            "distance": 0.067,
+            "confidence": 0.933,
+            "margin": 0.7486,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 22.179409
+        }
+      ]
+    },
+    {
+      "index": "student_chirag_2.jpg",
+      "faces": [
+        {
+          "bbox": [
+            308,
+            503,
+            873,
+            1392
+          ],
+          "w": 565,
+          "h": 889,
+          "match": {
+            "matched": true,
+            "person_name": "Chirag",
+            "distance": 0.0397,
+            "confidence": 0.96,
+            "margin": 0.7696,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.591711
+        }
+      ]
+    },
+    {
+      "index": "student_chirag_3.jpg",
+      "faces": [
+        {
+          "bbox": [
+            354,
+            525,
+            1002,
+            1492
+          ],
+          "w": 648,
+          "h": 967,
+          "match": {
+            "matched": true,
+            "person_name": "Chirag",
+            "distance": 0.0378,
+            "confidence": 0.962,
+            "margin": 0.7636,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.428112
+        }
+      ]
+    },
+    {
+      "index": "student_chirag_4.jpg",
+      "faces": [
+        {
+          "bbox": [
+            325,
+            476,
+            862,
+            1247
+          ],
+          "w": 537,
+          "h": 771,
+          "match": {
+            "matched": true,
+            "person_name": "Chirag",
+            "distance": 0.0576,
+            "confidence": 0.942,
+            "margin": 0.7624,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 26.08213
+        }
+      ]
+    },
+    {
+      "index": "student_chirag_5.jpg",
+      "faces": []
+    },
+    {
+      "index": "teacher_dileep_1.jpg",
+      "faces": [
+        {
+          "bbox": [
+            430,
+            665,
+            1209,
+            1860
+          ],
+          "w": 779,
+          "h": 1195,
+          "match": {
+            "matched": true,
+            "person_name": "Dileep",
+            "distance": 0.1012,
+            "confidence": 0.899,
+            "margin": 0.6782,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 22.701033
+        }
+      ]
+    },
+    {
+      "index": "teacher_dileep_2.jpg",
+      "faces": []
+    },
+    {
+      "index": "teacher_dileep_3.jpg",
+      "faces": []
+    },
+    {
+      "index": "teacher_dileep_4.jpg",
+      "faces": [
+        {
+          "bbox": [
+            484,
+            753,
+            1436,
+            2128
+          ],
+          "w": 952,
+          "h": 1375,
+          "match": {
+            "matched": true,
+            "person_name": "Dileep",
+            "distance": 0.0481,
+            "confidence": 0.952,
+            "margin": 0.6956,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 26.509377
+        }
+      ]
+    },
+    {
+      "index": "teacher_dileep_5.jpg",
+      "faces": [
+        {
+          "bbox": [
+            490,
+            747,
+            1413,
+            2112
+          ],
+          "w": 923,
+          "h": 1365,
+          "match": {
+            "matched": true,
+            "person_name": "Dileep",
+            "distance": 0.0821,
+            "confidence": 0.918,
+            "margin": 0.716,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.755972
+        }
+      ]
+    },
+    {
+      "index": "teacher_farhana_1.jpg",
+      "faces": [
+        {
+          "bbox": [
+            418,
+            551,
+            1218,
+            1566
+          ],
+          "w": 800,
+          "h": 1015,
+          "match": {
+            "matched": true,
+            "person_name": "Farhana",
+            "distance": 0.0461,
+            "confidence": 0.954,
+            "margin": 0.8111,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 22.588133
+        }
+      ]
+    },
+    {
+      "index": "teacher_farhana_2.jpg",
+      "faces": [
+        {
+          "bbox": [
+            422,
+            542,
+            1233,
+            1557
+          ],
+          "w": 811,
+          "h": 1015,
+          "match": {
+            "matched": true,
+            "person_name": "Farhana",
+            "distance": 0.0648,
+            "confidence": 0.935,
+            "margin": 0.8217,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 22.868547
+        }
+      ]
+    },
+    {
+      "index": "teacher_farhana_3.jpg",
+      "faces": [
+        {
+          "bbox": [
+            400,
+            567,
+            1101,
+            1556
+          ],
+          "w": 701,
+          "h": 989,
+          "match": {
+            "matched": true,
+            "person_name": "Farhana",
+            "distance": 0.0707,
+            "confidence": 0.929,
+            "margin": 0.8074,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.85622
+        }
+      ]
+    },
+    {
+      "index": "teacher_farhana_4.jpg",
+      "faces": [
+        {
+          "bbox": [
+            375,
+            554,
+            1082,
+            1539
+          ],
+          "w": 707,
+          "h": 985,
+          "match": {
+            "matched": true,
+            "person_name": "Farhana",
+            "distance": 0.0408,
+            "confidence": 0.959,
+            "margin": 0.7905,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.775723
+        }
+      ]
+    },
+    {
+      "index": "teacher_farhana_5.jpg",
+      "faces": [
+        {
+          "bbox": [
+            386,
+            531,
+            1138,
+            1488
+          ],
+          "w": 752,
+          "h": 957,
+          "match": {
+            "matched": true,
+            "person_name": "Farhana",
+            "distance": 0.0689,
+            "confidence": 0.931,
+            "margin": 0.8084,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 21.607718
+        }
+      ]
+    },
+    {
+      "index": "teacher_geetha_1.jpg",
+      "faces": [
+        {
+          "bbox": [
+            389,
+            500,
+            1118,
+            1436
+          ],
+          "w": 729,
+          "h": 936,
+          "match": {
+            "matched": true,
+            "person_name": "Geetha",
+            "distance": 0.0731,
+            "confidence": 0.927,
+            "margin": 0.764,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 20.481495
+        }
+      ]
+    },
+    {
+      "index": "teacher_geetha_2.jpg",
+      "faces": [
+        {
+          "bbox": [
+            389,
+            505,
+            1126,
+            1477
+          ],
+          "w": 737,
+          "h": 972,
+          "match": {
+            "matched": true,
+            "person_name": "Geetha",
+            "distance": 0.0505,
+            "confidence": 0.95,
+            "margin": 0.7796,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 22.545683
+        }
+      ]
+    },
+    {
+      "index": "teacher_geetha_3.jpg",
+      "faces": [
+        {
+          "bbox": [
+            384,
+            558,
+            1134,
+            1611
+          ],
+          "w": 750,
+          "h": 1053,
+          "match": {
+            "matched": true,
+            "person_name": "Geetha",
+            "distance": 0.0323,
+            "confidence": 0.968,
+            "margin": 0.7603,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.420698
+        }
+      ]
+    },
+    {
+      "index": "teacher_geetha_4.jpg",
+      "faces": [
+        {
+          "bbox": [
+            433,
+            617,
+            1247,
+            1775
+          ],
+          "w": 814,
+          "h": 1158,
+          "match": {
+            "matched": true,
+            "person_name": "Geetha",
+            "distance": 0.0573,
+            "confidence": 0.943,
+            "margin": 0.7798,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 22.620066
+        }
+      ]
+    },
+    {
+      "index": "teacher_geetha_5.jpg",
+      "faces": [
+        {
+          "bbox": [
+            355,
+            473,
+            970,
+            1395
+          ],
+          "w": 615,
+          "h": 922,
+          "match": {
+            "matched": true,
+            "person_name": "Geetha",
+            "distance": 0.0401,
+            "confidence": 0.96,
+            "margin": 0.7201,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.795652
+        }
+      ]
+    },
+    {
+      "index": "teacher_niranjani_1.jpg",
+      "faces": []
+    },
+    {
+      "index": "teacher_niranjani_2.jpg",
+      "faces": [
+        {
+          "bbox": [
+            419,
+            554,
+            1218,
+            1585
+          ],
+          "w": 799,
+          "h": 1031,
+          "match": {
+            "matched": true,
+            "person_name": "Niranjani",
+            "distance": 0.0408,
+            "confidence": 0.959,
+            "margin": 0.8,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 21.755739
+        }
+      ]
+    },
+    {
+      "index": "teacher_niranjani_3.jpg",
+      "faces": [
+        {
+          "bbox": [
+            409,
+            532,
+            1197,
+            1525
+          ],
+          "w": 788,
+          "h": 993,
+          "match": {
+            "matched": true,
+            "person_name": "Niranjani",
+            "distance": 0.0714,
+            "confidence": 0.929,
+            "margin": 0.8071,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 22.74752
+        }
+      ]
+    },
+    {
+      "index": "teacher_niranjani_4.jpg",
+      "faces": []
+    },
+    {
+      "index": "teacher_niranjani_5.jpg",
+      "faces": [
+        {
+          "bbox": [
+            397,
+            609,
+            1174,
+            1694
+          ],
+          "w": 777,
+          "h": 1085,
+          "match": {
+            "matched": true,
+            "person_name": "Niranjani",
+            "distance": 0.0597,
+            "confidence": 0.94,
+            "margin": 0.7882,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 20.743233
+        }
+      ]
+    },
+    {
+      "index": "teacher_reena_1.jpg",
+      "faces": [
+        {
+          "bbox": [
+            436,
+            651,
+            1263,
+            1833
+          ],
+          "w": 827,
+          "h": 1182,
+          "match": {
+            "matched": true,
+            "person_name": "Reena",
+            "distance": 0.0602,
+            "confidence": 0.94,
+            "margin": 0.7833,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.979307
+        }
+      ]
+    },
+    {
+      "index": "teacher_reena_2.jpg",
+      "faces": [
+        {
+          "bbox": [
+            458,
+            700,
+            1363,
+            2010
+          ],
+          "w": 905,
+          "h": 1310,
+          "match": {
+            "matched": true,
+            "person_name": "Reena",
+            "distance": 0.0447,
+            "confidence": 0.955,
+            "margin": 0.8024,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.882458
+        }
+      ]
+    },
+    {
+      "index": "teacher_reena_3.jpg",
+      "faces": [
+        {
+          "bbox": [
+            304,
+            725,
+            1032,
+            1890
+          ],
+          "w": 728,
+          "h": 1165,
+          "match": {
+            "matched": true,
+            "person_name": "Reena",
+            "distance": 0.1028,
+            "confidence": 0.897,
+            "margin": 0.7786,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.739805
+        }
+      ]
+    },
+    {
+      "index": "teacher_reena_4.jpg",
+      "faces": [
+        {
+          "bbox": [
+            569,
+            723,
+            1507,
+            2066
+          ],
+          "w": 938,
+          "h": 1343,
+          "match": {
+            "matched": true,
+            "person_name": "Reena",
+            "distance": 0.0553,
+            "confidence": 0.945,
+            "margin": 0.7638,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 24.425629
+        }
+      ]
+    },
+    {
+      "index": "teacher_reena_5.jpg",
+      "faces": [
+        {
+          "bbox": [
+            521,
+            759,
+            1447,
+            2131
+          ],
+          "w": 926,
+          "h": 1372,
+          "match": {
+            "matched": true,
+            "person_name": "Reena",
+            "distance": 0.0393,
+            "confidence": 0.961,
+            "margin": 0.826,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 25.341791
+        }
+      ]
+    },
+    {
+      "index": "teacher_rithvik_1.jpg",
+      "faces": [
+        {
+          "bbox": [
+            165,
+            243,
+            474,
+            680
+          ],
+          "w": 309,
+          "h": 437,
+          "match": {
+            "matched": true,
+            "person_name": "Rithvik",
+            "distance": 0.0356,
+            "confidence": 0.964,
+            "margin": 0.8036,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 23.448725
+        }
+      ]
+    },
+    {
+      "index": "teacher_rithvik_2.jpg",
+      "faces": [
+        {
+          "bbox": [
+            163,
+            238,
+            471,
+            674
+          ],
+          "w": 308,
+          "h": 436,
+          "match": {
+            "matched": true,
+            "person_name": "Rithvik",
+            "distance": 0.0259,
+            "confidence": 0.974,
+            "margin": 0.7963,
+            "quality_tier": "balanced",
+            "rejection_reason": null
+          },
+          "embedding_norm": 24.372072
+        }
+      ]
+    }
+  ],
+  "faces_total": 30,
+  "det_size": 640,
+  "det_thresh": 0.6,
+  "fp16": false
+}
