@@ -181,12 +181,13 @@ class HazardDetector:
             return False
 
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._model = YOLO(self.model_path)
+        # Item 1: a TensorRT engine when one is available, else the .pt.
+        from app.vision.engines import resolve_weights
+        load_path = resolve_weights(self.model_path)
+        self._model = YOLO(load_path)
         self._model_available = True
         self._model_backend = "yolo"
-        logger.info(
-            f"Hazard detector: YOLO {self.model_path} on {self._device}"
-        )
+        logger.info(f"Hazard detector: YOLO {load_path} on {self._device}")
         return True
 
     def _load_rfdetr(self) -> bool:
