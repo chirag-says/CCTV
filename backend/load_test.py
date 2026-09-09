@@ -200,6 +200,96 @@ def _gpu_handle():
         return None, None
 
 
+def gpu_memory():
+    """Free / used / total VRAM in MB, or None.
+
+    Recorded at start of every run. Phase 1 produced four runs at identical
+    load that returned 0.46, 0.14, 2.17 and 2.59 analysis fps, and the whole
+    15x spread turned out to be how much of the card somebody else was
+    holding -- Ollama's 5.5 GB VLM and the dev server. A result without the
+    free VRAM beside it cannot be compared to any other result.
+    """
+    pynvml, h = _gpu_handle()
+    if h is None:
+        return None
+    try:
+        m = pynvml.nvmlDeviceGetMemoryInfo(h)
+        return {
+            "free_mb": round(m.free / 2**20),
+            "used_mb": round(m.used / 2**20),
+            "total_mb": round(m.total / 2**20),
+        }
+    except Exception:
+        return None
+
+
+# Command-line fragments that mean a GPU consumer is running. Deliberately
+# NOT bare "ollama": `ollama serve` and `ollama app.exe` sit resident on this
+# machine at all times and hold no VRAM until a model is pulled into it. It is
+# the LOADED MODEL that takes 5.5 GB, and that is llama-server, or whatever
+# `ollama ps` lists.
+_CONTENDERS = (
+    ("llama-server", "an Ollama model loaded on the GPU"),
+    ("run.py", "the SentinelAI dev server"),
+)
+
+
+def gpu_contenders():
+    """Processes that would share the GPU with a measured run.
+
+    nvidia-smi is the authority on who holds VRAM, but under WDDM on Windows
+    it reports compute apps with no per-process memory figure, so this checks
+    the two things that have actually contaminated a run here: a loaded Ollama
+    model, and the dev server.
+    """
+    import subprocess
+    found = []
+
+    # A loaded Ollama model, asked of Ollama rather than inferred.
+    try:
+        out = subprocess.check_output(
+            ["ollama", "ps"], text=True, stderr=subprocess.DEVNULL, timeout=30
+        )
+        rows = [l for l in out.strip().splitlines()[1:] if l.strip()]
+        for row in rows:
+            found.append({
+                "match": "ollama model",
+                "why": "an Ollama model is resident on the GPU",
+                "cmdline": row.strip()[:200],
+            })
+    except Exception:
+        pass
+
+    # Only processes that could actually hold a CUDA context. Scanning every
+    # command line on the box matched the shell running this check, because it
+    # mentioned "run.py" in its own arguments.
+    own_pid = os.getpid()
+    for p in psutil.process_iter(["pid", "name", "cmdline"]):
+        try:
+            if p.info["pid"] == own_pid:
+                continue
+            name = (p.info["name"] or "").lower()
+            if not (name.startswith("python") or "llama" in name):
+                continue
+            argv = p.info["cmdline"] or []
+            # Match the script as an ARGUMENT, never as a substring of the
+            # whole line, so a shell that merely names it does not count.
+            args_low = [a.lower() for a in argv]
+            for needle, why in _CONTENDERS:
+                if any(a == needle or a.endswith("\\" + needle) or
+                       a.endswith("/" + needle) for a in args_low) or needle in name:
+                    found.append({
+                        "match": needle,
+                        "why": why,
+                        "pid": p.info["pid"],
+                        "cmdline": " ".join(argv)[:200],
+                    })
+                    break
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return found
+
+
 def _executor_depth(obj):
     """Pending tasks in a module's ThreadPoolExecutor, or None."""
     ex = getattr(obj, "_executor", None)
@@ -301,6 +391,10 @@ def main():
     ap.add_argument("--allow-db-writes", action="store_true",
                     help="allow embedding suggestions to be written (off by default so "
                          "a load test does not pollute the database)")
+    ap.add_argument("--allow-contention", action="store_true",
+                    help="run even though another process is using the GPU. "
+                         "The result is not comparable to a clean run; the "
+                         "JSON records what was sharing the card.")
     ap.add_argument("--no-encodings", action="store_true",
                     help="skip loading the face gallery from the database")
     args = ap.parse_args()
@@ -316,6 +410,25 @@ def main():
         os.environ["SUGGESTION_MIN_CONFIDENCE"] = "2.0"
 
     _install_network_guard()
+
+    # ── The GPU must be ours alone ────────────────────────────────────
+    # Refuse rather than warn. Phase 1 lost four runs to this and only caught
+    # it on the fifth, by which point three of them were already committed as
+    # results. A warning on line 2 of a 3,000-line log is not a safeguard.
+    contenders = gpu_contenders()
+    vram_start = gpu_memory()
+    if contenders and not args.allow_contention:
+        print("REFUSING TO RUN: another process is using the GPU.\n")
+        for c in contenders:
+            print(f"  {c['match']}: {c['why']}")
+            print(f"    {c['cmdline']}")
+        print("\n  Stop them, then retry. For Ollama:  ollama stop <model>")
+        print("  To measure anyway (the result is not comparable to a clean")
+        print("  run, and the JSON will say so):  --allow-contention")
+        sys.exit(2)
+    if vram_start:
+        print(f"GPU at start: {vram_start['free_mb']} MB free of "
+              f"{vram_start['total_mb']} MB")
 
     from app.config import settings
     _install_capture_patch(args.source_fps)
@@ -455,6 +568,10 @@ def main():
         "label": args.label,
         "written_at": datetime.now(timezone.utc).isoformat(),
         "git_head": _git_head(),
+        "gpu_at_start": vram_start,
+        "gpu_at_end": gpu_memory(),
+        "gpu_contenders": contenders,
+        "gpu_exclusive": not contenders,
         "host": {
             "platform": platform.platform(),
             "python": platform.python_version(),
