@@ -59,22 +59,51 @@ Acceptance: run 20 copies of `backend/uploads/videos/*.mp4` looped as fake camer
 fps per camera, GPU utilisation from `pynvml`, and CPU load). Basic at 10 fps must hold 20 cameras on
 the 5070 with under 4 CPU cores and no frame backlog. No network calls during the test.
 
-## Phase 2: TensorRT engines (one to two weeks)
+## Phase 2: TensorRT engines and one inference loop per GPU (two to three weeks)
 
+Phase 1 result (2026-09-09, load_test.py, 20 Basic cameras at 10 fps): 5.77 fps per camera achieved
+against 10 target, GPU 18.8 percent busy, CPU 3.83 cores mean. The GPU is idle and the target is
+missed, so the limit is per-frame Python work serialised by the GIL across 20 camera threads, plus
+batch-1 inference (5.96 ms per frame at batch 1 against 1.96 ms at batch 8 on this card). Phase 2 is
+therefore an architecture change, not only an engine swap. Order matters: do items 0 to 2 first,
+they are cheap and each is measurable alone.
+
+0. Quick wins, measured one at a time with load_test.py:
+   a. The person YOLO call passes neither `half=True` nor `imgsz`; it runs fp32. Set both. Compare
+      person-box counts and ByteTrack id churn before and after on the load test videos.
+   b. `ENABLE_PROFILING` default False in production. Measure CPU with it off before attributing
+      the remaining CPU to inference.
+   c. Keep `PIPELINE_PLAN` (basic/plus/pro) added in Phase 1; it is now part of the product.
 1. YOLOv8n and YOLO11m: export with `ultralytics` to `.engine`, fp16, dynamic batch up to 32, imgsz 640.
-   Build on first start if the engine is missing or the GPU name changed. Engines are per GPU; add
-   `*.engine` to `.gitignore` (done).
+   Build on first start if the engine is missing or the GPU name changed. Engines are per GPU and
+   gitignored.
 2. SCRFD det_10g and ArcFace w600k_r50: load through ONNX Runtime's `TensorrtExecutionProvider` with
-   `trt_fp16_enable`, `trt_engine_cache_enable`, fixed profile 1x3x640x640 and 1x3x112x112. The code
-   is in `backend/bench_trt.py`. insightface's `FaceAnalysis` accepts a `providers` list.
-3. Replace insightface's Python anchor decode and NMS for SCRFD with a torch implementation on the GPU,
-   or with TensorRT's EfficientNMS plugin. This is where 4.7 ms per frame goes today.
-4. GPU letterbox: resize and normalise frames with torch on the GPU before YOLO, instead of cv2 on CPU.
-5. Batch across cameras: one detector call per GPU tick with all cameras' pending frames (batch up to
-   32), results routed back per camera. ByteTrack stays per camera.
+   `trt_fp16_enable`, `trt_engine_cache_enable`, fixed profiles 1x3x640x640 and 1x3x112x112 (see
+   `backend/bench_trt.py`). Verify with `test_face.py --compare`: report the largest match-distance
+   change; anything above 0.02 needs a threshold recalibration before it ships.
+3. One inference loop per GPU. Replace "every camera thread calls the detector" with a single
+   `InferenceServer` per GPU that owns the engines, collects pending frames from all cameras every
+   tick (up to batch 32, tick 10 to 33 ms), runs one detector call, and returns results per camera.
+   Camera workers become decode + tracking + rules only. Measure the tick fill and batch size.
+4. Camera workers out of the GIL. Run camera workers as processes (multiprocessing, N cameras per
+   process, default 8), passing frames to the inference server through shared memory (torch shared
+   tensors or `multiprocessing.shared_memory`), not pickled numpy. Events go back through a queue to
+   the existing event pipeline. The API process stays as it is.
+5. GPU letterbox and NMS: resize and normalise on the GPU with torch before the engine; for SCRFD
+   replace insightface's numpy anchor decode and NMS with a torch implementation on the GPU. This is
+   where 4.7 ms per face-frame goes today.
+6. Face detection on tracked person crops, not full frames, at `FACE_FPS` (default 5) independent of
+   the tracking rate, and ArcFace only for tracks without a locked identity. Plus and Pro pay for
+   faces per person, not per frame.
 
-Acceptance: `backend/bench_pipeline.py` shows SCRFD-640 end to end under 3 ms and YOLOv8n per frame under
-0.8 ms at batch 16. `load_test.py` holds 20 Basic cameras at 30 fps, or 15 Plus cameras at 10 fps.
+Acceptance: `load_test.py` holds 20 Basic cameras at 25 fps or better with GPU utilisation above
+50 percent and under 4 CPU cores, and 15 Plus cameras at 10 fps tracking with faces at 5 fps.
+`bench_pipeline.py` shows YOLOv8n under 0.8 ms per frame at batch 16 and SCRFD end to end under 3 ms.
+`test_face.py --compare` largest distance change reported and under 0.02.
+
+Known missing inputs, not to be worked around silently: `test_anpr_direct.py` needs
+`models/license-plate-finetune-v1l.pt` and a sample video from another machine; ask for the model
+file before touching ANPR.
 
 ## Phase 3: live view without transcoding (one to two weeks, can run in parallel with phase 2)
 
