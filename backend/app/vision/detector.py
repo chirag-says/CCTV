@@ -110,6 +110,79 @@ def _ensure_cuda_dll_path() -> list:
     return added
 
 
+class CPUInferenceRefused(RuntimeError):
+    """Inference would run on the CPU and settings.ALLOW_CPU_INFERENCE is off.
+
+    Deliberately fatal. See settings.ALLOW_CPU_INFERENCE for the measured
+    cost of letting this through instead.
+    """
+
+
+def _conflicting_onnxruntime():
+    """Detect the CPU onnxruntime wheel installed beside the GPU one.
+
+    They ship the SAME `onnxruntime` package. Whichever wrote its files last
+    wins the import, so a stray `pip install onnxruntime` silently replaces
+    the CUDA-capable build with one that has no CUDA provider at all -- and
+    nothing about the resulting behaviour says so.
+    """
+    try:
+        from importlib.metadata import distributions
+        found = sorted({
+            (d.metadata["Name"] or "") for d in distributions()
+            if (d.metadata["Name"] or "").lower().startswith("onnxruntime")
+        })
+        if len(found) > 1 and any(f.lower() == "onnxruntime" for f in found):
+            return ", ".join(found)
+    except Exception:
+        pass
+    return None
+
+
+def _cpu_fallback_message() -> str:
+    """Say which of the handful of causes this actually is."""
+    try:
+        import onnxruntime as ort
+        avail, ver = ort.get_available_providers(), ort.__version__
+    except Exception:
+        avail, ver = ["<onnxruntime import failed>"], "?"
+
+    bar = "=" * 70
+    lines = [
+        "",
+        bar,
+        "  InsightFace has no CUDA execution provider, so SCRFD and ArcFace",
+        "  would run on the CPU. Measured on this project's hardware that is",
+        "  3,648 ms per detection instead of 34 ms -- a 100x regression whose",
+        "  only symptom is that the cameras get slow.",
+        "",
+        "  onnxruntime {} offers: {}".format(ver, avail),
+    ]
+    clash = _conflicting_onnxruntime()
+    if clash:
+        lines += [
+            "",
+            "  LIKELY CAUSE: {} are both installed. They are the".format(clash),
+            "  same package; the CPU wheel wins the import and has no CUDA.",
+            "    pip uninstall -y onnxruntime",
+            "    pip install --force-reinstall 'onnxruntime-gpu>=1.20'",
+        ]
+    else:
+        lines += [
+            "",
+            "  Blackwell (sm_120) needs onnxruntime-gpu >= 1.20:",
+            "    pip install -U 'onnxruntime-gpu>=1.20'",
+            "  Never install plain `onnxruntime` alongside it.",
+        ]
+    lines += [
+        "",
+        "  To run on the CPU deliberately (an API host with no cameras, CI):",
+        "    ALLOW_CPU_INFERENCE=true",
+        bar,
+    ]
+    return "\n".join(lines)
+
+
 def _get_insightface_app():
     """
     Lazy-load the insightface FaceAnalysis app.
@@ -182,17 +255,13 @@ def _get_insightface_app():
                         _cuda_active = True
 
             if not _cuda_active:
+                if not getattr(settings, "ALLOW_CPU_INFERENCE", False):
+                    raise CPUInferenceRefused(_cpu_fallback_message())
                 logger.error(
-                    "\n" + "=" * 70 + "\n"
-                    "  CRITICAL: InsightFace is running on CPU, NOT GPU!\n"
-                    "  This causes 10-50x slower inference (200-500 ms/frame).\n"
-                    "  Fix: pip install -U 'onnxruntime-gpu>=1.20'\n"
-                    "  Then verify: python -c \"import onnxruntime; "
-                    "print(onnxruntime.get_available_providers())\"\n"
-                    + "=" * 70
+                    "InsightFace is on the CPU and ALLOW_CPU_INFERENCE is set "
+                    "-- continuing at roughly 1/100th speed."
+                    + _cpu_fallback_message()
                 )
-                # Continue running (CPU is slow but functional)
-                # but make the problem unmistakably visible in logs
 
             _insightface_app = app
             logger.info(
@@ -203,6 +272,12 @@ def _get_insightface_app():
             )
             return _insightface_app
 
+        except CPUInferenceRefused:
+            # Deliberate, and must not be swallowed into a None return: the
+            # caller reads None as "no faces this frame", so a refusal that
+            # got caught here would present as a camera that sees nobody.
+            _insightface_failed = True
+            raise
         except Exception as e:
             logger.error(f"Failed to load insightface: {e}", exc_info=True)
             _insightface_failed = True

@@ -10,7 +10,16 @@ numpy>=1.26.0
 
 # Face Analysis (SCRFD detection + ArcFace recognition)
 insightface>=0.7.3
-onnxruntime-gpu>=1.20.0  # Blackwell (sm_120) requires >=1.20
+#
+# onnxruntime-gpu ONLY. Never `pip install onnxruntime` alongside it: they are
+# the same package name, whichever installed last wins the import, and the CPU
+# wheel has no CUDA provider. SCRFD then runs at 3,648 ms per detection instead
+# of 34 ms, with no error and no traceback -- the cameras just get slow.
+# Startup now refuses to continue in that state; see
+# settings.ALLOW_CPU_INFERENCE.
+#   Verify: python -c "import onnxruntime; print(onnxruntime.get_available_providers())"
+# Blackwell (sm_120) requires >= 1.20.
+onnxruntime-gpu>=1.20.0
 
 # Multi-Object Tracking (ByteTrack)
 lap>=0.5.9

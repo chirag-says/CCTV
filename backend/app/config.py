@@ -78,6 +78,22 @@ class Settings(BaseSettings):
     FACE_QUALITY_MAX_PITCH: float = 35.0       # Maximum head pitch (degrees)
 
     # FP16 Inference (enable only after benchmarking accuracy)
+    # ── Item 3: refuse to run inference on the CPU ────────────
+    # A silent CPU fallback is the most expensive failure this system has.
+    # Measured on this machine: SCRFD at det=1024 goes from 34 ms on CUDA to
+    # 3,648 ms on CPU -- a 100x regression whose only symptom is "the cameras
+    # got slow". No error, no traceback, just a deployment that reports
+    # healthy and analyses about one percent of what it should.
+    #
+    # The causes are all mundane: `pip install onnxruntime` landing beside
+    # onnxruntime-gpu (same package name, the CPU wheel wins the import and
+    # has no CUDA provider), a torch build without CUDA, a driver too old for
+    # the card. Each is a five-minute fix once named, and invisible until then.
+    #
+    # So: no CUDA, no start. Set True only where CPU really is intended -- an
+    # API host with no cameras, or CI.
+    ALLOW_CPU_INFERENCE: bool = False
+
     ENABLE_FP16: bool = False
 
     # Search Backend: "numpy" (default) or "faiss" (future)

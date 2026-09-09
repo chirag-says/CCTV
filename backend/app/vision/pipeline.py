@@ -68,14 +68,33 @@ from app.core.profiler import profiler
 
 logger = logging.getLogger(__name__)
 
-# Ã¢â€â‚¬Ã¢â€â‚¬ Log GPU status on module load Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬Ã¢â€â‚¬
+# -- Torch CUDA is a start-up requirement, not a preference ----------------
+# YOLO person detection, ReID and the hazard detector all run through torch.
+# On the CPU they do not degrade gracefully, they stop being real time -- and
+# they do it without raising, so the deployment looks healthy while analysing
+# almost nothing. Same reasoning as the onnxruntime check in detector.py; see
+# settings.ALLOW_CPU_INFERENCE for the measured cost.
 try:
     import torch
     _cuda_available = torch.cuda.is_available()
     _gpu_name = torch.cuda.get_device_name(0) if _cuda_available else "N/A"
-    logger.info(f"Ã°Å¸â€“Â¥Ã¯Â¸Â  GPU Status: CUDA={'available' if _cuda_available else 'NOT available'}, Device={_gpu_name}")
+    logger.info(
+        f"GPU status: CUDA={'available' if _cuda_available else 'NOT available'}, "
+        f"device={_gpu_name}"
+    )
 except ImportError:
-    logger.info("Ã°Å¸â€“Â¥Ã¯Â¸Â  GPU Status: PyTorch not installed, GPU acceleration disabled")
+    _cuda_available = False
+    _gpu_name = "N/A"
+    logger.error("PyTorch is not installed; GPU acceleration is unavailable")
+
+if not _cuda_available and not getattr(settings, "ALLOW_CPU_INFERENCE", False):
+    raise RuntimeError(
+        "torch reports no CUDA device, so YOLO person detection, ReID and "
+        "hazard detection would run on the CPU. That is not a slower "
+        "pipeline, it is one that silently misses most of what it sees. "
+        "Install a CUDA build of torch, or set ALLOW_CPU_INFERENCE=true to "
+        "run without a GPU on purpose."
+    )
 
 
 class VisionPipeline:
