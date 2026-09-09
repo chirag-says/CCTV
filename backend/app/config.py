@@ -553,6 +553,15 @@ class Settings(BaseSettings):
     ROBOFLOW_PERSON_CONFIDENCE: float = 0.50
     ENABLE_ROBOFLOW_PERSON: bool = False
 
+    # ultralytics posts usage analytics to google-analytics.com from inside
+    # predict() (site-packages/ultralytics/utils/events.py). Nothing in this
+    # repo asked for it, and it fails the "zero network calls" acceptance
+    # criterion on its own -- the 20-camera baseline recorded 12 of these and
+    # no other outbound traffic. Off, and behind a flag like every other
+    # Phase 1 change, so the previous behaviour stays reachable by config.
+    # Not a performance setting: the post runs on a daemon thread.
+    ULTRALYTICS_TELEMETRY: bool = False
+
     # ── Video Analysis ────────────────────────────────────────
     VIDEO_UPLOAD_DIR: str = "./uploads/videos"
     MAX_VIDEO_SIZE_MB: int = 2000

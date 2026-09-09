@@ -25,12 +25,15 @@ def _disable_ultralytics_telemetry():
     is a no-op after the first run.
     """
     try:
+        from app.config import settings
         from ultralytics import settings as ul_settings
-        if ul_settings.get("sync"):
-            ul_settings.update({"sync": False})
-            logger.info("ultralytics telemetry disabled (sync=False)")
+
+        wanted = bool(getattr(settings, "ULTRALYTICS_TELEMETRY", False))
+        if bool(ul_settings.get("sync")) != wanted:
+            ul_settings.update({"sync": wanted})
+            logger.info(f"ultralytics telemetry sync={wanted}")
     except Exception as e:  # never let telemetry config break startup
-        logger.debug(f"could not disable ultralytics telemetry: {e}")
+        logger.debug(f"could not set ultralytics telemetry: {e}")
 
 
 _disable_ultralytics_telemetry()
