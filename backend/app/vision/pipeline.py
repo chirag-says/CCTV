@@ -148,6 +148,15 @@ class VisionPipeline:
                 f"{self._tracking_mode!r}; using 'face'"
             )
             self._tracking_mode = "face"
+        # Basic has no face detector, so face tracking would have nothing to
+        # track. Force person tracking rather than starting a camera that
+        # silently sees nobody.
+        if not settings.PLAN_ALLOWS_FACE and self._tracking_mode != "person":
+            logger.info(
+                f"[{self.camera_id}] plan={settings.plan} has no face detection; "
+                f"TRACKING_MODE forced to 'person'"
+            )
+            self._tracking_mode = "person"
         self._person_fallback_logged = False
         # Step 2 vote thresholds, read once (this is the per-frame hot path).
         self._promote_votes = getattr(settings, "IDENTITY_PROMOTE_VOTES", 2)
@@ -240,7 +249,7 @@ class VisionPipeline:
 
         # Hazard Detection (YOLOv8)
         self.hazard_detector: Optional[HazardDetector] = None
-        if settings.ENABLE_HAZARD_DETECTION:
+        if settings.ENABLE_HAZARD_DETECTION and settings.PLAN_ALLOWS_WEAPONS:
             # RFDETR_MODEL_SIZE and the backend choice are passed EXPLICITLY.
             # They were not before: HazardDetector and TrafficMonitor each
             # defaulted the size to "large" in their own signature, so
@@ -262,7 +271,8 @@ class VisionPipeline:
         # ANPR (License Plate Recognition)
         self._is_browser_camera = stream_source.startswith("browser:")
         self.plate_recognizer: Optional[PlateRecognizer] = None
-        if self.pipeline_mode in ("traffic", "hybrid") and settings.ENABLE_ANPR:
+        if (self.pipeline_mode in ("traffic", "hybrid")
+                and settings.ENABLE_ANPR and settings.PLAN_ALLOWS_ANPR):
             languages = [l.strip() for l in settings.ANPR_OCR_LANGUAGES.split(",")]
             self.plate_recognizer = PlateRecognizer(
                 yolo_model_path=settings.ANPR_MODEL_PATH,
@@ -289,7 +299,7 @@ class VisionPipeline:
 
         # ── Person Re-Identification (cross-camera tracking) ──────────────────────────────────
         self.reid_tracker: Optional[ReIDTracker] = None
-        if settings.ENABLE_REID:
+        if settings.ENABLE_REID and settings.PLAN_ALLOWS_REID:
             self.reid_tracker = get_reid_tracker()
             self._reid_frame_interval = settings.REID_FRAME_INTERVAL
             self._last_reid_frame = 0
@@ -674,9 +684,17 @@ class VisionPipeline:
         # Detect faces AND get embeddings in a SINGLE insightface pass
         # (sub-stage timing: scrfd_preprocess/scrfd_inference/scrfd_postprocess
         #  is recorded inside detector.detect_faces_with_embeddings)
-        face_locations, embeddings, face_landmarks, rgb_frame = (
-            self.detector.detect_faces_with_embeddings(frame)
-        )
+        if settings.PLAN_ALLOWS_FACE:
+            face_locations, embeddings, face_landmarks, rgb_frame = (
+                self.detector.detect_faces_with_embeddings(frame)
+            )
+        else:
+            # Basic plan: no SCRFD, no ArcFace. Person mode treats "no faces
+            # this frame" as the ordinary case -- a person facing away -- so
+            # everything downstream already handles it: the tracker follows
+            # bodies, _bind_face_to_track returns None, recognition is
+            # skipped, and presence, zones, crowd and loitering are unaffected.
+            face_locations, embeddings, face_landmarks, rgb_frame = [], [], [], None
 
         # In PERSON mode "no faces" is an ordinary frame, not an empty one:
         # people with their backs turned still have bodies to track. Only face
@@ -2881,9 +2899,12 @@ class VisionPipeline:
         rgb_frame = None
 
         if self._frame_count % settings.FRAME_SKIP == 0:
-            face_locations, embeddings, face_landmarks, rgb_frame = (
-                self.detector.detect_faces_with_embeddings(clean_frame)
-            )
+            if settings.PLAN_ALLOWS_FACE:
+                face_locations, embeddings, face_landmarks, rgb_frame = (
+                    self.detector.detect_faces_with_embeddings(clean_frame)
+                )
+            else:
+                face_locations, embeddings, face_landmarks, rgb_frame = [], [], [], None
 
         # ── 2. Pass face locations to traffic module so it can filter overlaps ──
         if self.traffic_monitor and face_locations:
@@ -3081,6 +3102,8 @@ class VisionPipeline:
             "fps": self.fps,
             "frames_processed": self._frame_count,
             "pipeline_mode": self.pipeline_mode,
+            "plan": settings.plan,
+            "analysis_fps_target": getattr(self, "_analysis_fps", None),
             "stream_health": self.stream_health.status,
         }
 

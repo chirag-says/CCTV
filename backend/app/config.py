@@ -463,6 +463,47 @@ class Settings(BaseSettings):
     # "traffic" = Traffic mode (ANPR + vehicle-person safety)
     PIPELINE_MODE: str = "hybrid"
 
+    # ── Product plan: which analytics a camera is entitled to ─
+    # The capacity table, the cost model and the Phase 1 acceptance test are
+    # all written per plan -- "20 Basic cameras at 10 fps", "15 Plus at 10" --
+    # and until now nothing in the code could run one. Face detection ran
+    # unconditionally in face mode, so a "Basic" camera paid for SCRFD and
+    # ArcFace whether or not it was selling face recognition.
+    #
+    #   basic  person detection + ByteTrack + zone, crowd and loitering rules
+    #   plus   basic + face detection and recognition
+    #   pro    plus + ANPR, weapons detection and cross-camera ReID
+    #
+    # This CAPS the ENABLE_* flags, it does not override them: a feature runs
+    # only if its own flag is on AND the plan includes it. So "pro" reproduces
+    # exactly what this config did before the plan existed, which is why it is
+    # the default.
+    #
+    # Basic implies TRACKING_MODE=person. With no face detector, face tracking
+    # would have nothing to track at all.
+    PIPELINE_PLAN: str = "pro"        # "basic", "plus", or "pro"
+
+    @property
+    def plan(self) -> str:
+        p = (self.PIPELINE_PLAN or "pro").strip().lower()
+        return p if p in ("basic", "plus", "pro") else "pro"
+
+    @property
+    def PLAN_ALLOWS_FACE(self) -> bool:
+        return self.plan in ("plus", "pro")
+
+    @property
+    def PLAN_ALLOWS_ANPR(self) -> bool:
+        return self.plan == "pro"
+
+    @property
+    def PLAN_ALLOWS_WEAPONS(self) -> bool:
+        return self.plan == "pro"
+
+    @property
+    def PLAN_ALLOWS_REID(self) -> bool:
+        return self.plan == "pro"
+
     # ── RF-DETR (Real-Time Detection Transformer) ─────────────
     # WAS "large", AND WAS NEVER READ. HazardDetector and TrafficMonitor each
     # defaulted the size to "large" in their own signature, and the pipeline
