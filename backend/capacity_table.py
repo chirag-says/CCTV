@@ -14,7 +14,7 @@ FACE_FPS, ANPR_FPS, WEAPON_FPS, REID_PER_S = 5, 2, 1, 2   # fixed rates, do not 
 # already uses fp16 tensor cores, so TensorRT gains less than the 5.3x measured on the 1650.
 # The face stack runs in ONNX Runtime fp32 and gained only 3x from the 1650 to the 5070,
 # so it has the most headroom.
-TRT_GAIN = {"person": 2.5, "face": 4.0, "anpr": 2.5, "weapon": 2.0, "reid": 1.5}   # estimates
+TRT_GAIN = {"person": 1.92, "face": 4.0, "anpr": 2.5, "weapon": 2.0, "reid": 1.5}   # person measured on 5070 (2.09 -> 1.09 ms); rest estimates
 RUST_GAIN = {"person": 1.5, "face": 1.25, "anpr": 1.25, "weapon": 1.25, "reid": 1.25}
 CPU_MS = {"today": 4.0, "py_trt": 2.0, "rust_trt": 0.3}   # CPU ms per tracked frame
 

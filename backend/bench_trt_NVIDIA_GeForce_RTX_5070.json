@@ -1,0 +1,21 @@
+{
+  "gpu": "NVIDIA GeForce RTX 5070",
+  "results": {
+    "yolov8n_b1": {
+      "pytorch_fp16_ms": 6.35,
+      "tensorrt_fp16_ms": 2.67,
+      "speedup": 2.38
+    },
+    "yolov8n_b8": {
+      "pytorch_fp16_ms": 2.09,
+      "tensorrt_fp16_ms": 1.2,
+      "speedup": 1.74
+    },
+    "yolov8n_b16": {
+      "pytorch_fp16_ms": null,
+      "tensorrt_fp16_ms": 1.09,
+      "speedup_vs_b8_pytorch": 1.92
+    },
+    "note": "end-to-end ultralytics predict(); face stack not yet measured on this GPU"
+  }
+}
