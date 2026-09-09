@@ -369,8 +369,24 @@ class Settings(BaseSettings):
     MAX_SNAPSHOT_SIZE_KB: int = 200
 
     # ── Safety & Security Modules ─────────────────────────────
-    # Attribute Recognition
-    ENABLE_ATTRIBUTE_RECOGNITION: bool = True
+    # ── Item 4: attribute recognition off, and TensorFlow with it ──
+    # AttributeRecognizer predicts gender with DeepFace, which drags in
+    # TensorFlow. That made three ML frameworks resident in one process --
+    # ONNX Runtime for faces, PyTorch for YOLO / RF-DETR / ReID / EasyOCR,
+    # and TensorFlow for this one field -- each wanting its own CUDA context
+    # on a 12 GB card shared by twenty-plus cameras.
+    #
+    # Gender is not a product feature. Nothing in the API, the dashboard or
+    # the rules engine reads it. The only consumers are this pipeline and
+    # video_analysis_service, and both already handle the recognizer being
+    # absent, because it was always conditional on this flag.
+    #
+    # deepface and tf-keras are commented out of requirements.txt, so with the
+    # flag False nothing imports TensorFlow at all. True on a host that still
+    # has them installed restores the old behaviour; the lazy loader in
+    # safety_analytics.py already degrades to a warning when they are gone.
+    # Clothing colour (HSV, no framework) shares this flag and goes with it.
+    ENABLE_ATTRIBUTE_RECOGNITION: bool = False
 
     # Crowd / Gathering Detection
     ENABLE_CROWD_DETECTION: bool = True
