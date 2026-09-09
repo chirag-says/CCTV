@@ -495,7 +495,7 @@ class Settings(BaseSettings):
     # ── Pipeline Mode ─────────────────────────────────────────
     # "face" = Face Recognition mode (default, existing behaviour)
     # "traffic" = Traffic mode (ANPR + vehicle-person safety)
-    PIPELINE_MODE: str = "hybrid"
+    PIPELINE_MODE: str = "face"
 
     # ── Product plan: which analytics a camera is entitled to ─
     # The capacity table, the cost model and the Phase 1 acceptance test are
@@ -515,7 +515,7 @@ class Settings(BaseSettings):
     #
     # Basic implies TRACKING_MODE=person. With no face detector, face tracking
     # would have nothing to track at all.
-    PIPELINE_PLAN: str = "pro"        # "basic", "plus", or "pro"
+    PIPELINE_PLAN: str = "plus"       # "basic", "plus", or "pro"
 
     @property
     def plan(self) -> str:
@@ -549,7 +549,12 @@ class Settings(BaseSettings):
     RFDETR_DEVICE: str = "auto"               # "auto", "cuda", or "cpu"
 
     # ── Traffic Mode: ANPR (License Plate Recognition) ────────
-    ENABLE_ANPR: bool = True
+    # Vehicle monitoring is OFF in live cameras. The code stays; only the
+    # defaults change. Nothing may construct PlateRecognizer or
+    # TrafficMonitor unless the plan is pro AND the mode is traffic or
+    # hybrid, and the inference server never loads a plate or vehicle
+    # model at all.
+    ENABLE_ANPR: bool = False
     ANPR_MODEL_PATH: str = "./models/license-plate-finetune-v1l.pt"
     ANPR_FRAME_INTERVAL: int = 5         # Process every 5th frame
     ANPR_PLATE_COOLDOWN_SEC: float = 60.0
@@ -560,7 +565,7 @@ class Settings(BaseSettings):
     ANPR_KEYFRAME_MAX_FRAMES: int = 15   # Max frames for OCR accumulation
 
     # ── Traffic Mode: Vehicle-Person Safety Monitor ───────────
-    ENABLE_TRAFFIC_MONITOR: bool = True
+    ENABLE_TRAFFIC_MONITOR: bool = False
     TRAFFIC_MODEL_PATH: str = "./models/gate_vehicles_v2.pt"
     TRAFFIC_FRAME_INTERVAL: int = 5      # Process every 5th frame
     TRAFFIC_PROXIMITY_PX: int = 50       # Pixel proximity for danger alert

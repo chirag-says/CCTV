@@ -285,7 +285,12 @@ class VisionPipeline:
 
         # Traffic Monitor (Vehicle-Person Safety)
         self.traffic_monitor: Optional[TrafficMonitor] = None
-        if self.pipeline_mode in ("traffic", "hybrid") and settings.ENABLE_TRAFFIC_MONITOR:
+        # Same three-part gate as ANPR: mode, feature flag, AND plan. Without
+        # the plan term a "plus" camera in hybrid mode still built a vehicle
+        # detector and loaded its model.
+        if (self.pipeline_mode in ("traffic", "hybrid")
+                and settings.ENABLE_TRAFFIC_MONITOR
+                and settings.PLAN_ALLOWS_ANPR):
             self.traffic_monitor = TrafficMonitor(
                 model_path=settings.TRAFFIC_MODEL_PATH,
                 frame_interval=settings.TRAFFIC_FRAME_INTERVAL,
