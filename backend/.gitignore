@@ -32,3 +32,8 @@ snapshots/
 # Docker
 .dockerignore
 bin/
+
+# Compiled ByteTrack extension (built out of tree; see bytetrack_cpp/setup.py)
+app/vision/bytetrack_cpp/build/
+app/vision/bytetrack_cpp/*.pyd
+app/vision/bytetrack_cpp/*.so

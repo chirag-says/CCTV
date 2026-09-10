@@ -281,6 +281,19 @@ class Settings(BaseSettings):
     FACE_TRT_FP16: bool = True
     FACE_TRT_CACHE_DIR: str = "trt_cache"
 
+    # ── Phase 4 step 3: the association core, compiled ────────
+    # "cpp"  the IoU matrix and the linear assignment run in a pybind11
+    #        extension (app/vision/bytetrack_cpp). Identical outputs: the
+    #        assignment reproduces lap.lapjv's extend_cost/cost_limit layout
+    #        exactly, verified against lap on randomised matrices and against
+    #        the Python tracker on a stored 300-frame sequence.
+    # "py"   numpy plus the lap library, the previous path.
+    #
+    # Falls back to "py" with a warning if the extension has not been built --
+    # it is compiled out of tree on purpose, so that a machine without a
+    # compiler fails at install time rather than on a camera's first frame.
+    TRACKER_BACKEND: str = "cpp"            # "cpp" or "py"
+
     # ── Phase 4 step 1: decode on the GPU ─────────────────────
     # "nvdec"  frames are decoded by the GPU's fixed-function video block
     #          straight into CUDA memory, so decode costs no CPU and the

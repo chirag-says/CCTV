@@ -257,6 +257,23 @@ class STrack:
         return y1, x2, y2, x1
 
 
+# ── The compiled association core (Phase 4 step 3) ────────────────────
+# Resolved once, at import. `_cpp` is None when TRACKER_BACKEND=py, or when
+# the extension was never built -- both leave the numpy/lap path below in
+# charge, and the second case says so once rather than on every frame.
+_cpp = None
+if str(getattr(settings, "TRACKER_BACKEND", "py")).lower() == "cpp":
+    try:
+        from app.vision import bytetrack_cpp as _cpp
+        logger.info("ByteTrack association: compiled backend")
+    except Exception as _e:                                     # noqa: BLE001
+        logger.warning(
+            f"TRACKER_BACKEND=cpp but the extension is not built ({_e}); "
+            f"using the Python association. Build it with: "
+            f"cd app/vision/bytetrack_cpp && python setup.py build_ext --inplace"
+        )
+
+
 def _iou_batch(bboxes1: np.ndarray, bboxes2: np.ndarray) -> np.ndarray:
     """
     Compute IoU between two sets of bounding boxes.
@@ -270,6 +287,9 @@ def _iou_batch(bboxes1: np.ndarray, bboxes2: np.ndarray) -> np.ndarray:
     """
     if len(bboxes1) == 0 or len(bboxes2) == 0:
         return np.zeros((len(bboxes1), len(bboxes2)))
+
+    if _cpp is not None:
+        return _cpp.iou_batch(bboxes1, bboxes2)
 
     x1 = np.maximum(bboxes1[:, 0:1], bboxes2[:, 0:1].T)
     y1 = np.maximum(bboxes1[:, 1:2], bboxes2[:, 1:2].T)
@@ -302,6 +322,12 @@ def _linear_assignment(cost_matrix: np.ndarray, thresh: float):
     """
     if cost_matrix.size == 0:
         return [], list(range(cost_matrix.shape[0])), list(range(cost_matrix.shape[1]))
+
+    if _cpp is not None:
+        matches, unmatched_a, unmatched_b = _cpp.linear_assignment(
+            np.ascontiguousarray(cost_matrix, dtype=np.float64), float(thresh)
+        )
+        return [tuple(m) for m in matches], list(unmatched_a), list(unmatched_b)
 
     try:
         import lap
