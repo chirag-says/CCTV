@@ -2959,6 +2959,7 @@ class VisionPipeline:
                     from app.vision.engines import resolve_weights
                     load_path = resolve_weights(model_path)
                     self._yolo_person_detector = YOLO(load_path)
+                    self._yolo_person_is_engine = str(load_path).endswith(".engine")
                     self._yolo_person_device = device
                     logger.info(
                         f"[{self.camera_id}] YOLO person detector loaded on "
@@ -2994,15 +2995,19 @@ class VisionPipeline:
             # frame's shape, so the cost and the effective detection scale
             # both followed the camera resolution and neither was stated
             # anywhere in this repo.
-            results = self._yolo_person_detector(
-                frame,
+            kwargs = dict(
                 conf=0.25,
                 classes=[0],  # person class only
                 verbose=False,
                 device=getattr(self, '_yolo_person_device', 'cpu'),
-                half=getattr(settings, "PERSON_DET_HALF", True),
                 imgsz=getattr(settings, "PERSON_DET_IMGSZ", 640),
             )
+            # ...except on a TensorRT engine, whose precision was fixed when it
+            # was built. There `half` changes nothing and only earns
+            # ultralytics' deprecation warning on every single call.
+            if not getattr(self, "_yolo_person_is_engine", False):
+                kwargs["half"] = getattr(settings, "PERSON_DET_HALF", True)
+            results = self._yolo_person_detector(frame, **kwargs)
 
             persons = []
             for result in results:

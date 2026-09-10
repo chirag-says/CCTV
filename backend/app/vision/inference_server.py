@@ -242,6 +242,12 @@ class InferenceServer:
                 ) or weights
                 logger.info(f"InferenceServer: person model {path}")
                 self._person_model = YOLO(path)
+                # A .engine has its precision BAKED IN at build time, so
+                # passing half= to predict() cannot change anything -- it only
+                # earns ultralytics' "'half' is deprecated" warning, once per
+                # call. At 25 fps per camera that is the loudest thing in the
+                # log and it says nothing.
+                self._person_is_engine = str(path).endswith(".engine")
         return self._person_model
 
     def _weapons(self):
@@ -509,15 +515,13 @@ class InferenceServer:
 
         model = self._person()
         frames = self._frames_of(reqs)
-        out = model.predict(
-            frames,
-            conf=0.25,
-            classes=[0],
-            verbose=False,
-            device=0,
-            half=bool(getattr(settings, "PERSON_DET_HALF", True)),
+        kwargs = dict(
+            conf=0.25, classes=[0], verbose=False, device=0,
             imgsz=int(getattr(settings, "PERSON_DET_IMGSZ", 640)),
         )
+        if not getattr(self, "_person_is_engine", False):
+            kwargs["half"] = bool(getattr(settings, "PERSON_DET_HALF", True))
+        out = model.predict(frames, **kwargs)
         results = []
         for res in out:
             persons = []

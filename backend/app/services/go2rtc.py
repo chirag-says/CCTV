@@ -228,9 +228,24 @@ class Go2RtcSupervisor:
 
         binary = self._resolve_binary()
         if not binary:
+            # "falls back to MJPEG" is only true in thread mode. In server
+            # mode the cameras live in other processes, CameraManager._workers
+            # is empty, and both /feed and the MJPEG socket look themselves up
+            # in it -- so there is no fallback at all, and saying there is
+            # sends someone looking for a JPEG path that cannot exist.
+            server_mode = str(
+                getattr(settings, "INFERENCE_MODE", "thread")
+            ).lower() == "server"
+            consequence = (
+                "INFERENCE_MODE=server has no MJPEG fallback (the cameras are "
+                "in other processes), so there will be NO live video until "
+                "go2rtc runs."
+                if server_mode else
+                "Live view falls back to MJPEG."
+            )
             self._last_error = (
-                f"binary not found (looked for {settings.GO2RTC_BINARY!r} on PATH "
-                f"and at GO2RTC_BINARY). Live view falls back to MJPEG."
+                f"binary not found (looked for {settings.GO2RTC_BINARY!r} on "
+                f"PATH and at GO2RTC_BINARY). {consequence}"
             )
             logger.warning(f"go2rtc: {self._last_error}")
             return False
