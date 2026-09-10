@@ -288,7 +288,24 @@ export default function Go2RtcPlayer({
         if (!showOverlay) return undefined;
 
         let rafId = null;
+        let vfcId = null;
         let mounted = true;
+
+        // WHAT DRIVES A REDRAW.
+        // requestVideoFrameCallback fires once per video frame the compositor
+        // actually PRESENTS, which is exactly when the overlay has something
+        // new to say. requestAnimationFrame fires at the display's refresh
+        // rate instead -- 60 times a second over a 12 fps camera, so four
+        // redraws in five repaint boxes that did not move. On a 3x3 wall that
+        // is nine canvases redrawn 60 times a second to show 12 fps of
+        // detections, which is the same "spend CPU to draw a picture nobody
+        // asked for" that moving video off the JPEG path was meant to stop.
+        //
+        // rAF remains the fallback: Firefox has no rVFC, and a stalled video
+        // presents no frames, so without it a camera that freezes would also
+        // freeze the staleness check that clears its boxes.
+        const video0 = videoRef.current;
+        const useVfc = !!(video0 && typeof video0.requestVideoFrameCallback === 'function');
 
         const pickFrame = () => {
             const buf = bufferRef.current;
@@ -312,7 +329,7 @@ export default function Go2RtcPlayer({
 
         const draw = () => {
             if (!mounted) return;
-            rafId = requestAnimationFrame(draw);
+            schedule();
 
             const canvas = canvasRef.current;
             const video = videoRef.current;
@@ -376,10 +393,23 @@ export default function Go2RtcPlayer({
             }
         };
 
-        rafId = requestAnimationFrame(draw);
+        function schedule() {
+            if (!mounted) return;
+            const video = videoRef.current;
+            if (useVfc && video) vfcId = video.requestVideoFrameCallback(draw);
+            else rafId = requestAnimationFrame(draw);
+        }
+
+        schedule();
         return () => {
             mounted = false;
             if (rafId) cancelAnimationFrame(rafId);
+            // video0, not videoRef.current: the callback was issued by the
+            // element that existed when this effect ran, and that is the
+            // element that has to cancel it.
+            if (vfcId && video0 && video0.cancelVideoFrameCallback) {
+                video0.cancelVideoFrameCallback(vfcId);
+            }
         };
     }, [showOverlay]);
 
