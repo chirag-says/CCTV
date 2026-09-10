@@ -42,6 +42,7 @@ import shutil
 import subprocess
 import threading
 import time
+from pathlib import Path
 from typing import Dict, List, Optional
 from urllib.parse import quote
 from urllib.request import urlopen
@@ -70,6 +71,44 @@ _VIDEO_FILE_EXT = (".mp4", ".mkv", ".mov", ".avi", ".m4v", ".webm", ".ts")
 #   -re                      play at the clip's frame rate, not disk speed
 #   -stream_loop -1          start over at EOF, forever
 FFMPEG_FILE_TEMPLATE = "-readrate_initial_burst 1 -re -stream_loop -1 -i {input}"
+
+
+def find_executable(name: str) -> Optional[str]:
+    """Locate a helper binary: as given, in bin/, or on PATH.
+
+    WHY bin/ IS SEARCHED AT ALL
+    go2rtc and ffmpeg are single files that get dropped next to the app rather
+    than installed -- there is no `pip install go2rtc`. Requiring an absolute
+    path in the environment means the live view silently does not exist for
+    anyone who has not set one, and the only symptom is a browser stuck on
+    "Negotiating WebRTC with the relay" while the backend logs one warning at
+    startup that has long since scrolled away.
+
+    So the obvious place is checked. `backend/bin/go2rtc.exe` is where these
+    land, and finding them there is not a guess -- it is the layout.
+
+    The .exe suffix is added on Windows so the same setting works on both.
+    """
+    if not name:
+        return None
+
+    candidates = [name]
+    if os.name == "nt" and not name.lower().endswith(".exe"):
+        candidates.append(name + ".exe")
+
+    here = Path(__file__).resolve().parent.parent.parent      # backend/
+    for candidate in candidates:
+        # As given, relative to the working directory or absolute.
+        if os.path.isfile(candidate):
+            return os.path.abspath(candidate)
+        # Beside the app, which is where a dropped-in binary lives.
+        beside = here / "bin" / os.path.basename(candidate)
+        if beside.is_file():
+            return str(beside)
+        found = shutil.which(candidate)
+        if found:
+            return found
+    return None
 
 
 def _yaml_quote(value: str) -> str:
@@ -153,10 +192,12 @@ def build_config(cameras: List[dict]) -> str:
     # The input template every FILE source is built from. See the module
     # docstring: this is where a dev clip becomes an endless camera.
     lines += ["", "ffmpeg:", f"  file: {_yaml_quote(FFMPEG_FILE_TEMPLATE)}"]
-    if settings.GO2RTC_FFMPEG_BIN:
-        lines.append(
-            f"  bin: {_yaml_quote(os.path.abspath(settings.GO2RTC_FFMPEG_BIN).replace(chr(92), '/'))}"
-        )
+    # ffmpeg is found the same way, and only written when it is actually
+    # there: pointing go2rtc at a path that does not exist is worse than
+    # leaving it to its own PATH lookup.
+    ffmpeg = find_executable(settings.GO2RTC_FFMPEG_BIN or "ffmpeg")
+    if ffmpeg:
+        lines.append(f"  bin: {_yaml_quote(ffmpeg.replace(chr(92), '/'))}")
 
     lines += ["", "log:", f"  level: {_yaml_quote(settings.GO2RTC_LOG_LEVEL)}", "", "streams:"]
 
@@ -295,10 +336,7 @@ class Go2RtcSupervisor:
 
     @staticmethod
     def _resolve_binary() -> Optional[str]:
-        configured = settings.GO2RTC_BINARY
-        if os.path.isfile(configured):
-            return os.path.abspath(configured)
-        return shutil.which(configured)
+        return find_executable(settings.GO2RTC_BINARY)
 
     def _spawn(self, binary: str) -> bool:
         # go2rtc's output goes to a file beside its config, NOT to DEVNULL.
