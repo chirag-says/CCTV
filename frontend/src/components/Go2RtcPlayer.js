@@ -45,6 +45,10 @@ const DEFAULT_LATENCY_MS = 150;
 // re-established promptly.
 const DISCONNECT_GRACE_MS = 8000;
 
+// One line, once, when the overlay changes how it schedules itself. Enough to
+// answer "why are there no boxes" from a console log instead of a bisect.
+const logger = (msg) => console.info(msg);
+
 // A box older than this relative to the displayed frame is not drawn. At the
 // default 10 fps analysis rate a frame is 100 ms, so this tolerates a few
 // missed analyses without the overlay flickering out.
@@ -390,6 +394,7 @@ export default function Go2RtcPlayer({
 
         const draw = () => {
             if (!mounted) return;
+            lastDrawAt = Date.now();
             schedule();
 
             const canvas = canvasRef.current;
@@ -469,17 +474,46 @@ export default function Go2RtcPlayer({
         // 'loadeddata' both fire, and two live callbacks would double the
         // draw rate.
         let armed = false;
+        let vfcWorks = useVfc;
+        let lastDrawAt = 0;
 
         function schedule() {
             if (!mounted) return;
             const video = videoRef.current;
-            if (useVfc && video) {
+            if (vfcWorks && video) {
                 armed = true;
                 vfcId = video.requestVideoFrameCallback(draw);
             } else {
                 rafId = requestAnimationFrame(draw);
             }
         }
+
+        // A WATCHDOG, because the overlay must not depend on
+        // requestVideoFrameCallback behaving.
+        //
+        // rVFC is the right driver -- one redraw per presented frame instead
+        // of 60 a second over a 12 fps camera -- but it is newer and more
+        // fragile than rAF: it belongs to the element rather than the window,
+        // it can be dropped when a source is attached, and it does not fire at
+        // all in some embedded and headless contexts. Every one of those looks
+        // identical from the outside: video plays, no box is ever drawn.
+        //
+        // So if the video is demonstrably playing and no draw has happened for
+        // a second and a half, rVFC is not delivering and this falls back to
+        // rAF for good. Costs one timer per tile.
+        const watchdog = setInterval(() => {
+            if (!mounted || !vfcWorks) return;
+            const video = videoRef.current;
+            if (!video || video.paused || video.readyState < 2) return;
+            if (lastDrawAt && Date.now() - lastDrawAt < 1500) return;
+            if (!lastDrawAt) { lastDrawAt = Date.now(); return; }
+
+            vfcWorks = false;
+            armed = false;
+            logger('[overlay] requestVideoFrameCallback is not firing; '
+                + 'drawing on animation frames instead');
+            schedule();
+        }, 1000);
 
         const rearm = () => {
             if (!armed) schedule();
@@ -497,6 +531,7 @@ export default function Go2RtcPlayer({
         schedule();
         return () => {
             mounted = false;
+            clearInterval(watchdog);
             if (video0) {
                 video0.removeEventListener('loadeddata', onLoaded);
                 video0.removeEventListener('playing', onLoaded);
