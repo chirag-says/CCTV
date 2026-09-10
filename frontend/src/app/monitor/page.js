@@ -820,6 +820,11 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
     const [streamStatus, setStreamStatus] = useState('connecting');
     const [staleInfo, setStaleInfo] = useState(null);  // { stream_state, stale_since, reconnect_attempts, last_frame_age }
     const [webrtc, setWebrtc] = useState(null);        // null = not asked yet
+    // Has this tile ever shown video? Once it has, a reconnect leaves the last
+    // frame on screen rather than dropping the placeholder over it -- a frozen
+    // picture reads as "this camera stalled", a black rectangle reads as
+    // "this camera is gone", and only one of those is true.
+    const [everStreamed, setEverStreamed] = useState(false);
     const forceMjpeg = mjpegForced();
 
     useEffect(() => {
@@ -839,6 +844,13 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
             });
         return () => { mounted = false; };
     }, [camera.id, camera.status, forceMjpeg]);
+
+    // Same latch as in Go2RtcPlayer, set where the status arrives rather than
+    // in an effect reacting to it.
+    const handleStatus = useCallback((next) => {
+        setStreamStatus(next);
+        if (next === 'streaming') setEverStreamed(true);
+    }, []);
 
     const decided = forceMjpeg || webrtc !== null;
     const useWebrtc = !forceMjpeg && Boolean(webrtc?.available && webrtc?.signalling_url);
@@ -887,12 +899,12 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                             <Go2RtcPlayer
                                 camera={camera}
                                 signallingUrl={webrtc.signalling_url}
-                                onStatus={setStreamStatus}
+                                onStatus={handleStatus}
                             />
                         ) : (
                             <MjpegFeed
                                 camera={camera}
-                                onStatus={setStreamStatus}
+                                onStatus={handleStatus}
                                 onStale={setStaleInfo}
                                 aiDetectEnabled={aiDetectEnabled}
                                 onAiStats={onAiStats}
@@ -928,7 +940,7 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                             </div>
                         )}
 
-                        {status !== 'streaming' && status !== 'stream_frozen' && (
+                        {status !== 'streaming' && status !== 'stream_frozen' && !everStreamed && (
                             <div className="live-feed-placeholder">
                                 <div style={{ animation: 'pulse 2s ease-in-out infinite', display: 'flex' }}>
                                     <VideoCameraIcon size={32} />

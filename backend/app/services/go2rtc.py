@@ -273,6 +273,23 @@ class Go2RtcSupervisor:
             )
             return True
 
+        # A go2rtc ALREADY HOLDING THE PORT IS A STALE ONE, and it must go
+        # before we spawn.
+        #
+        # go2rtc does not exit when it cannot bind: it logs
+        # "listen tcp :1984: only one usage of each socket address" and keeps
+        # running with no listeners. So spawning alongside an existing
+        # instance produces a child that is alive, answers nothing, and looks
+        # healthy -- because the health probe is answered by the OTHER
+        # process. Measured here: two go2rtc processes, the API served by an
+        # orphan from a previous run still holding its old config, so a config
+        # change (the ICE candidates) had no effect at all and every camera
+        # kept failing to negotiate.
+        #
+        # This process is the declared owner when GO2RTC_MANAGED is true, so
+        # it reclaims the port rather than competing for it.
+        self._reclaim_port()
+
         binary = self._resolve_binary()
         if not binary:
             # "falls back to MJPEG" is only true in thread mode. In server
@@ -343,6 +360,54 @@ class Go2RtcSupervisor:
     @staticmethod
     def _resolve_binary() -> Optional[str]:
         return find_executable(settings.GO2RTC_BINARY)
+
+    def _reclaim_port(self):
+        """Stop any go2rtc already listening on our API port.
+
+        Only runs when this process manages go2rtc. Identified by executable
+        name AND by the fact that something is answering our API port -- a
+        go2rtc somebody else started on a different port is left alone.
+        """
+        if not self.api_responds():
+            return
+
+        try:
+            import psutil
+        except Exception:                                       # noqa: BLE001
+            logger.warning(
+                "go2rtc: something is already answering "
+                f"{settings.GO2RTC_INTERNAL_URL} and psutil is not available "
+                f"to identify it. A stale instance will keep serving its OLD "
+                f"config; stop it by hand if the relay misbehaves."
+            )
+            return
+
+        killed = []
+        for proc in psutil.process_iter(["pid", "name"]):
+            name = (proc.info.get("name") or "").lower()
+            if name in ("go2rtc", "go2rtc.exe"):
+                try:
+                    proc.terminate()
+                    killed.append(proc.info["pid"])
+                except Exception:                               # noqa: BLE001
+                    pass
+        if not killed:
+            return
+
+        logger.warning(
+            f"go2rtc: reclaimed the API port from stale instance(s) "
+            f"{killed}. They were serving the configuration they started "
+            f"with, not the one just generated."
+        )
+        # Give the sockets time to close, or the spawn below inherits the
+        # same problem it just fixed.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if not self.api_responds():
+                return
+            if self._stop.wait(0.25):
+                return
+        logger.warning("go2rtc: the API port is still answering after a terminate")
 
     def _spawn(self, binary: str) -> bool:
         # go2rtc's output goes to a file beside its config, NOT to DEVNULL.
