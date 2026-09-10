@@ -48,6 +48,13 @@ class ProcessCameraManager:
 
         self._on_event: Optional[Callable] = None
         self._on_unknown: Optional[Callable] = None
+        # camera_id -> (monotonic time, frame count) from the last heartbeat.
+        # The watchdog reads these; the pump writes them.
+        self._beats: Dict[str, tuple] = {}
+        # camera_id -> (monotonic time the count last CHANGED, that count).
+        # Separate from _beats so a heartbeat arriving with an unchanged count
+        # does not look like progress.
+        self._stall_state: Dict[str, tuple] = {}
 
     # ── setup ─────────────────────────────────────────────────────────
 
@@ -281,6 +288,11 @@ class ProcessCameraManager:
                         f"error: {event.get('error')}"
                     )
                     continue
+                if event.get("event_type") == "_heartbeat":
+                    cid = event.get("camera_id", "")
+                    if cid:
+                        self._beats[cid] = (time.monotonic(), int(event.get("frames", 0)))
+                    continue
                 if event.get("event_type") == "unknown_face" and self._on_unknown:
                     self._on_unknown(event)
                 elif self._on_event:
@@ -296,20 +308,68 @@ class ProcessCameraManager:
         unaffected, which is the property that makes this shape safe to run.
         """
         while self._running.is_set():
-            time.sleep(2.0)
+            time.sleep(1.0)
             for index, p in list(self._procs.items()):
-                if p.is_alive():
-                    continue
                 if not self._running.is_set():
                     return
-                logger.error(
-                    f"camera process {index} exited (code={p.exitcode}); restarting"
-                )
+
+                if not p.is_alive():
+                    reason = f"exited (code={p.exitcode})"
+                elif self._stalled_cameras(index):
+                    # A process that is alive and producing nothing is the
+                    # worse failure: it holds its cameras, reports healthy to
+                    # anything that only checks liveness, and shows a frozen
+                    # picture. Dying is at least honest.
+                    stalled = self._stalled_cameras(index)
+                    reason = (
+                        f"produced no frames for "
+                        f"{self._stall_seconds():g}s on {', '.join(stalled)}"
+                    )
+                else:
+                    continue
+
+                logger.error(f"camera process {index} {reason}; restarting")
                 try:
+                    if p.is_alive():
+                        p.terminate()
+                        p.join(timeout=5)
+                    for spec in self._proc_specs.get(index, []):
+                        self._beats.pop(spec["camera_id"], None)
                     base, per_cam, total, slot_bytes = self._slot_layout[index]
                     self._spawn(index, base, per_cam, total, slot_bytes)
                 except Exception as e:
                     logger.error(f"could not restart camera process {index}: {e}")
+
+    @staticmethod
+    def _stall_seconds() -> float:
+        from app.config import settings
+        return float(getattr(settings, "CAMERA_STALL_RESTART_SEC", 5.0))
+
+    def _stalled_cameras(self, index: int) -> List[str]:
+        """Cameras in this process whose frame count has stopped moving.
+
+        A camera that has never reported is NOT stalled: a process still
+        loading its models has produced nothing yet and is doing exactly what
+        it should. The clock starts at the first heartbeat.
+        """
+        limit = self._stall_seconds()
+        if limit <= 0:
+            return []
+        now = time.monotonic()
+        stalled = []
+        for spec in self._proc_specs.get(index, []):
+            cid = spec["camera_id"]
+            beat = self._beats.get(cid)
+            if beat is None:
+                continue
+            seen_at, frames = beat
+            last = self._stall_state.get(cid)
+            if last is None or last[1] != frames:
+                self._stall_state[cid] = (now, frames)
+                continue
+            if now - last[0] >= limit:
+                stalled.append(cid)
+        return stalled
 
     # ── status ────────────────────────────────────────────────────────
 

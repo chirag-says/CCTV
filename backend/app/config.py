@@ -281,6 +281,18 @@ class Settings(BaseSettings):
     FACE_TRT_FP16: bool = True
     FACE_TRT_CACHE_DIR: str = "trt_cache"
 
+    # ── Phase 4 step 4: health ────────────────────────────────
+    # A camera process that is ALIVE and producing nothing is worse than one
+    # that died: it holds its cameras and reports healthy to anything that
+    # only checks liveness. Restart it after this many seconds without the
+    # frame count moving. 0 disables the stall check (a dead process is still
+    # restarted).
+    CAMERA_STALL_RESTART_SEC: float = 5.0
+    # Start even though CUDA, TensorRT or NVDEC is missing. See
+    # app/vision/preflight.py -- every one of them degrades silently, which is
+    # why the default is to refuse.
+    ALLOW_DEGRADED: bool = False
+
     # ── Phase 4 step 3: the association core, compiled ────────
     # "cpp"  the IoU matrix and the linear assignment run in a pybind11
     #        extension (app/vision/bytetrack_cpp). Identical outputs: the

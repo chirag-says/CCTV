@@ -166,7 +166,7 @@ def _run(worker_index, camera_specs, shm_name, n_slots, slot_bytes,
             continue
 
         pipelines.append(pipe)
-        t = threading.Thread(target=_camera_loop, args=(pipe, stop),
+        t = threading.Thread(target=_camera_loop, args=(pipe, stop, emit),
                              name=f"camera-{camera_id}", daemon=True)
         t.start()
         threads.append(t)
@@ -189,20 +189,39 @@ def _run(worker_index, camera_specs, shm_name, n_slots, slot_bytes,
         logger.info(f"camera process {worker_index} stopped")
 
 
-def _camera_loop(pipe, stop: threading.Event):
-    """Decode, track, apply rules. No model is loaded on this thread."""
+def _camera_loop(pipe, stop: threading.Event, emit=None):
+    """Decode, track, apply rules. No model is loaded on this thread.
+
+    Also reports how many frames it has produced, about once a second. The
+    parent restarts a process whose cameras stop counting -- see
+    ProcessCameraManager._watch. A COUNT rather than a ping, because a loop
+    that is alive and returning None on every frame is exactly the failure
+    this is meant to catch, and a ping cannot tell the two apart.
+    """
     target = float(getattr(pipe, "_analysis_fps", 0) or 0)
     # The pipeline gates its own analysis rate by wall clock; this loop only
     # needs to offer frames often enough not to be the limit.
     interval = 1.0 / max(target * 2.0, 30.0)
+    frames = 0
+    last_beat = 0.0
     while not stop.is_set():
         t0 = time.perf_counter()
         try:
-            pipe.process_frame()
+            if pipe.process_frame() is not None:
+                frames += 1
         except Exception as e:
             logger.error(f"[{pipe.camera_id}] frame failed: {e}")
             time.sleep(0.5)
             continue
+
+        if emit is not None and t0 - last_beat >= 1.0:
+            last_beat = t0
+            emit({
+                "event_type": "_heartbeat",
+                "camera_id": pipe.camera_id,
+                "frames": frames,
+            })
+
         rest = interval - (time.perf_counter() - t0)
         if rest > 0:
             time.sleep(rest)

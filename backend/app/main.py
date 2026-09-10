@@ -611,6 +611,13 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 AI CCTV Surveillance System Starting...")
     logger.info("=" * 60)
 
+    # ── Accelerator preflight (Phase 4 step 4) ────────────────
+    # Before the database, before the cameras: if this machine cannot do the
+    # work, say which part is missing and stop, rather than running a hundred
+    # times slower and reporting healthy.
+    from app.vision.preflight import run as _preflight
+    _preflight()
+
     # Initialize PostgreSQL database (create tables if needed)
     try:
         init_db()
