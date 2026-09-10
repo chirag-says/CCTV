@@ -255,6 +255,29 @@ class Settings(BaseSettings):
     # a fixed shape anyway, so TRT specialises on first call and the cache
     # makes that a one-off.
     FACE_BACKEND: str = "trt"               # "trt" or "cuda"
+    # SCRFD's anchor decode and NMS in torch on the GPU instead of
+    # insightface's numpy, with the nine output tensors bound straight into
+    # CUDA memory so they are never copied to the host. See
+    # app/vision/scrfd_gpu.py.
+    #
+    # DEFAULT FALSE, DELIBERATELY, AND NOT BECAUSE IT IS UNFINISHED.
+    # OPTIMIZATION_BRIEF.md:95 justifies this item with "this is where 4.7 ms
+    # per face-frame goes today". With FACE_BACKEND=trt that is not where the
+    # time goes: on 25 real frames from snapshots/frames the whole of
+    # SCRFD.detect is about 7 ms, and moving the decode to the GPU makes it
+    # slower, not faster -- roughly 8.2 ms single-stream and 2.7 against 1.9
+    # ms per frame across eight threads. The decode survives a few dozen
+    # anchors out of 16,800, so it is dominated by kernel launches, and the
+    # numpy version it replaces is small enough that ORT's own GIL release
+    # already covers it.
+    #
+    # It is kept, and it is exact -- 55 faces over those frames, zero count
+    # mismatches, boxes and keypoints equal to 0.000244 px, scores identical.
+    # It becomes the right choice the moment the frame ITSELF is already on
+    # the GPU, because then the alternative is copying the frame back to the
+    # host so numpy can look at it. That is Phase 4 step 2, and this flag is
+    # what that step turns on.
+    FACE_GPU_POSTPROCESS: bool = False
     FACE_TRT_FP16: bool = True
     FACE_TRT_CACHE_DIR: str = "trt_cache"
 

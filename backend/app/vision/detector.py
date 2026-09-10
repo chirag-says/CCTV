@@ -367,6 +367,14 @@ def _get_insightface_app():
                     + _cpu_fallback_message()
                 )
 
+            # Phase 2 item 5: the anchor decode and NMS move to the GPU.
+            # Attached AFTER prepare(), because it reads the thresholds and
+            # input size that prepare() sets, and it is a no-op on failure --
+            # a machine without torchvision or CUDA keeps the numpy decode.
+            if getattr(settings, "FACE_GPU_POSTPROCESS", False):
+                from app.vision import scrfd_gpu
+                scrfd_gpu.attach(app)
+
             _insightface_app = app
             logger.info(
                 f"InsightFace loaded successfully: {model_name}, "
