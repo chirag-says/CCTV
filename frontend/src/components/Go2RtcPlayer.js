@@ -39,6 +39,12 @@ const BUFFER_MS = 4000;
 // Used until getStats() has produced a real number, and whenever it cannot.
 const DEFAULT_LATENCY_MS = 150;
 
+// How long a 'disconnected' peer connection is given to recover by itself
+// before it is treated as broken. Long enough to ride out a lost UDP burst or
+// a camera's own reconnect; short enough that a genuinely dead link is
+// re-established promptly.
+const DISCONNECT_GRACE_MS = 8000;
+
 // A box older than this relative to the displayed frame is not drawn. At the
 // default 10 fps analysis rate a frame is 100 ms, so this tolerates a few
 // missed analyses without the overlay flickering out.
@@ -68,6 +74,7 @@ export default function Go2RtcPlayer({
     const videoRef = useRef(null);
     const canvasRef = useRef(null);
     const [status, setStatus] = useState('connecting');
+    const [everPlayed, setEverPlayed] = useState(false);
 
     // Metadata buffer + clock estimation. Refs, not state: these are written
     // many times a second and read from a rAF loop. Putting them in state
@@ -78,6 +85,10 @@ export default function Go2RtcPlayer({
 
     const report = useCallback((next) => {
         setStatus(next);
+        // Latched here rather than in an effect: this is the one place a
+        // status change originates, so it is also the one place that knows
+        // the tile has produced video.
+        if (next === 'streaming') setEverPlayed(true);
         if (onStatus) onStatus(next);
     }, [onStatus]);
 
@@ -90,8 +101,14 @@ export default function Go2RtcPlayer({
         let ws = null;
         let statsTimer = null;
         let reconnectTimer = null;
+        let disconnectTimer = null;
+
+        const clearDisconnectGrace = () => {
+            if (disconnectTimer) { clearTimeout(disconnectTimer); disconnectTimer = null; }
+        };
 
         const teardown = () => {
+            clearDisconnectGrace();
             if (statsTimer) { clearInterval(statsTimer); statsTimer = null; }
             if (ws) { ws.onclose = null; try { ws.close(); } catch (e) { /* closing */ } ws = null; }
             if (pc) { try { pc.close(); } catch (e) { /* closing */ } pc = null; }
@@ -123,11 +140,54 @@ export default function Go2RtcPlayer({
 
             pc.onconnectionstatechange = () => {
                 if (!mounted || !pc) return;
-                if (pc.connectionState === 'connected') report('streaming');
-                if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+                const state = pc.connectionState;
+
+                if (state === 'connected') {
+                    clearDisconnectGrace();
+                    report('streaming');
+                    return;
+                }
+
+                // 'failed' is terminal: ICE has given up and only a new
+                // negotiation can recover it.
+                if (state === 'failed') {
+                    clearDisconnectGrace();
                     report('reconnecting');
                     teardown();
                     reconnectTimer = setTimeout(connect, 2000);
+                    return;
+                }
+
+                // 'disconnected' IS NOT A FAILURE. The spec says a connection
+                // may sit here on a brief loss of connectivity and return to
+                // 'connected' on its own -- a lost UDP burst, a Wi-Fi roam, a
+                // camera whose RTSP source hiccupped for a moment.
+                //
+                // Tearing down here, which is what this did, converted every
+                // one of those blips into a full renegotiation: seconds of
+                // black tile, and a consumer drop that makes go2rtc stop and
+                // restart the camera's RTSP producer, which then takes even
+                // longer to come back. That is the "cameras suddenly go black"
+                // failure.
+                //
+                // So: ask ICE to re-gather (cheap, keeps the media flowing if
+                // it works), and give it DISCONNECT_GRACE_MS to recover before
+                // treating it as real. The status is deliberately NOT changed
+                // during the grace -- the tile keeps showing video instead of
+                // flashing RECONNECTING at every hiccup.
+                if (state === 'disconnected') {
+                    if (disconnectTimer) return;
+                    try {
+                        if (typeof pc.restartIce === 'function') pc.restartIce();
+                    } catch (e) { /* best effort */ }
+                    disconnectTimer = setTimeout(() => {
+                        disconnectTimer = null;
+                        if (!mounted || !pc) return;
+                        if (pc.connectionState === 'connected') return;
+                        report('reconnecting');
+                        teardown();
+                        reconnectTimer = setTimeout(connect, 1000);
+                    }, DISCONNECT_GRACE_MS);
                 }
             };
 
@@ -213,6 +273,7 @@ export default function Go2RtcPlayer({
             teardown();
         };
     }, [signallingUrl, camera?.name, report]);
+
 
     // ── Metadata: one message per analysed frame ─────────────────────────
     useEffect(() => {
@@ -462,7 +523,7 @@ export default function Go2RtcPlayer({
                     width: '100%',
                     height: '100%',
                     objectFit: 'contain',
-                    display: status === 'streaming' ? 'block' : 'none',
+                    display: everPlayed || status === 'streaming' ? 'block' : 'none',
                     background: '#000',
                 }}
             />
@@ -475,7 +536,7 @@ export default function Go2RtcPlayer({
                         width: '100%',
                         height: '100%',
                         pointerEvents: 'none',
-                        display: status === 'streaming' ? 'block' : 'none',
+                        display: everPlayed || status === 'streaming' ? 'block' : 'none',
                     }}
                 />
             )}
