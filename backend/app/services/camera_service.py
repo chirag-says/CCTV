@@ -18,6 +18,25 @@ from app.vision.camera_worker import camera_manager
 logger = logging.getLogger(__name__)
 
 
+def camera_group(name: str, location: str = "") -> str:
+    """
+    The zone a camera belongs to, used to bunch feeds in the monitor and to
+    reason about cross-camera sightings ("all COE cameras", "all Front Gate
+    cameras").
+
+    `location` IS the zone when set -- that is what the column means, and
+    migration 013 backfills it for the existing fleet. The name-token fallback
+    only covers cameras registered without one ("coe left corridor" -> "Coe"),
+    so an unlabelled camera still lands next to its siblings instead of in a
+    bunch of its own.
+    """
+    loc = (location or "").strip()
+    if loc:
+        return loc
+    tokens = (name or "").strip().split()
+    return tokens[0].title() if tokens else "Ungrouped"
+
+
 def _camera_to_dict(camera: Camera) -> dict:
     """Convert a Camera ORM object to a dict matching the API response format."""
     return {
@@ -29,6 +48,7 @@ def _camera_to_dict(camera: Camera) -> dict:
         "is_active": camera.is_active,
         "config": camera.config or {},
         "created_at": camera.created_at.isoformat() if camera.created_at else None,
+        "group": camera_group(camera.name, camera.location),
     }
 
 

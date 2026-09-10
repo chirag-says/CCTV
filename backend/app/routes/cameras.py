@@ -119,6 +119,7 @@ async def list_cameras(
                 "status": "online",
                 "is_active": True,
                 "type": "browser",
+                "group": "Remote (Browser)",
                 "fps": session.status.get("fps", 0),
                 "frame_count": session.frame_count,
             })

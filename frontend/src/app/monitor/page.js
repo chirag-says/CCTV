@@ -78,6 +78,28 @@ export default function MonitorPage() {
         };
     }, []);
 
+    // Zone bunches for the 'bunch' layout. The backend computes `group` from
+    // location (falling back to the first name token); the same fallback here
+    // covers cached or older API responses without the field. Largest bunches
+    // first, so COE and Front Gate lead the page.
+    const cameraBunches = (() => {
+        const byGroup = new Map();
+        for (const cam of cameras) {
+            const group = cam.group || cam.location || (cam.name || '').split(' ')[0] || 'Ungrouped';
+            if (!byGroup.has(group)) byGroup.set(group, []);
+            byGroup.get(group).push(cam);
+        }
+        return [...byGroup.entries()]
+            .map(([group, cams]) => ({ group, cams }))
+            .sort((a, b) => b.cams.length - a.cams.length || a.group.localeCompare(b.group));
+    })();
+
+    const openSingle = (camera) => {
+        setSelectedCamera(camera);
+        setLayout('single');
+        localStorage.setItem('sentinel-monitor-layout', 'single');
+    };
+
     async function loadCameras() {
         setLoading(true);
         try {
@@ -259,6 +281,7 @@ export default function MonitorPage() {
                             { key: 'single', label: '1×1', icon: <SquareIcon size={14} /> },
                             { key: '2x2', label: '2×2', icon: <GridIcon size={14} /> },
                             { key: '3x3', label: '3×3', icon: <GridIcon size={12} /> },
+                            { key: 'bunch', label: 'Bunch', icon: <UsersIcon size={12} /> },
                         ].map(opt => (
                             <button
                                 key={opt.key}
@@ -308,6 +331,51 @@ export default function MonitorPage() {
                             }}
                         />
                     ))}
+                </div>
+            ) : layout === 'bunch' ? (
+                /* One section per zone: every COE camera side by side, every
+                   Front Gate camera side by side. A person crossing the zone
+                   carries the same identity label on each feed, so
+                   cross-camera re-ID can be watched happening. */
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
+                    {cameraBunches.map(({ group, cams }) => {
+                        const online = cams.filter(c => c.status === 'online').length;
+                        return (
+                            <div key={group}>
+                                <div style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '10px',
+                                    marginBottom: '10px',
+                                }}>
+                                    <h3 style={{ fontSize: '0.938rem', fontWeight: 600, margin: 0 }}>
+                                        {group}
+                                    </h3>
+                                    <span className={`badge ${online > 0 ? 'online' : 'offline'}`} style={{ fontSize: '0.625rem' }}>
+                                        {online > 0 && <span className="badge-dot"></span>}
+                                        {online}/{cams.length} online
+                                    </span>
+                                    <div style={{ flex: 1, height: '1px', background: 'var(--border-color)' }} />
+                                </div>
+                                <div style={{
+                                    display: 'grid',
+                                    gridTemplateColumns: `repeat(${cams.length >= 5 ? 3 : 2}, 1fr)`,
+                                    gap: '12px',
+                                }}>
+                                    {cams.map((camera) => (
+                                        <CameraFeedCard
+                                            key={camera.id}
+                                            camera={camera}
+                                            compact
+                                            aiDetectEnabled={aiDetectEnabled}
+                                            onAiStats={setAiStats}
+                                            onClick={() => openSingle(camera)}
+                                        />
+                                    ))}
+                                </div>
+                            </div>
+                        );
+                    })}
                 </div>
             ) : layout === '3x3' ? (
                 <div style={{
