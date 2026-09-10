@@ -634,8 +634,12 @@ class InferenceClient:
         shrunken frame's coordinates and are scaled up here, so nothing
         downstream sees a difference.
         """
-        limit = self.slots.slot_bytes
-        if frame.nbytes <= limit:
+        # getattr, not attribute access: `slots` is whatever the camera
+        # process was handed, and a transport that does not describe a slot
+        # size has no limit to respect. Requiring the attribute turned an
+        # unknown transport into a crash on the submit path.
+        limit = getattr(self.slots, "slot_bytes", 0)
+        if not limit or frame.nbytes <= limit:
             return frame, 1.0
 
         import cv2
