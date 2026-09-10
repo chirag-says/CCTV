@@ -614,8 +614,51 @@ class InferenceClient:
         self._frame_id = 0
         self._next_slot = 0
         self.gpu_slots = None      # set by the camera process when zero-copy is on
+        # frame_id -> the factor its frame was shrunk by to fit a slot.
+        self._scales = {}
+        self._resize_logged = False
+
+    def _fit_to_slot(self, frame: np.ndarray):
+        """Shrink a frame that will not fit a slot. Returns (frame, scale).
+
+        A 4 MP camera -- 2688x1520, which this deployment has several of --
+        is 12.2 MB a frame against a 1080p slot's 6.2 MB, so every submit
+        raised and that camera detected NOBODY, for as long as it ran. The
+        error said "raise INFERENCE_MAX_FRAME_PIXELS", which would work and
+        would also cost 45 slots x 12.2 MB of shared memory to carry pixels
+        the detector is about to throw away.
+
+        It throws them away because YOLO letterboxes to imgsz (640) whatever
+        it is given. Downscaling to fit the slot changes the detector's input
+        by a resample it was going to do anyway; the boxes come back in the
+        shrunken frame's coordinates and are scaled up here, so nothing
+        downstream sees a difference.
+        """
+        limit = self.slots.slot_bytes
+        if frame.nbytes <= limit:
+            return frame, 1.0
+
+        import cv2
+
+        scale = (limit / float(frame.nbytes)) ** 0.5
+        # A hair under, so rounding cannot land back over the limit.
+        scale *= 0.999
+        h, w = frame.shape[:2]
+        new_w, new_h = max(1, int(w * scale)), max(1, int(h * scale))
+        if not self._resize_logged:
+            self._resize_logged = True
+            logger.info(
+                f"[{self.camera_id}] frames are {w}x{h}, larger than an "
+                f"inference slot; submitting at {new_w}x{new_h} and scaling "
+                f"boxes back. Raise INFERENCE_MAX_FRAME_PIXELS to send them "
+                f"whole."
+            )
+        return cv2.resize(frame, (new_w, new_h), interpolation=cv2.INTER_AREA), (
+            float(new_w) / w
+        )
 
     def _submit(self, frame: np.ndarray, kind: str):
+        frame, scale = self._fit_to_slot(frame)
         self._frame_id += 1
         slot = self.first_slot + (self._next_slot % self.n_slots)
         self._next_slot += 1
@@ -624,6 +667,11 @@ class InferenceClient:
             camera_id=self.camera_id, frame_id=self._frame_id, kind=kind,
             slot=slot, h=h, w=w, c=c, worker=self.worker,
         ))
+        self._scales[self._frame_id] = scale
+        # The map is only read by the next _await, so anything older is dead.
+        if len(self._scales) > 4 * self.n_slots:
+            for fid in sorted(self._scales)[:-self.n_slots]:
+                self._scales.pop(fid, None)
         return self._frame_id
 
     def _submit_gpu(self, frame, kind: str):
@@ -669,7 +717,15 @@ class InferenceClient:
         except Exception as e:
             logger.error(f"[{self.camera_id}] person submit failed: {e}")
             return []
-        return self._await(fid, KIND_PERSONS, [])
+        persons = self._await(fid, KIND_PERSONS, [])
+        scale = self._scales.pop(fid, 1.0)
+        if scale != 1.0 and persons:
+            inv = 1.0 / scale
+            for det in persons:
+                b = det["bbox"]
+                for k in ("x1", "y1", "x2", "y2"):
+                    b[k] = int(b[k] * inv)
+        return persons
 
     def faces(self, frame):
         try:
