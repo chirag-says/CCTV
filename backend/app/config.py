@@ -281,6 +281,18 @@ class Settings(BaseSettings):
     FACE_TRT_FP16: bool = True
     FACE_TRT_CACHE_DIR: str = "trt_cache"
 
+    # ── Phase 4 step 1: decode on the GPU ─────────────────────
+    # "nvdec"  frames are decoded by the GPU's fixed-function video block
+    #          straight into CUDA memory, so decode costs no CPU and the
+    #          pixels are already where inference wants them.
+    # "cpu"    cv2.VideoCapture, the previous path. Kept reachable, and used
+    #          automatically for any camera NVDEC refuses.
+    #
+    # Fallback is per camera and sticky -- NVDEC's codec list shrinks with
+    # each GPU generation, so whether a given stream decodes is a property of
+    # that stream on that card, decided once and logged once.
+    DECODE_BACKEND: str = "nvdec"           # "nvdec" or "cpu"
+
     # ── Phase 2 item 6: faces on tracked crops, at their own rate ─────
     # A full-frame SCRFD pass finds every face in the scene, every analysis
     # frame, and then throws almost all of it away: the pipeline only ever

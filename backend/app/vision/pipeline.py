@@ -392,6 +392,12 @@ class VisionPipeline:
         # frame to arrive is analysed rather than waiting out an interval.
         self._last_analysis_at = 0.0
 
+        # -- Decode backend (Phase 4 step 1) --------------------------
+        # Which decoder this camera ended up on, and whether NVDEC has already
+        # refused it. Sticky per camera: see _open_capture.
+        self._decode_backend = "cpu"
+        self._nvdec_rejected = False
+
         # -- Face rate (item 6), deliberately NOT the analysis rate ---
         # Tracking has to keep up with people moving; identity does not
         # change five times a second. Separating the two clocks is most of
@@ -488,15 +494,8 @@ class VisionPipeline:
                     if self._capture:
                         self._capture.release()
                         self._capture = None
-                    source = (
-                        int(self.stream_source)
-                        if self.stream_source.isdigit()
-                        else self.stream_source
-                    )
-                    self._capture = cv2.VideoCapture(source)
-                    if self._capture.isOpened():
-                        self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-                        self._capture.set(cv2.CAP_PROP_FPS, 30)
+                    self._capture = self._open_capture()
+                    if self._capture is not None and self._capture.isOpened():
                         self.stream_health.on_reconnect_success()
                     else:
                         logger.warning(
@@ -515,6 +514,39 @@ class VisionPipeline:
             if not self._capture or not self._capture.isOpened():
                 time.sleep(0.01)
                 self.stream_health.check_staleness()
+                continue
+
+            # On NVDEC, DECODE the frame but only bring it to the host if
+            # something is going to look at it.
+            #
+            # The comment below is right that the read must always happen --
+            # a stream has to be drained. It assumed reading and copying were
+            # the same act, which is true of cv2 and not of NVDEC. Skipping
+            # the copy for a frame that is about to be dropped took this
+            # camera from 930 host copies to the handful it actually
+            # consumes, and it is the same distinction Phase 4 step 2 turns
+            # into a zero.
+            # A frame is already waiting that nobody has taken yet. Copying a
+            # newer one over it buys at most one analysis interval of
+            # freshness and costs a full host transfer every time round this
+            # loop -- and this loop has no natural throttle now that decode is
+            # not the slow part. Decode on, hand over nothing.
+            nvdec = self._decode_backend == "nvdec"
+            if nvdec and (self._grabbed_frame is not None or not self._frame_wanted()):
+                # A PACED source is left alone. Nothing queues up behind a
+                # local file, so a frame drained here is simply one the
+                # analyser could have had -- and draining it also spends that
+                # source's frame budget, which is what dropped this camera
+                # from 25 analysed frames a second to 8. A network source is
+                # the opposite and still has to be drained.
+                if getattr(self._capture, "is_paced", False):
+                    time.sleep(0.002)
+                    continue
+                if self._capture.read_gpu() is None:
+                    self.stream_health.on_read_failure()
+                    time.sleep(0.005)
+                else:
+                    self._grabber_dropped += 1
                 continue
 
             ret, frame = self._capture.read()
@@ -546,6 +578,60 @@ class VisionPipeline:
             if self.stream_health.state != StreamState.LIVE:
                 self._last_jpeg = None
 
+    def _open_capture(self):
+        """Open this camera's source, on NVDEC or on the CPU.
+
+        The two objects are interchangeable for everything the grabber does --
+        isOpened, read, release -- so the loop above does not branch on which
+        one it got.
+
+        FALLBACK IS PER CAMERA AND PERMANENT FOR THAT CAMERA. NVDEC is a
+        fixed-function block with a codec list that varies by GPU generation,
+        so "this stream, on this card" is the only granularity at which the
+        question has an answer. Once a camera has fallen back it stays on cv2
+        until it is restarted -- retrying NVDEC on every reconnect would
+        re-pay the rejection cost forever and re-log it each time.
+        """
+        backend = str(getattr(settings, "DECODE_BACKEND", "cpu")).lower()
+        source = (
+            int(self.stream_source)
+            if self.stream_source.isdigit()
+            else self.stream_source
+        )
+
+        if backend == "nvdec" and not self._nvdec_rejected:
+            if isinstance(source, int):
+                # A webcam index is a device, not a bitstream: there is
+                # nothing for NVDEC to decode. Not a failure worth logging as
+                # one, and not worth re-deciding on every reconnect.
+                self._nvdec_rejected = True
+            else:
+                from app.vision.nvdecode import NvDecoder, NvdecUnsupported
+                try:
+                    decoder = NvDecoder(source, gpu_id=0, camera_id=self.camera_id)
+                    decoder.open()
+                    self._decode_backend = "nvdec"
+                    return decoder
+                except NvdecUnsupported as e:
+                    self._nvdec_rejected = True
+                    logger.warning(
+                        f"[{self.camera_id}] NVDEC will not take this stream, "
+                        f"decoding on the CPU instead: {e}"
+                    )
+                except Exception as e:                          # noqa: BLE001
+                    self._nvdec_rejected = True
+                    logger.warning(
+                        f"[{self.camera_id}] NVDEC failed to open, decoding on "
+                        f"the CPU instead: {e}"
+                    )
+
+        capture = cv2.VideoCapture(source)
+        if capture.isOpened():
+            capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            capture.set(cv2.CAP_PROP_FPS, 30)
+        self._decode_backend = "cpu"
+        return capture
+
     def start(self):
         """Start the video capture."""
         try:
@@ -555,16 +641,9 @@ class VisionPipeline:
                 logger.info(f"Camera {self.camera_id} started: {self.stream_source} (Browser)")
                 return
 
-            # Try to interpret as integer (webcam index)
-            source = int(self.stream_source) if self.stream_source.isdigit() else self.stream_source
-            self._capture = cv2.VideoCapture(source)
-
-            if not self._capture.isOpened():
+            self._capture = self._open_capture()
+            if self._capture is None or not self._capture.isOpened():
                 raise RuntimeError(f"Cannot open camera source: {self.stream_source}")
-
-            # Optimize capture settings
-            self._capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-            self._capture.set(cv2.CAP_PROP_FPS, 30)
 
             # Start the background frame grabber thread.
             # This thread continuously calls read() in a tight loop,
