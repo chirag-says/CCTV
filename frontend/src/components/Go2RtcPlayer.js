@@ -393,16 +393,53 @@ export default function Go2RtcPlayer({
             }
         };
 
+        // RE-ARMING, and why it is not optional.
+        //
+        // requestVideoFrameCallback is registered on the <video> element, and
+        // this effect runs on mount -- BEFORE the WebRTC negotiation has
+        // assigned srcObject. Attaching a new source resets the element and
+        // drops the pending callback, so the loop that was armed at mount
+        // never fires and never re-arms itself: the video plays perfectly and
+        // no box is ever drawn. requestAnimationFrame did not have this
+        // problem because it belongs to the window, not the element.
+        //
+        // So the callback is re-armed whenever the element starts presenting
+        // frames, and `armed` keeps that idempotent -- 'playing' and
+        // 'loadeddata' both fire, and two live callbacks would double the
+        // draw rate.
+        let armed = false;
+
         function schedule() {
             if (!mounted) return;
             const video = videoRef.current;
-            if (useVfc && video) vfcId = video.requestVideoFrameCallback(draw);
-            else rafId = requestAnimationFrame(draw);
+            if (useVfc && video) {
+                armed = true;
+                vfcId = video.requestVideoFrameCallback(draw);
+            } else {
+                rafId = requestAnimationFrame(draw);
+            }
+        }
+
+        const rearm = () => {
+            if (!armed) schedule();
+        };
+
+        // draw() re-schedules itself, so `armed` only has to be cleared when
+        // the element could have dropped the callback underneath us.
+        const onLoaded = () => { armed = false; rearm(); };
+
+        if (video0) {
+            video0.addEventListener('loadeddata', onLoaded);
+            video0.addEventListener('playing', onLoaded);
         }
 
         schedule();
         return () => {
             mounted = false;
+            if (video0) {
+                video0.removeEventListener('loadeddata', onLoaded);
+                video0.removeEventListener('playing', onLoaded);
+            }
             if (rafId) cancelAnimationFrame(rafId);
             // video0, not videoRef.current: the callback was issued by the
             // element that existed when this effect ran, and that is the
