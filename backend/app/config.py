@@ -239,6 +239,25 @@ class Settings(BaseSettings):
     # True restores per-camera engines; the regression above is what to expect.
     TRT_PERCAM_ENGINES: bool = False
 
+    # ── Phase 2 item 2: SCRFD and ArcFace through TensorRT ────
+    # "trt"   ONNX Runtime's TensorrtExecutionProvider, fp16, engine cache on
+    #         disk. First start after a model or GPU change pays a one-off
+    #         build of a minute or two; every start after that loads the cached
+    #         engine.
+    # "cuda"  the previous shape -- CUDAExecutionProvider only. Kept reachable,
+    #         and used automatically if the TRT provider is not in this
+    #         onnxruntime build.
+    #
+    # Shape profiles are deliberately NOT pinned here. insightface constructs
+    # every model in buffalo_l from one FaceAnalysis call with one set of
+    # provider options, and SCRFD (640x640) and ArcFace (112x112) do not share
+    # a profile -- pinning one would break the other. Both models are called at
+    # a fixed shape anyway, so TRT specialises on first call and the cache
+    # makes that a one-off.
+    FACE_BACKEND: str = "trt"               # "trt" or "cuda"
+    FACE_TRT_FP16: bool = True
+    FACE_TRT_CACHE_DIR: str = "trt_cache"
+
     # ── Phase 2 items 3 and 4: one inference loop, cameras in processes ──
     # "server"  cameras run in processes doing decode, tracking and rules; one
     #           InferenceServer per GPU owns the engines and the ONNX Runtime

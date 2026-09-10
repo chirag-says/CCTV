@@ -183,6 +183,98 @@ def _cpu_fallback_message() -> str:
     return "\n".join(lines)
 
 
+# Any of these means the session is on the GPU. TRT sits in front of CUDA
+# rather than replacing it: ORT falls back per-node, so a TRT session normally
+# lists both, and a subgraph TRT declined still runs on CUDA, not the CPU.
+_GPU_PROVIDERS = ("TensorrtExecutionProvider", "CUDAExecutionProvider")
+
+
+def _ensure_tensorrt_loaded() -> bool:
+    """Make onnxruntime able to REGISTER the TensorRT provider.
+
+    Exactly the same failure as the CUDA one above, one layer along.
+    `ort.get_available_providers()` lists TensorrtExecutionProvider because the
+    provider DLL shipped with onnxruntime-gpu; that says nothing about whether
+    nvinfer_10.dll can be found. When it cannot, session creation prints
+
+        EP Error ... RegisterTensorRTPluginsAsCustomOps
+        Please install TensorRT libraries as mentioned in the GPU requirements
+
+    and then CONTINUES on CUDA. So the symptom of a broken TRT setup is not an
+    error, it is FACE_BACKEND=trt quietly meaning FACE_BACKEND=cuda.
+
+    The tensorrt wheel keeps its DLLs in site-packages/tensorrt_libs, which is
+    not on any search path onnxruntime uses. Importing the package loads them
+    into the process by absolute path, after which Windows resolves
+    onnxruntime's dependency against the already-loaded modules -- measured
+    here as the difference between a session reporting CUDA and one reporting
+    TensorRT. add_dll_directory alone is not enough, for the same reason it was
+    not enough for CUDA.
+    """
+    try:
+        import tensorrt  # noqa: F401
+        return True
+    except Exception as e:
+        logger.warning(
+            f"FACE_BACKEND=trt but the tensorrt package will not import ({e}); "
+            f"falling back to CUDA."
+        )
+        return False
+
+
+def _face_providers():
+    """(providers, provider_options) for the SCRFD/ArcFace sessions.
+
+    Returns a parallel pair, which is how onnxruntime wants them: options[i]
+    belongs to providers[i], and an empty dict means "defaults".
+
+    FACE_BACKEND=trt asks for the TensorrtExecutionProvider. It is dropped with
+    a warning rather than raising if this onnxruntime build has no TRT
+    provider, because CUDA is still a correct answer -- the loud failure this
+    module exists to prevent is the CPU one.
+    """
+    import onnxruntime as ort
+
+    backend = str(getattr(settings, "FACE_BACKEND", "cuda")).lower()
+    providers = ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    options = [{}, {}]
+
+    if backend != "trt":
+        return providers, options
+
+    if "TensorrtExecutionProvider" not in ort.get_available_providers():
+        logger.warning(
+            "FACE_BACKEND=trt but this onnxruntime build has no "
+            "TensorrtExecutionProvider; using CUDA. Available: "
+            f"{ort.get_available_providers()}"
+        )
+        return providers, options
+
+    if not _ensure_tensorrt_loaded():
+        return providers, options
+
+    cache_dir = os.path.abspath(
+        getattr(settings, "FACE_TRT_CACHE_DIR", "trt_cache") or "trt_cache"
+    )
+    os.makedirs(cache_dir, exist_ok=True)
+
+    trt_opts = {
+        "trt_fp16_enable": bool(getattr(settings, "FACE_TRT_FP16", True)),
+        # Without the cache every process start rebuilds the engines, which is
+        # minutes per camera process, every time.
+        "trt_engine_cache_enable": True,
+        "trt_engine_cache_path": cache_dir,
+        # Layer timings survive across builds, so a rebuild after a model
+        # change is much shorter than the first one.
+        "trt_timing_cache_enable": True,
+        "trt_timing_cache_path": cache_dir,
+    }
+    return (
+        ["TensorrtExecutionProvider"] + providers,
+        [trt_opts] + options,
+    )
+
+
 def _get_insightface_app():
     """
     Lazy-load the insightface FaceAnalysis app.
@@ -222,11 +314,11 @@ def _get_insightface_app():
 
             logger.info(f"Loading insightface model: {model_name} (det_size={det_size})")
 
-            # Request CUDA explicitly — do NOT silently fall back to CPU.
+            # Request GPU explicitly — do NOT silently fall back to CPU.
             # ONNX Runtime 1.17 predates Blackwell (sm_120) and will silently
             # use CPUExecutionProvider if CUDA fails, turning 10 ms inference
             # into 200-500 ms. Fail loudly instead.
-            providers = ['CUDAExecutionProvider', 'CPUExecutionProvider']
+            providers, provider_options = _face_providers()
             # Only the modules whose output is actually read. See
             # settings.INSIGHTFACE_MODULES for what the others cost.
             modules_cfg = getattr(settings, "INSIGHTFACE_MODULES", "") or ""
@@ -234,6 +326,7 @@ def _get_insightface_app():
             app = FaceAnalysis(
                 name=model_name,
                 providers=providers,
+                provider_options=provider_options,
                 allowed_modules=allowed or None,
             )
             app.prepare(
@@ -251,8 +344,19 @@ def _get_insightface_app():
                     logger.info(
                         f"InsightFace {model_name_key} providers: {active_providers}"
                     )
-                    if 'CUDAExecutionProvider' in active_providers:
+                    if any(p in active_providers for p in _GPU_PROVIDERS):
                         _cuda_active = True
+                    # TRT asked for and not granted is a SILENT downgrade:
+                    # onnxruntime prints its EP error and carries on with CUDA,
+                    # so without this the only evidence that FACE_BACKEND=trt
+                    # did nothing is a provider list nobody reads.
+                    if (providers[0] == "TensorrtExecutionProvider"
+                            and "TensorrtExecutionProvider" not in active_providers):
+                        logger.warning(
+                            f"FACE_BACKEND=trt did not take for {model_name_key}: "
+                            f"onnxruntime fell back to {active_providers}. Faces "
+                            f"are running on CUDA, not TensorRT."
+                        )
 
             if not _cuda_active:
                 if not getattr(settings, "ALLOW_CPU_INFERENCE", False):
