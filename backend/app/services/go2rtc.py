@@ -111,6 +111,56 @@ def find_executable(name: str) -> Optional[str]:
     return None
 
 
+def local_candidates(port: str) -> List[str]:
+    """This machine's own addresses, as go2rtc ICE candidates.
+
+    WHY THESE HAVE TO BE LISTED EXPLICITLY
+    go2rtc does not advertise the interfaces it is listening on unless it is
+    told to. With `webrtc.listen: :8555` and no `candidates:` block it offers
+    only a STUN-discovered srflx candidate -- the router's WAN address -- and a
+    browser on the same machine or the same LAN cannot route to it. ICE then
+    sits in `checking` until it gives up, which is a black tile.
+
+    So the addresses are enumerated and listed. Loopback first, because the
+    common case is a browser on the same box as the relay; then every ordinary
+    IPv4 interface, which covers a browser elsewhere on the LAN.
+
+    Link-local (169.254/16) is skipped -- an address that only exists because
+    DHCP failed is not somewhere a viewer can reach us.
+    """
+    port = str(port or "").lstrip(":") or "8555"
+    found, seen = [], set()
+
+    def add(addr: str):
+        if addr and addr not in seen:
+            seen.add(addr)
+            found.append(f"{addr}:{port}")
+
+    add("127.0.0.1")
+    try:
+        import socket
+
+        import psutil
+
+        for _name, nics in psutil.net_if_addrs().items():
+            for nic in nics:
+                if nic.family != socket.AF_INET:
+                    continue
+                addr = nic.address or ""
+                if addr.startswith(("127.", "169.254.")):
+                    continue
+                add(addr)
+    except Exception as e:                                      # noqa: BLE001
+        logger.debug(f"go2rtc: could not enumerate interfaces ({e})")
+        try:
+            import socket
+
+            add(socket.gethostbyname(socket.gethostname()))
+        except Exception:
+            pass
+    return found
+
+
 def _yaml_quote(value: str) -> str:
     """Single-quoted YAML scalar. go2rtc sources are full of `#`, `?` and `:`,
     every one of which changes meaning unquoted."""
@@ -189,7 +239,13 @@ def build_config(cameras: List[dict]) -> str:
     # not the same as an absent one: go2rtc only gathers its own host
     # candidates when nothing overrides them, and those are the ones a local
     # or LAN browser can actually reach.
-    candidates = settings.go2rtc_candidates_list
+    # Configured candidates win; otherwise this machine's own addresses. An
+    # explicit "stun:8555" is still available for a relay behind NAT serving
+    # browsers outside it -- it is just the wrong default for a camera system
+    # watched from the same building.
+    candidates = settings.go2rtc_candidates_list or local_candidates(
+        settings.GO2RTC_WEBRTC_LISTEN
+    )
     if candidates:
         lines.append("  candidates:")
         for candidate in candidates:
