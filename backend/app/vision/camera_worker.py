@@ -425,9 +425,19 @@ class CameraManager:
             return -1
 
     def get_camera_status(self, camera_id: str) -> Optional[dict]:
-        """Get status for a specific camera."""
+        """Get status for a specific camera.
+
+        Server mode has no entry in `_workers` -- the camera lives in another
+        process -- so this asked the wrong dict and returned None for a camera
+        that was running perfectly well. Everything downstream reads None as
+        "offline": the camera list, the dashboard, and the monitor page, which
+        then renders the offline placeholder and never opens a WebRTC player.
+        """
         if camera_id in self._workers:
             return self._workers[camera_id].status
+        if self._server_mode():
+            from app.vision.process_manager import process_camera_manager
+            return process_camera_manager.get_all_status()["cameras"].get(camera_id)
         return None
 
     def get_all_status(self) -> dict:

@@ -397,6 +397,13 @@ class VisionPipeline:
         # refused it. Sticky per camera: see _open_capture.
         self._decode_backend = "cpu"
         self._nvdec_rejected = False
+        # The frame the analyser is working on, still on the GPU. Set by the
+        # grabber alongside the numpy copy, and handed to the inference client
+        # instead of pixels when ZERO_COPY_INFERENCE is on. It is a view of a
+        # decoder surface, so it is only valid for the frame it came with.
+        self._gpu_frame = None
+        self._zero_copy = bool(getattr(settings, "ZERO_COPY_INFERENCE", False))
+        self._copy_log_at = 0.0
 
         # -- Face rate (item 6), deliberately NOT the analysis rate ---
         # Tracking has to keep up with people moving; identity does not
@@ -549,7 +556,29 @@ class VisionPipeline:
                     self._grabber_dropped += 1
                 continue
 
-            ret, frame = self._capture.read()
+            if nvdec and self._zero_copy:
+                # Take the DEVICE frame first and keep it, then let read()
+                # produce the host copy the rest of the pipeline still needs.
+                # The two describe the same frame, so inference can use the
+                # tensor while tracking and drawing use the array.
+                tensor = self._capture.read_gpu()
+                if tensor is None:
+                    self.stream_health.on_read_failure()
+                    time.sleep(0.005)
+                    continue
+                import torch as _torch
+                self._pending_gpu_frame = tensor.clone()
+                host = tensor.flip(-1).contiguous().cpu().numpy()
+                self._capture.copies += 1
+                try:
+                    from app.vision.copy_counter import copy_counter
+                    copy_counter.note_copy(self.camera_id, "pipeline_numpy_frame")
+                except Exception:
+                    pass
+                ret, frame = True, host
+            else:
+                ret, frame = self._capture.read()
+
             if ret:
                 is_new = self.stream_health.on_frame_read(frame)
                 if is_new:
@@ -566,8 +595,12 @@ class VisionPipeline:
                     if self._frame_wanted():
                         with self._grab_lock:
                             self._grabbed_frame = frame
+                            self._grabbed_gpu_frame = getattr(
+                                self, "_pending_gpu_frame", None
+                            )
                     else:
                         self._grabber_dropped += 1
+                    self._pending_gpu_frame = None
             else:
                 self.stream_health.on_read_failure()
                 # Brief pause on read failure to avoid busy-spin
@@ -724,6 +757,8 @@ class VisionPipeline:
             with self._grab_lock:
                 frame = self._grabbed_frame
                 self._grabbed_frame = None  # Mark as consumed
+                self._gpu_frame = getattr(self, "_grabbed_gpu_frame", None)
+                self._grabbed_gpu_frame = None
             if frame is None:
                 return None
 
@@ -1382,9 +1417,33 @@ class VisionPipeline:
         self._run_safety_analytics()
         self._check_periodic_exits()
         self._update_fps()
+        self._log_copies()
 
         self._last_frame = display_frame
         return display_frame
+
+    def _log_copies(self):
+        """Say how many host copies this camera made per analysed frame.
+
+        Once every 30 seconds, and it reports what is actually true rather
+        than what the flag is called. Phase 4 step 2 makes the INFERENCE path
+        zero-copy; the pipeline still materialises one numpy frame per
+        analysed frame for tracking geometry, drawing, snapshots and rules, so
+        this reads 1 and names the reason. It reaches 0 when that code stops
+        needing an array, not before.
+        """
+        if not self._zero_copy:
+            return
+        try:
+            from app.vision.copy_counter import copy_counter
+            copy_counter.note_frame(self.camera_id)
+            now = time.perf_counter()
+            if now - self._copy_log_at < 30.0:
+                return
+            self._copy_log_at = now
+            logger.info(copy_counter.describe(self.camera_id))
+        except Exception:
+            pass
 
     def _observe_identity_continuity(self, active_tracks: list):
         """
@@ -2919,7 +2978,12 @@ class VisionPipeline:
         """
         client = getattr(self, "_inference_client", None)
         if client is not None:
-            return client.persons(frame)
+            # The device frame when we have one and the transport can take it:
+            # the server letterboxes and runs the engine without the pixels
+            # ever crossing back. `frame` is the same picture, so the boxes
+            # that come back are in its coordinates either way.
+            gpu = self._gpu_frame if getattr(client, "zero_copy", False) else None
+            return client.persons(gpu if gpu is not None else frame)
 
         if not self._load_yolo_person_detector():
             return []

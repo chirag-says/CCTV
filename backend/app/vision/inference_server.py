@@ -112,6 +112,64 @@ class FrameSlots:
                 pass
 
 
+class CudaFrameSlots:
+    """The same pool, in device memory instead of shared host memory.
+
+    WHAT THIS REPLACES
+    FrameSlots above moves pixels: the camera process copies a numpy frame
+    into shared memory (host to host), and the server reads it back and hands
+    it to a model, which copies it to the GPU. On the NVDEC path the frame was
+    ALREADY on the GPU, so that is a device-to-host copy followed by a
+    host-to-device one, per frame per camera, purely to cross a process
+    boundary.
+
+    Here the parent allocates persistent CUDA tensors and shares them with the
+    camera processes by CUDA IPC handle -- torch does the handle passing when
+    a tensor is sent through a torch.multiprocessing queue. The camera process
+    copies its decoded frame into its slot (device to device, which never
+    touches the CPU) and sends the slot INDEX. Nothing but the index crosses.
+
+    WHY A COPY AT ALL, RATHER THAN SHARING THE DECODER'S SURFACE
+    NVDEC hands back a view of a surface it owns and will reuse within a few
+    frames. Sending that surface's handle would be a race the server loses
+    silently -- it would map memory the decoder has since overwritten. Copying
+    into a slot we own costs a device-to-device blit and makes the lifetime
+    ours.
+    """
+
+    def __init__(self, tensors: List["torch.Tensor"], slots_per_camera: int):
+        self.tensors = tensors
+        self.slots_per_camera = slots_per_camera
+
+    @classmethod
+    def create(cls, n_slots: int, height: int, width: int, slots_per_camera: int):
+        import torch
+
+        tensors = [
+            torch.empty((height, width, 3), dtype=torch.uint8, device="cuda")
+            for _ in range(n_slots)
+        ]
+        for t in tensors:
+            t.share_memory_()
+        return cls(tensors, slots_per_camera)
+
+    def write(self, slot: int, frame) -> Tuple[int, int, int]:
+        """Device-to-device copy into a slot. Returns the shape descriptor."""
+        h, w, c = int(frame.shape[0]), int(frame.shape[1]), int(frame.shape[2])
+        target = self.tensors[slot]
+        if h > target.shape[0] or w > target.shape[1]:
+            raise ValueError(
+                f"frame {h}x{w} exceeds the GPU slot {tuple(target.shape)}; "
+                f"raise INFERENCE_MAX_FRAME_PIXELS"
+            )
+        target[:h, :w, :c].copy_(frame, non_blocking=True)
+        return h, w, c
+
+    def read(self, slot: int, h: int, w: int, c: int):
+        """A device view of a slot. Valid until the camera reuses the slot."""
+        return self.tensors[slot][:h, :w, :c]
+
+
 @dataclass
 class Request:
     camera_id: str
@@ -122,6 +180,7 @@ class Request:
     w: int
     c: int
     worker: int          # which process to send the result back to
+    gpu: bool = False    # slot indexes CudaFrameSlots, not FrameSlots
     meta: dict = field(default_factory=dict)
 
 
@@ -147,6 +206,8 @@ class InferenceServer:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self._person_model = None
+        self._gpu_slots = None          # attached when ZERO_COPY_INFERENCE is on
+        self._gpu_scrfd_obj = None
         self._weapon_model = None
         self._face_app = None
         self._models_lock = threading.Lock()
@@ -279,9 +340,15 @@ class InferenceServer:
         for kind, reqs in by_kind.items():
             try:
                 if kind == KIND_PERSONS:
-                    results = self._run_persons(reqs)
+                    results = (
+                        self._run_persons_gpu(reqs) if reqs[0].gpu
+                        else self._run_persons(reqs)
+                    )
                 elif kind == KIND_FACES:
-                    results = self._run_faces(reqs)
+                    results = (
+                        self._run_faces_gpu(reqs) if reqs[0].gpu
+                        else self._run_faces(reqs)
+                    )
                 else:
                     results = [None] * len(reqs)
             except Exception as e:
@@ -290,6 +357,148 @@ class InferenceServer:
 
             for req, res in zip(reqs, results):
                 self._reply(req, res)
+
+    def attach_gpu_slots(self, slots):
+        """The device-memory pool camera processes write frames into."""
+        self._gpu_slots = slots
+
+    def _gpu_frames_of(self, reqs: List[Request]):
+        """Device views for GPU requests. No copy, no host memory."""
+        return [self._gpu_slots.read(r.slot, r.h, r.w, r.c) for r in reqs]
+
+    def _run_persons_gpu(self, reqs: List[Request]) -> List[list]:
+        """YOLO over frames that are already on the GPU.
+
+        Ultralytics letterboxes numpy input itself and then maps the boxes
+        back. Handed a tensor it does neither -- it assumes the caller has
+        preprocessed, and returns boxes in the letterboxed square. So the
+        letterbox and its inverse are both done here, on the device, and the
+        only thing that comes back to the host is the box list.
+        """
+        import torch
+        from app.config import settings
+        from app.vision.gpu_preproc import letterbox_gpu, unletterbox
+
+        model = self._person()
+        imgsz = int(getattr(settings, "PERSON_DET_IMGSZ", 640))
+        half = bool(getattr(settings, "PERSON_DET_HALF", True))
+
+        batch, geometry = [], []
+        for frame in self._gpu_frames_of(reqs):
+            chw, scale, px, py = letterbox_gpu(frame, imgsz, half=half)
+            batch.append(chw)
+            geometry.append((scale, px, py))
+        if not batch:
+            return []
+
+        out = model.predict(
+            torch.cat(batch, dim=0),
+            conf=0.25, classes=[0], verbose=False, device=0, imgsz=imgsz,
+        )
+
+        results = []
+        for res, (scale, px, py) in zip(out, geometry):
+            persons = []
+            boxes = getattr(res, "boxes", None)
+            if boxes is not None and len(boxes):
+                xyxy = unletterbox(boxes.xyxy.float(), scale, px, py)
+                # THE ONLY HOST TRANSFER on this path: N boxes and N scores.
+                xyxy = xyxy.cpu().numpy()
+                confs = boxes.conf.cpu().numpy()
+                clses = boxes.cls.cpu().numpy()
+                for k in range(len(xyxy)):
+                    if int(clses[k]) != 0:
+                        continue
+                    x1, y1, x2, y2 = (int(v) for v in xyxy[k])
+                    persons.append({
+                        "confidence": float(confs[k]),
+                        "bbox": {"x1": x1, "y1": y1, "x2": x2, "y2": y2},
+                    })
+            results.append(persons)
+        return results
+
+    def _run_faces_gpu(self, reqs: List[Request]) -> List[tuple]:
+        """SCRFD then ArcFace, both against device memory.
+
+        Requires the GPU decode of item 5 (FACE_GPU_POSTPROCESS): without it
+        SCRFD's postprocess is numpy and the frame would have to come back to
+        the host, which is the copy this whole path exists to remove. That is
+        checked once at startup, not per frame.
+        """
+        import torch
+        from app.vision.gpu_preproc import align_faces_gpu
+
+        decoder = self._gpu_scrfd()
+        rec = self._arcface()
+        results = []
+        for frame in self._gpu_frames_of(reqs):
+            if decoder is None:
+                results.append(([], [], []))
+                continue
+            det, kpss = decoder.detect_gpu(frame)
+            if det is None or len(det) == 0:
+                results.append(([], [], []))
+                continue
+
+            locations, landmarks = [], []
+            for k in range(len(det)):
+                x1, y1, x2, y2 = (int(v) for v in det[k][:4])
+                locations.append((y1, x2, y2, x1))
+                landmarks.append(kpss[k] if kpss is not None else None)
+
+            embeddings = [None] * len(locations)
+            usable = [i for i, kp in enumerate(landmarks) if kp is not None]
+            if rec is not None and usable:
+                crops = align_faces_gpu(frame, [landmarks[i] for i in usable])
+                if crops is not None:
+                    embs = self._arcface_embed(crops)
+                    for slot, i in enumerate(usable):
+                        embeddings[i] = embs[slot]
+            results.append((locations, embeddings, landmarks))
+        return results
+
+    def _gpu_scrfd(self):
+        """The GPU SCRFD decoder, built once from the loaded insightface app."""
+        if getattr(self, "_gpu_scrfd_obj", None) is not None:
+            return self._gpu_scrfd_obj
+        with self._models_lock:
+            if getattr(self, "_gpu_scrfd_obj", None) is None:
+                app = self._faces()
+                if app is None:
+                    return None
+                from app.vision.scrfd_gpu import GpuScrfd
+                self._gpu_scrfd_obj = GpuScrfd(app.models["detection"])
+        return self._gpu_scrfd_obj
+
+    def _arcface(self):
+        app = self._faces()
+        return None if app is None else app.models.get("recognition")
+
+    def _arcface_embed(self, crops):
+        """Embeddings for (N,3,112,112) crops that are already on the device.
+
+        Bound through IOBinding from the tensor's own pointer, so the aligned
+        crops are not copied to the host either -- only the 512-float
+        embeddings come back.
+        """
+        import numpy as _np
+        import torch
+
+        rec = self._arcface()
+        if rec is None:
+            return [None] * int(crops.shape[0])
+
+        x = crops.mul(255.0).sub_(rec.input_mean).div_(rec.input_std).contiguous()
+        n = int(x.shape[0])
+        name = rec.session.get_inputs()[0].name
+        out_name = rec.session.get_outputs()[0].name
+        out = torch.empty((n, 512), dtype=torch.float32, device=x.device)
+
+        io_b = rec.session.io_binding()
+        io_b.bind_input(name, "cuda", 0, _np.float32, tuple(x.shape), x.data_ptr())
+        io_b.bind_output(out_name, "cuda", 0, _np.float32, tuple(out.shape), out.data_ptr())
+        rec.session.run_with_iobinding(io_b)
+        return list(out.cpu().numpy())
 
     def _frames_of(self, reqs: List[Request]) -> List[np.ndarray]:
         return [self.slots.read(r.slot, r.h, r.w, r.c) for r in reqs]
@@ -400,6 +609,7 @@ class InferenceClient:
         self.timeout = timeout
         self._frame_id = 0
         self._next_slot = 0
+        self.gpu_slots = None      # set by the camera process when zero-copy is on
 
     def _submit(self, frame: np.ndarray, kind: str):
         self._frame_id += 1
@@ -411,6 +621,22 @@ class InferenceClient:
             slot=slot, h=h, w=w, c=c, worker=self.worker,
         ))
         return self._frame_id
+
+    def _submit_gpu(self, frame, kind: str):
+        """Hand over a DEVICE frame: a slot index crosses, not pixels."""
+        self._frame_id += 1
+        slot = self.first_slot + (self._next_slot % self.n_slots)
+        self._next_slot += 1
+        h, w, c = self.gpu_slots.write(slot, frame)
+        self.request_q.put(Request(
+            camera_id=self.camera_id, frame_id=self._frame_id, kind=kind,
+            slot=slot, h=h, w=w, c=c, worker=self.worker, gpu=True,
+        ))
+        return self._frame_id
+
+    @property
+    def zero_copy(self) -> bool:
+        return self.gpu_slots is not None
 
     def _await(self, frame_id: int, kind: str, empty):
         """Wait for OUR result. Anything for another frame is stale and dropped."""
@@ -429,17 +655,25 @@ class InferenceClient:
             # Late result for an earlier frame: discard. Frames are analysed in
             # order per camera, so an older id can never become useful again.
 
-    def persons(self, frame: np.ndarray) -> list:
+    def persons(self, frame) -> list:
         try:
-            fid = self._submit(frame, KIND_PERSONS)
+            fid = (
+                self._submit_gpu(frame, KIND_PERSONS)
+                if self.zero_copy and not isinstance(frame, np.ndarray)
+                else self._submit(frame, KIND_PERSONS)
+            )
         except Exception as e:
             logger.error(f"[{self.camera_id}] person submit failed: {e}")
             return []
         return self._await(fid, KIND_PERSONS, [])
 
-    def faces(self, frame: np.ndarray):
+    def faces(self, frame):
         try:
-            fid = self._submit(frame, KIND_FACES)
+            fid = (
+                self._submit_gpu(frame, KIND_FACES)
+                if self.zero_copy and not isinstance(frame, np.ndarray)
+                else self._submit(frame, KIND_FACES)
+            )
         except Exception as e:
             logger.error(f"[{self.camera_id}] face submit failed: {e}")
             return [], [], []

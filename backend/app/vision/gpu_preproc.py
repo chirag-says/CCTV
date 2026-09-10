@@ -17,9 +17,10 @@ FIDELITY
 These replace cv2.resize and cv2.warpAffine, and both are resampling
 operations, so "equivalent" has to be measured rather than asserted:
 
-  * letterbox uses bilinear WITHOUT align_corners, which is the convention
-    cv2.resize follows; antialias is on, because downscaling a 1080p frame to
-    640 without it aliases in a way cv2's INTER_LINEAR does not.
+  * letterbox uses bilinear without align_corners and WITHOUT antialias,
+    which is what cv2.resize's INTER_LINEAR does. Torch's antialiased
+    bilinear is closer to INTER_AREA, and substituting it is not a free
+    upgrade: measured on the face path it changed 32 detections into 29.
   * align_faces_gpu inverts the same 2x3 affine insightface computes, so the
     geometry is identical by construction and only the sampling differs.
 
@@ -70,9 +71,13 @@ def letterbox_gpu(frame, size: int = 640, half: bool = False):
     new_w, new_h = max(1, int(round(w * scale))), max(1, int(round(h * scale)))
 
     chw = frame.permute(2, 0, 1).unsqueeze(0).float()
+    # antialias=False to match cv2.resize's INTER_LINEAR, which is what
+    # ultralytics letterboxes with. Torch's antialiased bilinear behaves like
+    # INTER_AREA instead; on the face path the same substitution cost 3 of 32
+    # detections, so it is not a free "nicer" resize.
     resized = F.interpolate(
         chw, size=(new_h, new_w), mode="bilinear",
-        align_corners=False, antialias=True,
+        align_corners=False, antialias=False,
     )
 
     out = torch.full(

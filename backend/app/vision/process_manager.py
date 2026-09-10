@@ -12,7 +12,11 @@ every other process keep running, and the dead process is restarted.
 """
 
 import logging
-import multiprocessing as mp
+# torch.multiprocessing, not multiprocessing: it is the same API plus the
+# reduction hooks that let a CUDA tensor cross a process boundary as an IPC
+# handle instead of as pixels. That is what ZERO_COPY_INFERENCE needs, and it
+# is a no-op for every other queue here.
+import torch.multiprocessing as mp
 import threading
 import time
 from typing import Callable, Dict, List, Optional
@@ -55,6 +59,9 @@ class ProcessCameraManager:
         # Separate from _beats so a heartbeat arriving with an unchanged count
         # does not look like progress.
         self._stall_state: Dict[str, tuple] = {}
+        self._gpu_slots = None
+        # When each process was (re)spawned, for the warm-up grace above.
+        self._proc_started_at: Dict[int, float] = {}
 
     # ── setup ─────────────────────────────────────────────────────────
 
@@ -195,6 +202,31 @@ class ProcessCameraManager:
         )
 
         self._result_queues = {i: ctx.Queue(maxsize=256) for i in range(len(groups))}
+
+        # The device-memory frame pool (Phase 4 step 2). Allocated HERE, in
+        # the parent that owns the GPU, and handed to the camera processes as
+        # CUDA IPC handles; they write decoded frames into it and send slot
+        # indices. Never fatal: without it the shared-memory pixel path stands.
+        if bool(getattr(settings, "ZERO_COPY_INFERENCE", False)):
+            try:
+                from app.vision.inference_server import CudaFrameSlots
+                max_px = int(getattr(settings, "INFERENCE_MAX_FRAME_PIXELS", 1920 * 1080))
+                height = int(getattr(settings, "ZERO_COPY_SLOT_HEIGHT", 1080))
+                width = max(1, max_px // max(1, height))
+                self._gpu_slots = CudaFrameSlots.create(
+                    total_slots, height, width, slots_per_cam
+                )
+                logger.info(
+                    f"zero-copy inference: {total_slots} CUDA frame slots of "
+                    f"{height}x{width}x3 ({total_slots * height * width * 3 / 2**20:.0f} MiB)"
+                )
+            except Exception as e:                              # noqa: BLE001
+                self._gpu_slots = None
+                logger.warning(
+                    f"zero-copy inference unavailable ({e}); camera processes "
+                    f"will send pixels through shared memory."
+                )
+
         self._server = InferenceServer(
             request_q=self._request_q,
             result_queues=self._result_queues,
@@ -202,6 +234,8 @@ class ProcessCameraManager:
             tick_ms=float(getattr(settings, "INFERENCE_TICK_MS", 20.0)),
             max_batch=int(getattr(settings, "INFERENCE_BATCH_CAP", 32)),
         )
+        if self._gpu_slots is not None:
+            self._server.attach_gpu_slots(self._gpu_slots)
         self._server.start()
 
         for i, group in enumerate(groups):
@@ -233,12 +267,14 @@ class ProcessCameraManager:
             target=run_camera_process,
             args=(index, group, self._slots.name, total_slots, slot_bytes,
                   slots_per_cam, slot_base, self._request_q,
-                  self._result_queues[index], self._event_q, self._stop_evt),
+                  self._result_queues[index], self._event_q, self._stop_evt,
+                  self._gpu_slots),
             name=f"cameras-{index}",
             daemon=True,
         )
         p.start()
         self._procs[index] = p
+        self._proc_started_at[index] = time.monotonic()
         self._slot_layout = getattr(self, "_slot_layout", {})
         self._slot_layout[index] = (slot_base, slots_per_cam, total_slots, slot_bytes)
         logger.info(
@@ -348,21 +384,39 @@ class ProcessCameraManager:
     def _stalled_cameras(self, index: int) -> List[str]:
         """Cameras in this process whose frame count has stopped moving.
 
-        A camera that has never reported is NOT stalled: a process still
-        loading its models has produced nothing yet and is doing exactly what
-        it should. The clock starts at the first heartbeat.
+        THE CLOCK STARTS AT THE FIRST FRAME, NOT THE FIRST HEARTBEAT.
+        A camera process spends its first seconds loading TensorRT engines and
+        the insightface models -- on this machine, comfortably longer than the
+        five second stall limit -- and it heartbeats throughout with a frame
+        count of zero. Treating that as a stall restarts the process before it
+        can finish loading, which makes it load again, forever: measured here
+        as a camera restarting every 5 seconds and never producing a frame.
+
+        So a camera that has not yet produced its FIRST frame is warming up,
+        not stalled, until CAMERA_START_GRACE_SEC has passed -- after which a
+        process that has still produced nothing really is stuck.
         """
         limit = self._stall_seconds()
         if limit <= 0:
             return []
+        from app.config import settings
+        grace = float(getattr(settings, "CAMERA_START_GRACE_SEC", 120.0))
+
         now = time.monotonic()
+        started = self._proc_started_at.get(index, now)
         stalled = []
         for spec in self._proc_specs.get(index, []):
             cid = spec["camera_id"]
             beat = self._beats.get(cid)
             if beat is None:
                 continue
-            seen_at, frames = beat
+            _seen_at, frames = beat
+
+            if frames == 0:
+                if now - started >= grace:
+                    stalled.append(cid)
+                continue
+
             last = self._stall_state.get(cid)
             if last is None or last[1] != frames:
                 self._stall_state[cid] = (now, frames)
@@ -383,8 +437,17 @@ class ProcessCameraManager:
     def get_all_status(self) -> dict:
         return {
             "mode": "server",
-            "cameras": {cid: {"camera_id": cid, "running": True}
-                        for cid in self._specs},
+            "cameras": {
+                cid: {
+                    "camera_id": cid,
+                    "running": True,
+                    # The frame count its process last reported, so a caller
+                    # can tell a camera that is running from one that is
+                    # merely registered.
+                    "frames": (self._beats.get(cid) or (0, 0))[1],
+                }
+                for cid in self._specs
+            },
             "total_active": len(self._specs),
             "processes": {i: {"pid": p.pid, "alive": p.is_alive()}
                           for i, p in self._procs.items()},

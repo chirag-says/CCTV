@@ -71,6 +71,7 @@ def run_camera_process(
     result_q,
     event_q,
     stop_evt,
+    gpu_slots=None,
 ):
     """Entry point for one camera process. Runs `camera_specs` to completion.
 
@@ -80,7 +81,8 @@ def run_camera_process(
     """
     try:
         _run(worker_index, camera_specs, shm_name, n_slots, slot_bytes,
-             slots_per_camera, slot_base, request_q, result_q, event_q, stop_evt)
+             slots_per_camera, slot_base, request_q, result_q, event_q, stop_evt,
+             gpu_slots)
     except Exception as e:                       # noqa: BLE001
         logger.error(f"camera process {worker_index} died: {e}", exc_info=True)
         try:
@@ -96,7 +98,8 @@ def run_camera_process(
 
 
 def _run(worker_index, camera_specs, shm_name, n_slots, slot_bytes,
-         slots_per_camera, slot_base, request_q, result_q, event_q, stop_evt):
+         slots_per_camera, slot_base, request_q, result_q, event_q, stop_evt,
+         gpu_slots=None):
     os.environ.setdefault("CUDA_DEVICE_ORDER", "PCI_BUS_ID")
     from app.config import settings
     from app.vision.inference_server import FrameSlots, InferenceClient
@@ -148,6 +151,10 @@ def _run(worker_index, camera_specs, shm_name, n_slots, slot_bytes,
             n_slots=slots_per_camera,
             timeout=float(getattr(settings, "INFERENCE_TIMEOUT_SEC", 2.0)),
         )
+        # Zero-copy transport: the camera writes decoded frames into the
+        # parent's CUDA pool and sends slot indices. Absent, the client falls
+        # back to the shared-memory pixel path on its own.
+        client.gpu_slots = gpu_slots
 
         try:
             pipe = VisionPipeline(

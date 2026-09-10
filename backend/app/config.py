@@ -281,6 +281,26 @@ class Settings(BaseSettings):
     FACE_TRT_FP16: bool = True
     FACE_TRT_CACHE_DIR: str = "trt_cache"
 
+    # ── Phase 4 step 2: zero-copy inference ───────────────────
+    # Camera processes hand the inference server a CUDA IPC handle and a slot
+    # index instead of pixels, and the server letterboxes, runs the engine,
+    # decodes boxes and runs NMS without the frame leaving the GPU. Only boxes
+    # and embeddings come back.
+    #
+    # Needs DECODE_BACKEND=nvdec (the frame has to start on the GPU) and turns
+    # FACE_GPU_POSTPROCESS on for itself -- SCRFD's numpy decode would drag the
+    # frame back to the host, which is the copy being removed.
+    #
+    # WHAT THIS DOES NOT YET REMOVE, and app/vision/copy_counter.py will say
+    # so: the pipeline still materialises one numpy frame per ANALYSED frame,
+    # because tracking geometry, drawing, snapshots and the rules engine are
+    # written against numpy. The inference path is zero-copy; the pipeline is
+    # not, and the counter reports 1 rather than 0 until that is finished.
+    ZERO_COPY_INFERENCE: bool = False
+    # Height of each CUDA frame slot; width comes from
+    # INFERENCE_MAX_FRAME_PIXELS. 1080 covers 1080p and anything narrower.
+    ZERO_COPY_SLOT_HEIGHT: int = 1080
+
     # ── Phase 4 step 4: health ────────────────────────────────
     # A camera process that is ALIVE and producing nothing is worse than one
     # that died: it holds its cameras and reports healthy to anything that
@@ -288,6 +308,11 @@ class Settings(BaseSettings):
     # frame count moving. 0 disables the stall check (a dead process is still
     # restarted).
     CAMERA_STALL_RESTART_SEC: float = 5.0
+    # How long a camera process may produce NOTHING before that counts as a
+    # stall rather than as warm-up. It has TensorRT engines and the insightface
+    # models to load first, which is tens of seconds on a cold cache; anything
+    # near CAMERA_STALL_RESTART_SEC restarts it mid-load, forever.
+    CAMERA_START_GRACE_SEC: float = 120.0
     # Start even though CUDA, TensorRT or NVDEC is missing. See
     # app/vision/preflight.py -- every one of them degrades silently, which is
     # why the default is to refuse.
@@ -317,6 +342,17 @@ class Settings(BaseSettings):
     # each GPU generation, so whether a given stream decodes is a property of
     # that stream on that card, decided once and logged once.
     DECODE_BACKEND: str = "nvdec"           # "nvdec" or "cpu"
+    # How long to wait for a network camera to accept a TCP connection before
+    # deciding NVDEC should not be handed it. See NvDecoder._unreachable: the
+    # demuxer faults rather than raising on an absent camera, and the fault
+    # kills the whole camera process.
+    NVDEC_PROBE_TIMEOUT_SEC: float = 2.0
+    # Hand NVDEC rtsp:// and other network sources. OFF by default: measured
+    # on this deployment's cameras, PyNvVideoCodec FAULTS on a reachable RTSP
+    # stream instead of raising, and an access violation cannot be caught --
+    # so the per-camera fallback never runs and the whole camera process dies,
+    # taking its other cameras with it. See NvDecoder._unreachable.
+    NVDEC_ALLOW_RTSP: bool = False
 
     # ── Phase 2 item 6: faces on tracked crops, at their own rate ─────
     # A full-frame SCRFD pass finds every face in the scene, every analysis
@@ -1014,6 +1050,15 @@ class Settings(BaseSettings):
 
 
 settings = Settings()
+
+# ZERO_COPY_INFERENCE implies FACE_GPU_POSTPROCESS. Left off, SCRFD's decode
+# is numpy and the server would have to pull each frame back to the host to
+# run it -- which is the copy the whole path exists to remove, reintroduced
+# one layer down and invisibly. Coupled here rather than documented, because a
+# flag whose stated purpose is silently defeated by another flag is worse than
+# no flag at all.
+if settings.ZERO_COPY_INFERENCE and not settings.FACE_GPU_POSTPROCESS:
+    settings.FACE_GPU_POSTPROCESS = True
 
 # Ensure snapshot directory exists
 os.makedirs(settings.SNAPSHOT_DIR, exist_ok=True)

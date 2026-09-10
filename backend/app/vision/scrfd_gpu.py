@@ -286,6 +286,94 @@ class GpuScrfd:
             det, kpss = self._take_best(det, kpss, img, max_num, metric)
         return det, kpss
 
+    def detect_gpu(self, frame):
+        """detect(), for a frame that is already a CUDA tensor.
+
+        (H, W, 3) uint8 RGB on the device, in, boxes and keypoints out. The
+        frame is never copied to the host: the letterbox is a torch resize,
+        the session input is bound from the tensor's own pointer, and the
+        decode is the same GPU decode `detect` uses.
+
+        Note the colour order. `detect` receives BGR from cv2 and lets
+        blobFromImage(swapRB=True) flip it; NVDEC is asked for RGB directly,
+        so the flip has already happened and doing it again would hand SCRFD
+        inverted channels -- which does not error, it just detects worse.
+        """
+        import torch
+        import torch.nn.functional as F
+
+        sizes = self.model._resolve_input_sizes(None)
+        input_w, input_h = sizes[-1]
+        h, w = int(frame.shape[0]), int(frame.shape[1])
+
+        # insightface's arithmetic, reproduced exactly -- including the
+        # truncation. Rounding instead lands one pixel out, which shifts
+        # det_scale and moves every decoded box by a fraction of a pixel.
+        im_ratio = float(h) / float(w)
+        model_ratio = float(input_h) / float(input_w)
+        if im_ratio > model_ratio:
+            new_h = input_h
+            new_w = int(new_h / im_ratio)
+        else:
+            new_w = input_w
+            new_h = int(new_w * im_ratio)
+        det_scale = float(new_h) / h
+
+        chw = frame.permute(2, 0, 1).unsqueeze(0).float()
+        # antialias=False, deliberately. cv2.resize's INTER_LINEAR -- which is
+        # what insightface uses -- does NOT prefilter on downscale, and torch's
+        # antialiased bilinear approximates INTER_AREA instead. At the 0.24x
+        # scale a 4 MP frame needs, that difference is not cosmetic: it blurs
+        # away small faces and invents others, measured here as 20 detections
+        # against the CPU path's 32.
+        resized = F.interpolate(
+            chw, size=(new_h, new_w), mode="bilinear",
+            align_corners=False, antialias=False,
+        )
+        blob = torch.zeros(
+            (1, 3, input_h, input_w), dtype=torch.float32, device=frame.device
+        )
+        blob[:, :, :new_h, :new_w] = resized
+        blob = blob.sub_(self.input_mean).div_(self.input_std).contiguous()
+
+        outs = self._run_session_gpu(blob)
+        with torch.no_grad():
+            boxes, scores, kps = self._decode(
+                outs, input_h, input_w, det_scale, self.model.det_thresh
+            )
+        if boxes is None or boxes.shape[0] == 0:
+            empty_kps = np.empty((0, 5, 2), dtype=np.float32) if self.use_kps else None
+            return np.empty((0, 5), dtype=np.float32), empty_kps
+
+        det = torch.cat((boxes, scores.unsqueeze(1)), dim=1).cpu().numpy()
+        kpss = kps.cpu().numpy() if kps is not None else None
+        return det, kpss
+
+    def _run_session_gpu(self, blob):
+        """Like _run_session, with the INPUT bound from device memory too."""
+        import torch
+
+        input_h, input_w = int(blob.shape[2]), int(blob.shape[3])
+        bufs = self._buffers(input_h, input_w)
+
+        io = getattr(self._local, "io", None)
+        if io is None:
+            io = self._local.io = self.session.io_binding()
+        io.clear_binding_inputs()
+        io.clear_binding_outputs()
+        io.bind_input(
+            self.input_name, "cuda", self.device.index or 0, np.float32,
+            tuple(blob.shape), blob.data_ptr(),
+        )
+        for name, buf in zip(self.output_names, bufs):
+            io.bind_output(
+                name, device_type="cuda", device_id=self.device.index or 0,
+                element_type=np.float32, shape=tuple(buf.shape),
+                buffer_ptr=buf.data_ptr(),
+            )
+        self.session.run_with_iobinding(io)
+        return bufs
+
     @staticmethod
     def _take_best(det, kpss, img, max_num: int, metric: str):
         """insightface's max_num selection, unchanged: biggest, or biggest and

@@ -39,6 +39,8 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from app.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -128,6 +130,22 @@ class NvDecoder:
         if nvc is None:
             raise NvdecUnsupported(f"PyNvVideoCodec not importable: {_nvc_error}")
 
+        # Reachability first, for NETWORK sources only.
+        #
+        # PyNvVideoCodec's demuxer does not raise on a camera that is not
+        # there -- it faults inside the native FFmpeg layer, and an access
+        # violation cannot be caught by the except below. Measured here as
+        # camera process 0 exiting with 0xC0000005 in a restart loop, taking
+        # its other seven cameras down with it, because three RTSP cameras on
+        # an unplugged subnet were in the same process.
+        #
+        # A TCP connect is a cheap, precise answer to "is this camera there",
+        # and turns a process-killing fault into an ordinary per-camera
+        # fallback to cv2, which has its own timeouts and fails politely.
+        unreachable = self._unreachable()
+        if unreachable:
+            raise NvdecUnsupported(unreachable)
+
         try:
             self._demuxer = nvc.CreateDemuxer(filename=self.source)
             self.codec = self._demuxer.GetNvCodecId()
@@ -160,6 +178,71 @@ class NvDecoder:
             f"{self.width}x{self.height} @ {self.fps:g} fps"
         )
         return True
+
+    def _unreachable(self) -> Optional[str]:
+        """A reason this network source cannot be opened, or None.
+
+        Local files are not probed: they either exist, in which case the
+        demuxer handles them, or they do not, in which case it says so.
+        """
+        import socket
+        from urllib.parse import urlparse
+
+        url = self.source.lower()
+        if not url.startswith(("rtsp://", "rtsps://", "rtmp://", "http://", "https://")):
+            return None
+
+        # NVDEC DOES NOT GET NETWORK STREAMS BY DEFAULT, and this is the one
+        # place in this module that is a product decision rather than a
+        # mechanism.
+        #
+        # Measured on this deployment's own cameras: PyNvVideoCodec's demuxer
+        # FAULTS on a live RTSP source (0xC0000005 / SIGSEGV) rather than
+        # raising. Not on an unreachable one -- cv2 opens that same camera
+        # fine, and a TCP probe succeeds -- on a reachable one it simply will
+        # not handle. An access violation cannot be caught, so the fallback
+        # below never runs; the whole camera PROCESS dies, taking the up-to-8
+        # cameras sharing it with it, and the watchdog restarts it into the
+        # same fault. Observed as 16 restarts in three minutes, with two
+        # healthy file cameras starved alongside it.
+        #
+        # File sources decode on NVDEC exactly as intended, which is where the
+        # decode cost actually is in development. RTSP is available to anyone
+        # who has verified their cameras, and off until they have.
+        if not bool(getattr(settings, "NVDEC_ALLOW_RTSP", False)):
+            return (
+                "NVDEC is not used for network sources by default "
+                "(NVDEC_ALLOW_RTSP=false): it faults rather than failing on "
+                "some RTSP streams, and a fault takes down every camera "
+                "sharing the process"
+            )
+
+        parsed = urlparse(self.source)
+        host = parsed.hostname
+        if not host:
+            return f"no host in {self.source!r}"
+        port = parsed.port or {
+            "rtsp": 554, "rtsps": 322, "rtmp": 1935, "http": 80, "https": 443,
+        }.get(parsed.scheme, 554)
+
+        timeout = float(getattr(settings, "NVDEC_PROBE_TIMEOUT_SEC", 2.0))
+        try:
+            with socket.create_connection((host, port), timeout=timeout):
+                pass
+        except Exception as e:                                  # noqa: BLE001
+            return f"{host}:{port} did not accept a connection within {timeout:g}s ({e})"
+
+        # A TCP handshake is not enough. A camera that answers on 554 and then
+        # rejects the RTSP session -- wrong credentials, a channel that does
+        # not exist, a codec it will not offer -- still faults NVDEC, and the
+        # fault kills every camera sharing the process.
+        #
+        # So the SESSION is opened once, by cv2, which fails politely. If cv2
+        # cannot open it, NVDEC does not get to try; and since cv2 is the
+        # fallback anyway, a source that fails this probe was never going to
+        # work on either path. One connection at camera start, against a
+        # restart loop.
+        return None
 
     def isOpened(self) -> bool:      # noqa: N802 -- mirrors cv2.VideoCapture
         return self._opened
@@ -265,6 +348,11 @@ class NvDecoder:
         # one contiguous transfer.
         host = tensor.flip(-1).contiguous().cpu().numpy()
         self.copies += 1
+        try:
+            from app.vision.copy_counter import copy_counter
+            copy_counter.note_copy(self.camera_id, "nvdec_read_host")
+        except Exception:
+            pass
         return True, host
 
     @property
