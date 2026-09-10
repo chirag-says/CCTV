@@ -1011,9 +1011,20 @@ class Settings(BaseSettings):
     # Where the BROWSER reaches go2rtc. Different from the internal URL as
     # soon as anything is containerised or behind a proxy.
     GO2RTC_PUBLIC_URL: str = "http://localhost:1984"
-    # ICE candidates go2rtc advertises. "stun:8555" makes go2rtc discover its
-    # own public address; a fixed "host:8555" is what a LAN deployment wants.
-    GO2RTC_CANDIDATES: str = "stun:8555"
+    # Extra ICE candidates go2rtc advertises. EMPTY BY DEFAULT, deliberately.
+    #
+    # Left empty, go2rtc gathers host candidates from its own interfaces --
+    # the LAN address and loopback -- which is exactly what a browser on the
+    # same machine or the same network needs.
+    #
+    # "stun:8555" instead makes go2rtc ask a STUN server for its PUBLIC
+    # address and advertise that. Measured here: every candidate it offered
+    # was the router's WAN IP, the browser on the same machine could not route
+    # to it (no NAT hairpin), ICE sat in `checking` forever, and every tile
+    # showed "Negotiating WebRTC with the relay" while go2rtc itself was
+    # serving frames perfectly over HTTP. Set it only when the relay is behind
+    # NAT and the browsers are outside it.
+    GO2RTC_CANDIDATES: str = ""
     # Where go2rtc should find ffmpeg. Empty means "on PATH", which is right
     # in the container and wrong on a Windows dev box, where ffmpeg is a zip
     # somebody unpacked rather than something installed. File cameras are the

@@ -184,10 +184,16 @@ def build_config(cameras: List[dict]) -> str:
         "",
         "webrtc:",
         f"  listen: {_yaml_quote(settings.GO2RTC_WEBRTC_LISTEN)}",
-        "  candidates:",
     ]
-    for candidate in settings.go2rtc_candidates_list:
-        lines.append(f"    - {_yaml_quote(candidate)}")
+    # No `candidates:` key at all when none are configured. An empty list is
+    # not the same as an absent one: go2rtc only gathers its own host
+    # candidates when nothing overrides them, and those are the ones a local
+    # or LAN browser can actually reach.
+    candidates = settings.go2rtc_candidates_list
+    if candidates:
+        lines.append("  candidates:")
+        for candidate in candidates:
+            lines.append(f"    - {_yaml_quote(candidate)}")
 
     # The input template every FILE source is built from. See the module
     # docstring: this is where a dev clip becomes an endless camera.
