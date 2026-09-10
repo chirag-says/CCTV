@@ -281,6 +281,40 @@ class Settings(BaseSettings):
     FACE_TRT_FP16: bool = True
     FACE_TRT_CACHE_DIR: str = "trt_cache"
 
+    # ── Phase 2 item 6: faces on tracked crops, at their own rate ─────
+    # A full-frame SCRFD pass finds every face in the scene, every analysis
+    # frame, and then throws almost all of it away: the pipeline only ever
+    # asks "does THIS track have a face I can recognise". So faces move onto
+    # the person boxes ByteTrack is already producing, and onto their own
+    # clock.
+    #
+    # Two independent savings:
+    #   * rate    FACE_FPS is not ANALYSIS_FPS. Tracking wants 10-25 fps to
+    #             keep boxes on people; an identity does not change five times
+    #             a second, so faces run at 5.
+    #   * subject only tracks that still need recognising are cropped, so a
+    #             confirmed identity costs nothing until its next recheck.
+    #             This is the "ArcFace only for tracks without a locked
+    #             identity" half -- the crop is skipped entirely, so SCRFD is
+    #             saved too, not just ArcFace.
+    #
+    # Person mode only: it needs person boxes to crop, and in face mode the
+    # track IS the face. False restores the full-frame pass.
+    FACE_ON_CROPS: bool = True
+    FACE_FPS: float = 5.0
+    # Person boxes clip hair and chin; SCRFD wants a little room around the
+    # head or it scores the face lower than it should.
+    FACE_CROP_PAD: float = 0.12
+    # Ceiling on crops per face cycle. A crowded corridor can hold 40 tracks
+    # needing recognition; doing all of them in one cycle would spike the tick
+    # that ANALYSIS_FPS is trying to hold steady. The rest come round on the
+    # next cycle -- 200 ms later, on a person who has not left.
+    FACE_CROP_MAX_PER_FRAME: int = 8
+    # Below this a person box cannot contain a face SCRFD will score, let
+    # alone one ArcFace can embed. Measured against MIN_FACE_RECOGNIZE_PX:
+    # a face is roughly a seventh of a standing body.
+    FACE_CROP_MIN_PERSON_PX: int = 64
+
     # ── Phase 2 items 3 and 4: one inference loop, cameras in processes ──
     # "server"  cameras run in processes doing decode, tracking and rules; one
     #           InferenceServer per GPU owns the engines and the ONNX Runtime

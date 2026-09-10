@@ -444,3 +444,64 @@ class InferenceClient:
             logger.error(f"[{self.camera_id}] face submit failed: {e}")
             return [], [], []
         return self._await(fid, KIND_FACES, ([], [], []))
+
+    @property
+    def max_in_flight(self) -> int:
+        """How many requests this camera may have outstanding at once.
+
+        One per reserved slot. Submitting more would wrap `_next_slot` back
+        onto a slot the server has not read yet, and the second write would
+        replace a frame already queued -- silently, as a wrong answer rather
+        than an error.
+        """
+        return self.n_slots
+
+    def faces_many(self, crops: List[np.ndarray]):
+        """SCRFD + ArcFace on several crops, submitted together.
+
+        Item 6 sends person crops, not frames, and a camera has a handful of
+        them per face cycle. Submitting them one at a time and blocking on
+        each would cost one server tick EACH -- eight crops, eight ticks, up
+        to a quarter of a second for work the server could have done in one
+        pass. Submitting them all first means they arrive in the same tick and
+        are collected into one batch, which is the whole point of having a
+        server.
+
+        Results come back in submission order. A crop whose result is lost to
+        the timeout yields an empty triple rather than shifting its
+        neighbours' answers onto the wrong track.
+        """
+        if not crops:
+            return []
+        crops = crops[: self.max_in_flight]
+
+        ids = []
+        for crop in crops:
+            try:
+                ids.append(self._submit(crop, KIND_FACES))
+            except Exception as e:
+                logger.error(f"[{self.camera_id}] face crop submit failed: {e}")
+                ids.append(None)
+
+        empty = ([], [], [])
+        wanted = {fid for fid in ids if fid is not None}
+        got = {}
+        deadline = time.perf_counter() + self.timeout
+        while wanted:
+            remaining = deadline - time.perf_counter()
+            if remaining <= 0:
+                logger.debug(
+                    f"[{self.camera_id}] face batch timeout, "
+                    f"{len(wanted)}/{len(ids)} crops unanswered"
+                )
+                break
+            try:
+                cam, fid, kind, payload = self.inbox.get(timeout=remaining)
+            except queue.Empty:
+                break
+            if kind != KIND_FACES or fid not in wanted:
+                continue  # stale, or a persons result for this camera
+            wanted.discard(fid)
+            got[fid] = empty if payload is None else payload
+
+        return [got.get(fid, empty) for fid in ids]

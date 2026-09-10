@@ -97,6 +97,24 @@ if not _cuda_available and not getattr(settings, "ALLOW_CPU_INFERENCE", False):
     )
 
 
+def _shift_landmarks(kps, x_off: int, y_off: int):
+    """SCRFD's 5 points from crop space into frame space.
+
+    Landmarks drive alignment before ArcFace and the yaw/pitch estimate, so a
+    set left in crop coordinates does not fail loudly -- it produces a
+    confidently wrong pose and a misaligned embedding.
+    """
+    if kps is None:
+        return None
+    try:
+        shifted = np.asarray(kps, dtype=np.float32).copy()
+        shifted[:, 0] += x_off
+        shifted[:, 1] += y_off
+        return shifted
+    except Exception:
+        return None
+
+
 class VisionPipeline:
     """
     Main processing pipeline for a single camera stream.
@@ -372,6 +390,27 @@ class VisionPipeline:
         # perf_counter() of the last analysed frame. Starts at zero so the first
         # frame to arrive is analysed rather than waiting out an interval.
         self._last_analysis_at = 0.0
+
+        # -- Face rate (item 6), deliberately NOT the analysis rate ---
+        # Tracking has to keep up with people moving; identity does not
+        # change five times a second. Separating the two clocks is most of
+        # what makes Plus and Pro pay for faces per person rather than per
+        # frame.
+        self._face_fps = float(getattr(settings, "FACE_FPS", 5.0) or 0.0)
+        self._face_interval = 1.0 / self._face_fps if self._face_fps > 0 else 0.0
+        self._last_face_at = 0.0
+        # Faces on person crops instead of the whole frame. Only meaningful in
+        # person mode -- there is nothing to crop otherwise, and in face mode
+        # the track already IS the face.
+        self._face_on_crops = bool(
+            getattr(settings, "FACE_ON_CROPS", False)
+            and self._tracking_mode == "person"
+        )
+        if self._face_on_crops:
+            logger.info(
+                f"[{camera_id}] faces on tracked crops at {self._face_fps:g} fps "
+                f"(analysis {self._analysis_fps:g} fps)"
+            )
 
         # Performance metrics
         self._fps = 0.0
@@ -692,7 +731,11 @@ class VisionPipeline:
         # Detect faces AND get embeddings in a SINGLE insightface pass
         # (sub-stage timing: scrfd_preprocess/scrfd_inference/scrfd_postprocess
         #  is recorded inside detector.detect_faces_with_embeddings)
-        if settings.PLAN_ALLOWS_FACE:
+        if self._face_on_crops:
+            # Item 6: faces come from the tracks, which do not exist yet. This
+            # frame's faces are collected after the tracker has run, below.
+            face_locations, embeddings, face_landmarks, rgb_frame = [], [], [], None
+        elif settings.PLAN_ALLOWS_FACE:
             _client = getattr(self, "_inference_client", None)
             if _client is not None:
                 face_locations, embeddings, face_landmarks = _client.faces(frame)
@@ -756,6 +799,16 @@ class VisionPipeline:
         # Currently measures only: when a track is recreated, did a recoverable
         # predecessor exist? It does not assign identity yet.
         self._observe_identity_continuity(active_tracks)
+
+        # ── FACES, from the tracks rather than the frame (item 6) ──
+        # After the tracker, because the crops ARE the tracks; and on its own
+        # clock, so a camera tracking at 25 fps still only looks for faces
+        # five times a second.
+        if self._face_on_crops and settings.PLAN_ALLOWS_FACE and self._faces_due(consume=True):
+            with profiler.measure("scrfd_inference"):
+                face_locations, embeddings, face_landmarks = self._faces_on_tracks(
+                    clean_frame, active_tracks
+                )
 
         # Collect all boxes to draw
         boxes_to_draw = []
@@ -1442,6 +1495,15 @@ class VisionPipeline:
 
         Always respects minimum interval to prevent spam.
         """
+        # Item 6 makes this stage redundant and actively harmful. Its whole
+        # job was "a track has no face, so crop the person and run SCRFD on
+        # it" -- which is now the ordinary face path, running every cycle for
+        # exactly the tracks that need one. Leaving it on would run a SECOND
+        # SCRFD over the same crops, so item 6 would add work rather than
+        # remove it. The code stays reachable with FACE_ON_CROPS=false.
+        if self._face_on_crops:
+            return False
+
         now = time.time()
 
         # Minimum interval gate — prevent spam
@@ -2468,6 +2530,131 @@ class VisionPipeline:
         if consume:
             self._last_analysis_at = now
         return True
+
+    # ── Faces on tracked crops (Phase 2 item 6) ───────────────
+    #
+    # The old shape ran SCRFD over the whole frame on every analysis frame and
+    # then asked, per track, "is one of these faces yours". Most of that work
+    # had no track to belong to, and the tracks that did have one mostly
+    # already knew who they were.
+    #
+    # This runs SCRFD on the person boxes ByteTrack just produced, only for
+    # the tracks that still need recognising, and only FACE_FPS times a
+    # second. Everything downstream is unchanged: the same three parallel
+    # lists come out, in full-frame coordinates, and _bind_face_to_track binds
+    # them the same way.
+
+    def _faces_due(self, consume: bool = False) -> bool:
+        """Is a face cycle due? Wall clock, like _analysis_due.
+
+        Separate from the analysis clock on purpose -- see FACE_FPS. Zero
+        means every analysis frame, which is the pre-item-6 behaviour.
+        """
+        if self._face_interval <= 0:
+            return True
+        now = time.perf_counter()
+        if now - self._last_face_at < self._face_interval:
+            return False
+        if consume:
+            self._last_face_at = now
+        return True
+
+    def _face_crop_candidates(self, frame: np.ndarray, active_tracks: list) -> list:
+        """Which tracks get a face this cycle, and the crop for each.
+
+        The selection IS the optimisation, so it is deliberately strict:
+
+          * `_should_recognize` says no  -- a confirmed, locked identity costs
+            nothing until its recheck falls due. This is "ArcFace only for
+            tracks without a locked identity", applied one step earlier so the
+            detection is skipped too, not just the embedding.
+          * the person box is tiny      -- below FACE_CROP_MIN_PERSON_PX there
+            is no face in it that ArcFace could embed, so cropping it spends a
+            slot to learn nothing.
+
+        Sorted biggest-person-first and capped, because when more tracks want a
+        face than the cap allows, the near ones are the ones a face will
+        actually be found on.
+        """
+        pad = float(getattr(settings, "FACE_CROP_PAD", 0.12))
+        min_px = int(getattr(settings, "FACE_CROP_MIN_PERSON_PX", 64))
+        cap = int(getattr(settings, "FACE_CROP_MAX_PER_FRAME", 8))
+        fh, fw = frame.shape[:2]
+
+        wanted = []
+        for track in active_tracks:
+            if not self._should_recognize(track):
+                continue
+            top, right, bottom, left = track.to_location()
+            h, w = bottom - top, right - left
+            if h < min_px or w < min_px // 2:
+                continue
+            wanted.append((h * w, track, (top, right, bottom, left)))
+
+        wanted.sort(key=lambda t: t[0], reverse=True)
+
+        out = []
+        for _area, track, (top, right, bottom, left) in wanted[:cap]:
+            # Pad horizontally by the same absolute amount as vertically:
+            # a person box is tall and narrow, so a percentage of its WIDTH
+            # would barely widen it while a percentage of its height would
+            # swallow the neighbours.
+            grow = int((bottom - top) * pad)
+            y1 = max(0, top - grow)
+            y2 = min(fh, bottom + grow)
+            x1 = max(0, left - grow)
+            x2 = min(fw, right + grow)
+            if y2 - y1 < 8 or x2 - x1 < 8:
+                continue
+            crop = np.ascontiguousarray(frame[y1:y2, x1:x2])
+            out.append((track, crop, x1, y1))
+        return out
+
+    def _faces_on_tracks(self, frame: np.ndarray, active_tracks: list):
+        """(locations, embeddings, landmarks) for this cycle, full-frame coords.
+
+        Returns the exact triple the full-frame path returned, so the caller
+        cannot tell which produced it.
+        """
+        candidates = self._face_crop_candidates(frame, active_tracks)
+        if not candidates:
+            return [], [], []
+
+        crops = [c for _t, c, _x, _y in candidates]
+        client = getattr(self, "_inference_client", None)
+        if client is not None:
+            # One submission for the whole cycle: the crops land in the same
+            # server tick and are batched, instead of costing a tick each.
+            results = client.faces_many(crops)
+            if len(results) < len(crops):
+                results = list(results) + [([], [], [])] * (len(crops) - len(results))
+        else:
+            results = []
+            for crop in crops:
+                locs, embs, kps, _ = self.detector.detect_faces_with_embeddings(crop)
+                results.append((locs, embs, kps))
+
+        locations, embeddings, landmarks = [], [], []
+        for (track, _crop, x_off, y_off), (locs, embs, kps) in zip(candidates, results):
+            if not locs:
+                continue
+            # One face per person. A crop of one person that yields several
+            # boxes has caught a bystander at the edge of the padding; the
+            # largest is the one the box was drawn around.
+            best = max(
+                range(len(locs)),
+                key=lambda i: (locs[i][2] - locs[i][0]) * (locs[i][1] - locs[i][3]),
+            )
+            top, right, bottom, left = locs[best]
+            locations.append((top + y_off, right + x_off, bottom + y_off, left + x_off))
+            embeddings.append(embs[best] if best < len(embs) else None)
+            landmarks.append(
+                _shift_landmarks(kps[best], x_off, y_off)
+                if best < len(kps) else None
+            )
+
+        profiler.record_faces_detected(len(locations))
+        return locations, embeddings, landmarks
 
     def _update_fps(self):
         """Calculate processing FPS.
