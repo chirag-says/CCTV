@@ -206,6 +206,24 @@ class ApiClient {
     return this.request('/api/cameras/active-persons');
   }
 
+  /**
+   * Where to signal for this camera's WebRTC video, and whether go2rtc can
+   * relay it at all. `available: false` is a normal answer -- a webcam-index
+   * camera is already held by the analysis pipeline -- and the monitor page
+   * falls back to MJPEG on it.
+   */
+  async getCameraWebrtc(id) {
+    return this.request(`/api/cameras/${id}/webrtc`);
+  }
+
+  /**
+   * Detection metadata for one camera: one JSON message per analysed frame,
+   * carrying normalised boxes for people and faces. No image data.
+   */
+  connectCameraMetadata(cameraId) {
+    return new WebSocket(this.wsUrl(`/api/cameras/${cameraId}/metadata`));
+  }
+
   // ── Events ────────────────────────────────────────────────
   async getEvents(params = {}) {
     const query = new URLSearchParams(params).toString();

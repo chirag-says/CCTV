@@ -10,6 +10,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import AppShell from '@/components/AppShell';
 import api, { API_BASE } from '@/lib/api';
 import DetectionOverlay from '@/components/DetectionOverlay';
+import Go2RtcPlayer from '@/components/Go2RtcPlayer';
 import {
     GridIcon,
     SquareIcon,
@@ -561,10 +562,32 @@ export default function MonitorPage() {
     );
 }
 
-function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDetectEnabled = false, onAiStats }) {
+/**
+ * Is MJPEG being forced for this session?
+ *
+ * WebRTC is the default path; this flag exists because a relay that will not
+ * start, a browser with WebRTC blocked, or a camera go2rtc cannot serve are
+ * all real situations, and "the live view is broken" is a worse answer than
+ * "the live view is the old one". Reachable at /monitor?mjpeg=1.
+ */
+function mjpegForced() {
+    if (typeof window === 'undefined') return false;
+    return new URLSearchParams(window.location.search).get('mjpeg') === '1';
+}
+
+/**
+ * MJPEG over WebSocket — the fallback transport.
+ *
+ * Frames are annotated server-side, so this path draws no overlay of its own.
+ * Connecting starts the camera's JPEG encoder thread; nothing else does.
+ */
+function MjpegFeed({ camera, onStatus, onStale, aiDetectEnabled, onAiStats }) {
     const imgRef = useRef(null);
     const [streamStatus, setStreamStatus] = useState('connecting');
-    const [staleInfo, setStaleInfo] = useState(null);  // { stream_state, stale_since, reconnect_attempts, last_frame_age }
+
+    useEffect(() => {
+        if (onStatus) onStatus(streamStatus);
+    }, [streamStatus, onStatus]);
 
     useEffect(() => {
         if (camera.status !== 'online') {
@@ -602,7 +625,11 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
             try {
                 // Use the shared helper so the JWT is attached -- the server
                 // now rejects this socket with 4001 if ?token= is missing.
-                ws = new WebSocket(api.wsUrl(`/api/cameras/${camera.id}/stream`));
+                // fallback=1 says this viewer is deliberately on the old
+                // transport, and is what starts the JPEG encoder thread.
+                ws = new WebSocket(
+                    `${api.wsUrl(`/api/cameras/${camera.id}/stream`)}&fallback=1`
+                );
                 ws.binaryType = 'arraybuffer';
 
                 ws.onopen = () => {
@@ -625,7 +652,7 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                         try {
                             const msg = JSON.parse(event.data);
                             if (msg.type === 'stream_stale') {
-                                setStaleInfo(msg);
+                                if (onStale) onStale(msg);
                                 setStreamStatus('stream_frozen');
                                 return;
                             }
@@ -636,9 +663,7 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                     }
 
                     // Binary JPEG frame — stream is healthy again
-                    if (staleInfo) {
-                        setStaleInfo(null);
-                    }
+                    if (onStale) onStale(null);
                     const blob = new Blob([event.data], { type: 'image/jpeg' });
                     // If there's already a pending frame we haven't rendered, revoke it
                     if (pendingUrl) {
@@ -688,7 +713,69 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                 URL.revokeObjectURL(pendingUrl);
             }
         };
-    }, [camera]);
+    }, [camera, onStale]);
+
+    return (
+        <>
+            <img
+                ref={imgRef}
+                alt={`${camera.name} live feed`}
+                style={{
+                    width: '100%',
+                    height: '100%',
+                    objectFit: 'contain',
+                    display: streamStatus === 'streaming' ? 'block' : 'none',
+                }}
+            />
+
+            {/* RF-DETR WebGPU Detection Overlay (browser-side, MJPEG only) */}
+            {aiDetectEnabled && streamStatus === 'streaming' && (
+                <DetectionOverlay
+                    videoRef={imgRef}
+                    enabled={aiDetectEnabled}
+                    onStats={onAiStats}
+                />
+            )}
+        </>
+    );
+}
+
+/**
+ * One camera tile.
+ *
+ * Chooses the transport, then renders the chrome around whichever one it got.
+ * WebRTC (video from go2rtc plus a metadata canvas) is the default; MJPEG is
+ * used when go2rtc cannot relay this camera -- a webcam index it does not own,
+ * a browser-pushed session -- or when ?mjpeg=1 forces it.
+ */
+function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDetectEnabled = false, onAiStats }) {
+    const [streamStatus, setStreamStatus] = useState('connecting');
+    const [staleInfo, setStaleInfo] = useState(null);  // { stream_state, stale_since, reconnect_attempts, last_frame_age }
+    const [webrtc, setWebrtc] = useState(null);        // null = not asked yet
+    const forceMjpeg = mjpegForced();
+
+    useEffect(() => {
+        // Neither of these needs asking. An offline camera has no transport
+        // to choose, and a forced fallback has already chosen; `status` and
+        // `useWebrtc` below read both straight off props rather than
+        // mirroring them into state.
+        if (camera.status !== 'online' || forceMjpeg) return undefined;
+
+        let mounted = true;
+        api.getCameraWebrtc(camera.id)
+            .then((info) => { if (mounted) setWebrtc(info); })
+            .catch(() => {
+                // A relay that cannot be asked is a relay that cannot be used.
+                // Falling back is the whole reason MJPEG is still here.
+                if (mounted) setWebrtc({ available: false });
+            });
+        return () => { mounted = false; };
+    }, [camera.id, camera.status, forceMjpeg]);
+
+    const decided = forceMjpeg || webrtc !== null;
+    const useWebrtc = !forceMjpeg && Boolean(webrtc?.available && webrtc?.signalling_url);
+    const transportLabel = useWebrtc ? 'WEBRTC' : 'MJPEG';
+    const status = camera.status === 'online' ? streamStatus : 'offline';
 
     return (
         <div className="card" style={{ padding: 0, overflow: 'hidden', cursor: onClick ? 'pointer' : 'default' }} onClick={onClick}>
@@ -696,12 +783,24 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                 {camera.status === 'online' ? (
                     <>
                         <div className="live-indicator">
-                            <span className={`live-indicator-dot${streamStatus === 'stream_frozen' ? ' frozen' : ''}`}></span>
-                            {streamStatus === 'streaming' ? 'LIVE' 
-                                : streamStatus === 'stream_frozen' ? (staleInfo?.stream_state === 'OFFLINE' ? 'OFFLINE' : 'FROZEN')
-                                : streamStatus === 'connecting' ? 'CONNECTING' 
+                            <span className={`live-indicator-dot${status === 'stream_frozen' ? ' frozen' : ''}`}></span>
+                            {status === 'streaming' ? 'LIVE'
+                                : status === 'stream_frozen' ? (staleInfo?.stream_state === 'OFFLINE' ? 'OFFLINE' : 'FROZEN')
+                                : status === 'connecting' ? 'CONNECTING'
+                                : status === 'unavailable' ? 'NO RELAY'
                                 : 'RECONNECTING'}
-                            {aiDetectEnabled && streamStatus === 'streaming' && (
+                            <span style={{
+                                marginLeft: '6px',
+                                padding: '1px 5px',
+                                borderRadius: '4px',
+                                background: 'rgba(148, 163, 184, 0.2)',
+                                border: '1px solid rgba(148, 163, 184, 0.35)',
+                                fontSize: '0.563rem',
+                                fontWeight: 700,
+                                color: '#cbd5e1',
+                                letterSpacing: '0.5px',
+                            }}>{transportLabel}</span>
+                            {aiDetectEnabled && !useWebrtc && status === 'streaming' && (
                                 <span style={{
                                     marginLeft: '6px',
                                     padding: '1px 5px',
@@ -716,27 +815,23 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                             )}
                         </div>
 
-                        <img
-                            ref={imgRef}
-                            alt={`${camera.name} live feed`}
-                            style={{
-                                width: '100%',
-                                height: '100%',
-                                objectFit: 'contain',
-                                display: streamStatus === 'streaming' ? 'block' : 'none',
-                            }}
-                        />
-
-                        {/* RF-DETR WebGPU Detection Overlay */}
-                        {aiDetectEnabled && streamStatus === 'streaming' && (
-                            <DetectionOverlay
-                                videoRef={imgRef}
-                                enabled={aiDetectEnabled}
-                                onStats={onAiStats}
+                        {!decided ? null : useWebrtc ? (
+                            <Go2RtcPlayer
+                                camera={camera}
+                                signallingUrl={webrtc.signalling_url}
+                                onStatus={setStreamStatus}
+                            />
+                        ) : (
+                            <MjpegFeed
+                                camera={camera}
+                                onStatus={setStreamStatus}
+                                onStale={setStaleInfo}
+                                aiDetectEnabled={aiDetectEnabled}
+                                onAiStats={onAiStats}
                             />
                         )}
 
-                        {streamStatus === 'stream_frozen' && (
+                        {status === 'stream_frozen' && (
                             <div className="stream-frozen-overlay">
                                 <div className="stream-frozen-icon">
                                     <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
@@ -749,7 +844,7 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                                     {staleInfo?.stream_state === 'OFFLINE' ? 'STREAM OFFLINE' : 'STREAM FROZEN'}
                                 </div>
                                 <div className="stream-frozen-detail">
-                                    {staleInfo?.stream_state === 'RECONNECTING' 
+                                    {staleInfo?.stream_state === 'RECONNECTING'
                                         ? `Attempting reconnection... #${staleInfo.reconnect_attempts || 0}`
                                         : staleInfo?.stream_state === 'OFFLINE'
                                         ? 'Max reconnect attempts exceeded'
@@ -757,7 +852,7 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                                 </div>
                                 {staleInfo?.last_frame_age && (
                                     <div className="stream-frozen-age">
-                                        Last frame: {staleInfo.last_frame_age >= 60 
+                                        Last frame: {staleInfo.last_frame_age >= 60
                                             ? `${Math.floor(staleInfo.last_frame_age / 60)}m ${Math.round(staleInfo.last_frame_age % 60)}s ago`
                                             : `${Math.round(staleInfo.last_frame_age)}s ago`}
                                     </div>
@@ -765,17 +860,23 @@ function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDet
                             </div>
                         )}
 
-                        {streamStatus !== 'streaming' && streamStatus !== 'stream_frozen' && (
+                        {status !== 'streaming' && status !== 'stream_frozen' && (
                             <div className="live-feed-placeholder">
                                 <div style={{ animation: 'pulse 2s ease-in-out infinite', display: 'flex' }}>
                                     <VideoCameraIcon size={32} />
                                 </div>
                                 <div style={{ fontWeight: 500 }}>{camera.name}</div>
                                 <div style={{ fontSize: '0.75rem' }}>
-                                    {streamStatus === 'connecting' ? 'Connecting to video stream...' : 'Reconnecting...'}
+                                    {status === 'unavailable'
+                                        ? 'Relay has no stream for this camera'
+                                        : status === 'connecting'
+                                        ? 'Connecting to video stream...'
+                                        : 'Reconnecting...'}
                                 </div>
                                 <div style={{ fontSize: '0.688rem', opacity: 0.5 }}>
-                                    Waiting for frames from backend pipeline
+                                    {useWebrtc
+                                        ? 'Negotiating WebRTC with the relay'
+                                        : 'Waiting for frames from backend pipeline'}
                                 </div>
                             </div>
                         )}

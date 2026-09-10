@@ -189,7 +189,87 @@ async def stop_camera(
     return CameraService.stop_camera(camera_id)
 
 
-# ── MJPEG Streaming (no auth required for <img> tags) ─────────
+# ── Live view: WebRTC via go2rtc ──────────────────────────────
+
+@router.get("/{camera_id}/webrtc")
+async def camera_webrtc(
+    camera_id: str,
+    current_user: dict = Depends(get_current_user),
+):
+    """Where the browser signals to play this camera over WebRTC.
+
+    Video does not pass through this process. go2rtc pulls the camera's RTSP
+    (or, in development, loops a file through ffmpeg) and negotiates WebRTC
+    with the browser directly; all this endpoint does is say where.
+
+    `available` false is a normal answer, not an error: a webcam-index camera
+    is already held by the analysis pipeline and a browser-pushed session has
+    no source to relay. The monitor page falls back to MJPEG on it.
+    """
+    from app.services.go2rtc import go2rtc
+
+    CameraService.get_camera(camera_id)  # 404s for an unknown camera
+
+    status = go2rtc.status()
+    available = bool(status["enabled"] and go2rtc.has_stream(camera_id))
+
+    return {
+        "camera_id": camera_id,
+        "available": available,
+        "signalling_url": go2rtc.signalling_url(camera_id) if available else None,
+        "metadata_url": f"/api/cameras/{camera_id}/metadata",
+        "relay": {
+            "running": status["running"],
+            "restarts": status["restarts"],
+            "last_error": status["last_error"],
+        },
+    }
+
+
+# ── Detection metadata (no pixels on this channel) ────────────
+
+@router.websocket("/{camera_id}/metadata")
+async def camera_metadata(
+    websocket: WebSocket,
+    camera_id: str,
+):
+    """One JSON message per analysed frame: timestamp, track ids, normalised
+    boxes, labels, identities. Person and face only.
+
+    This socket carries no image data of any kind. It is the companion to the
+    WebRTC video above -- the browser draws these boxes on a canvas over the
+    video it is already receiving from go2rtc.
+
+    Requires a JWT via query parameter, exactly like the stream socket:
+      ws://host/api/cameras/{id}/metadata?token=<jwt>
+    """
+    from app.core.security import require_ws_token
+
+    if await require_ws_token(websocket) is None:
+        return  # already closed with 4001
+
+    await websocket.accept()
+    await ws_manager.connect_metadata(camera_id, websocket)
+
+    try:
+        # Nothing is expected FROM the client except keep-alives; this read is
+        # how a disconnect is noticed. Messages are pushed from the pipeline
+        # through ws_manager, not produced here.
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        logger.info(f"Metadata WebSocket disconnected for camera: {camera_id}")
+    except Exception as e:
+        logger.debug(f"Metadata WebSocket error for camera {camera_id}: {e}")
+    finally:
+        await ws_manager.disconnect_metadata(camera_id, websocket)
+        try:
+            await websocket.close()
+        except Exception:
+            pass
+
+
+# ── MJPEG Streaming (snapshot endpoint and fallback only) ─────
 
 @router.get("/{camera_id}/feed")
 async def camera_feed(
@@ -219,11 +299,22 @@ async def camera_feed(
     if worker.stream_health.state != StreamState.LIVE:
         return Response(content=b"", status_code=204)
 
-    # Use the pre-encoded JPEG from the worker thread
+    # Pre-encoded bytes if an encoder thread happens to be running for a
+    # fallback viewer; otherwise encode the last frame right here.
+    #
+    # Since Phase 3 the encoder thread no longer starts with the camera, so
+    # on the default path there is nothing to read. A snapshot is a single
+    # frame on request -- one 8.9 ms encode on the request thread is the whole
+    # cost, against a thread per camera burning that 30 times a second.
     jpeg = worker.pipeline._last_jpeg
-    
-    # Fallback if no frame processed yet
     if jpeg is None:
+        frame = worker.pipeline._last_frame
+        if frame is None:
+            return Response(content=b"", status_code=204)
+        from app.utils.image_utils import frame_to_jpeg_bytes
+        jpeg = frame_to_jpeg_bytes(frame, quality=80)
+
+    if not jpeg:
         return Response(content=b"", status_code=204)
 
     return Response(
@@ -245,12 +336,18 @@ async def camera_stream(
     camera_id: str,
 ):
     """
-    WebSocket endpoint for live camera stream.
-    Reads pre-encoded JPEG bytes from the pipeline (encoded in the worker thread).
-    Also supports browser camera sessions directly.
-    
+    MJPEG-over-WebSocket fallback for live video.
+
+    NO LONGER THE DEFAULT. Since Phase 3 video reaches the browser from
+    go2rtc over WebRTC and this process sends metadata only; this endpoint
+    exists for cameras go2rtc cannot relay (a webcam index, a browser-pushed
+    session) and for a viewer who asks for it explicitly with ?fallback=1.
+
+    Connecting here starts the camera's JPEG encoder thread if it is not
+    already running, and it stops again when the last viewer leaves.
+
     Requires a JWT via query parameter:
-      ws://host/api/cameras/{id}/stream?token=<jwt>
+      ws://host/api/cameras/{id}/stream?token=<jwt>&fallback=1
     """
     from app.core.security import require_ws_token
 
@@ -262,7 +359,15 @@ async def camera_stream(
     # populated ws_manager's stream table, so the worker had no way to know
     # whether anyone was looking -- and encoded JPEG for all of them anyway.
     await ws_manager.connect_stream(camera_id, websocket)
-    logger.info(f"Stream WebSocket connected for camera: {camera_id}")
+
+    # Start the encoder on demand. `is_watched` already gates whether frames
+    # are encoded; this gates whether the THREAD exists at all, which is the
+    # part Phase 3 removes from the default path.
+    _worker = camera_manager._workers.get(camera_id)
+    if _worker:
+        _worker.ensure_jpeg_encoder()
+
+    logger.info(f"Stream WebSocket (MJPEG fallback) connected for camera: {camera_id}")
 
     last_jpeg_id = None  # Track which JPEG blob we last sent
 
