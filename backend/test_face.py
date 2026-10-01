@@ -1,3 +1,4 @@
+#!python3.11
 """
 Face accuracy check: SCRFD detection + ArcFace match distances.
 

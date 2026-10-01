@@ -1,0 +1,934 @@
+{
+  "metadata": {
+    "timestamp": "2026-09-30T11:38:35.222082",
+    "gpu": {
+      "gpu_name": "NVIDIA GeForce RTX 5070",
+      "vram_used_mb": 1678.8,
+      "vram_total_mb": 12227.0,
+      "gpu_util_pct": 0,
+      "mem_util_pct": 3
+    },
+    "cpu": {
+      "cpu_pct": 0.0,
+      "ram_mb": 57.2,
+      "system_cpu_pct": 1.5
+    }
+  },
+  "vram_verification": {
+    "measurements": [
+      {
+        "label": "before_any_model",
+        "allocated_mb": 0.0,
+        "reserved_mb": 0.0,
+        "max_allocated_mb": 0.0,
+        "max_reserved_mb": 0.0,
+        "smi_used_mb": 1419.0,
+        "smi_total_mb": 12227.0,
+        "smi_free_mb": 10525.0,
+        "smi_gpu_util_pct": 1.0
+      },
+      {
+        "label": "after_osnet_load",
+        "allocated_mb": 17.6,
+        "reserved_mb": 36.0,
+        "max_allocated_mb": 20.3,
+        "max_reserved_mb": 36.0,
+        "smi_used_mb": 1649.0,
+        "smi_total_mb": 12227.0,
+        "smi_free_mb": 10295.0,
+        "smi_gpu_util_pct": 2.0
+      },
+      {
+        "label": "after_resnet50_load",
+        "allocated_mb": 26.0,
+        "reserved_mb": 46.0,
+        "max_allocated_mb": 37.9,
+        "max_reserved_mb": 46.0,
+        "smi_used_mb": 1659.0,
+        "smi_total_mb": 12227.0,
+        "smi_free_mb": 10285.0,
+        "smi_gpu_util_pct": 2.0
+      },
+      {
+        "label": "osnet_only_after_cleanup",
+        "allocated_mb": 17.6,
+        "reserved_mb": 36.0,
+        "max_allocated_mb": 37.9,
+        "max_reserved_mb": 46.0,
+        "smi_used_mb": 1649.0,
+        "smi_total_mb": 12227.0,
+        "smi_free_mb": 10295.0,
+        "smi_gpu_util_pct": 2.0
+      },
+      {
+        "label": "after_batch_stress",
+        "allocated_mb": 17.6,
+        "reserved_mb": 36.0,
+        "max_allocated_mb": 37.9,
+        "max_reserved_mb": 46.0,
+        "smi_used_mb": 1648.0,
+        "smi_total_mb": 12227.0,
+        "smi_free_mb": 10296.0,
+        "smi_gpu_util_pct": 7.0
+      }
+    ],
+    "osnet_model_allocated_mb": 17.6,
+    "total_gpu_mb": 12227.0,
+    "remaining_mb": 10578.0,
+    "safe_for_production": true,
+    "explanation": "CUDA 'reserved' memory includes allocator overhead and cached blocks. 'allocated' is actual model+tensor memory. nvidia-smi shows total process usage including all CUDA contexts. The Phase 3 benchmark 8.9GB included the benchmark process itself + YOLO + all 3 models loaded simultaneously."
+  },
+  "cross_camera_ground_truth": {
+    "total_crops": 2237,
+    "negative_pairs": 4126,
+    "positive_pairs_proxy": 74906,
+    "osnet_positive_threshold": "0.6065",
+    "visual_samples_saved": "phase35_ground_truth",
+    "note": "Negative pairs are VERIFIED (same-frame = different person). Positive pairs are HIGH-CONFIDENCE PROXIES (cross-frame, top 3% OSNet similarity). For full manual verification, inspect the visual samples in the ground truth directory."
+  },
+  "threshold_sweep": {
+    "thresholds": [
+      {
+        "threshold": 0.45,
+        "tp": 74906,
+        "fp": 1022,
+        "fn": 0,
+        "tn": 3104,
+        "precision": 0.9865,
+        "recall": 1.0,
+        "f1": 0.9932,
+        "far": 0.2477,
+        "frr": 0.0
+      },
+      {
+        "threshold": 0.48,
+        "tp": 74906,
+        "fp": 740,
+        "fn": 0,
+        "tn": 3386,
+        "precision": 0.9902,
+        "recall": 1.0,
+        "f1": 0.9951,
+        "far": 0.1794,
+        "frr": 0.0
+      },
+      {
+        "threshold": 0.5,
+        "tp": 74906,
+        "fp": 603,
+        "fn": 0,
+        "tn": 3523,
+        "precision": 0.992,
+        "recall": 1.0,
+        "f1": 0.996,
+        "far": 0.1461,
+        "frr": 0.0
+      },
+      {
+        "threshold": 0.52,
+        "tp": 74906,
+        "fp": 479,
+        "fn": 0,
+        "tn": 3647,
+        "precision": 0.9936,
+        "recall": 1.0,
+        "f1": 0.9968,
+        "far": 0.1161,
+        "frr": 0.0
+      },
+      {
+        "threshold": 0.54,
+        "tp": 74906,
+        "fp": 386,
+        "fn": 0,
+        "tn": 3740,
+        "precision": 0.9949,
+        "recall": 1.0,
+        "f1": 0.9974,
+        "far": 0.0936,
+        "frr": 0.0
+      },
+      {
+        "threshold": 0.56,
+        "tp": 74906,
+        "fp": 303,
+        "fn": 0,
+        "tn": 3823,
+        "precision": 0.996,
+        "recall": 1.0,
+        "f1": 0.998,
+        "far": 0.0734,
+        "frr": 0.0
+      },
+      {
+        "threshold": 0.58,
+        "tp": 74906,
+        "fp": 251,
+        "fn": 0,
+        "tn": 3875,
+        "precision": 0.9967,
+        "recall": 1.0,
+        "f1": 0.9983,
+        "far": 0.0608,
+        "frr": 0.0
+      },
+      {
+        "threshold": 0.6,
+        "tp": 74906,
+        "fp": 211,
+        "fn": 0,
+        "tn": 3915,
+        "precision": 0.9972,
+        "recall": 1.0,
+        "f1": 0.9986,
+        "far": 0.0511,
+        "frr": 0.0
+      },
+      {
+        "threshold": 0.62,
+        "tp": 65195,
+        "fp": 173,
+        "fn": 9711,
+        "tn": 3953,
+        "precision": 0.9974,
+        "recall": 0.8704,
+        "f1": 0.9295,
+        "far": 0.0419,
+        "frr": 0.1296
+      },
+      {
+        "threshold": 0.65,
+        "tp": 47818,
+        "fp": 130,
+        "fn": 27088,
+        "tn": 3996,
+        "precision": 0.9973,
+        "recall": 0.6384,
+        "f1": 0.7785,
+        "far": 0.0315,
+        "frr": 0.3616
+      },
+      {
+        "threshold": 0.68,
+        "tp": 34274,
+        "fp": 99,
+        "fn": 40632,
+        "tn": 4027,
+        "precision": 0.9971,
+        "recall": 0.4576,
+        "f1": 0.6273,
+        "far": 0.024,
+        "frr": 0.5424
+      },
+      {
+        "threshold": 0.7,
+        "tp": 27057,
+        "fp": 80,
+        "fn": 47849,
+        "tn": 4046,
+        "precision": 0.9971,
+        "recall": 0.3612,
+        "f1": 0.5303,
+        "far": 0.0194,
+        "frr": 0.6388
+      }
+    ],
+    "best_f1": {
+      "threshold": 0.6,
+      "tp": 74906,
+      "fp": 211,
+      "fn": 0,
+      "tn": 3915,
+      "precision": 0.9972,
+      "recall": 1.0,
+      "f1": 0.9986,
+      "far": 0.0511,
+      "frr": 0.0
+    },
+    "best_conservative_far_5pct": {
+      "threshold": 0.62,
+      "tp": 65195,
+      "fp": 173,
+      "fn": 9711,
+      "tn": 3953,
+      "precision": 0.9974,
+      "recall": 0.8704,
+      "f1": 0.9295,
+      "far": 0.0419,
+      "frr": 0.1296
+    },
+    "recommendation_note": "SentinelAI priority: avoid merging different people (low FAR). Best F1 may be too aggressive. Conservative threshold with FAR<=5% preferred."
+  },
+  "resnet_vs_osnet": {
+    "n_positive_pairs": 74906,
+    "n_negative_pairs": 4126,
+    "osnet_msmt17": {
+      "same_person_mean": 0.6872,
+      "same_person_std": 0.0639,
+      "diff_person_mean": 0.3971,
+      "diff_person_std": 0.1073,
+      "diff_person_p95": 0.6043,
+      "best_threshold": 0.6,
+      "best_f1": 0.9986,
+      "precision": 0.9972,
+      "recall": 1.0,
+      "far": 0.0511,
+      "frr": 0.0,
+      "tp": 74906,
+      "fp": 211,
+      "fn": 0,
+      "tn": 3915
+    },
+    "resnet50_imagenet": {
+      "same_person_mean": 0.6872,
+      "same_person_std": 0.0639,
+      "diff_person_mean": 0.3971,
+      "diff_person_std": 0.1073,
+      "diff_person_p95": 0.6043,
+      "best_threshold": 0.6,
+      "best_f1": 0.9986,
+      "precision": 0.9972,
+      "recall": 1.0,
+      "far": 0.0511,
+      "frr": 0.0,
+      "tp": 74906,
+      "fp": 211,
+      "fn": 0,
+      "tn": 3915
+    }
+  },
+  "difficult_cases": {
+    "high_similarity_different_person": {
+      "count": 339,
+      "cases": [
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.7048,
+          "idx_a": 11,
+          "idx_b": 12,
+          "height_a": "267",
+          "height_b": "242",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": false
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.7211,
+          "idx_a": 11,
+          "idx_b": 13,
+          "height_a": "267",
+          "height_b": "188",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": false
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.6925,
+          "idx_a": 12,
+          "idx_b": 13,
+          "height_a": "242",
+          "height_b": "188",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": false
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.577,
+          "idx_a": 15,
+          "idx_b": 17,
+          "height_a": "926",
+          "height_b": "507",
+          "correct_at_055": false,
+          "correct_at_060": true,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.5988,
+          "idx_a": 16,
+          "idx_b": 18,
+          "height_a": "660",
+          "height_b": "315",
+          "correct_at_055": false,
+          "correct_at_060": true,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.6012,
+          "idx_a": 20,
+          "idx_b": 23,
+          "height_a": "631",
+          "height_b": "489",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.6069,
+          "idx_a": 21,
+          "idx_b": 22,
+          "height_a": "600",
+          "height_b": "459",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.6875,
+          "idx_a": 21,
+          "idx_b": 23,
+          "height_a": "600",
+          "height_b": "489",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": false
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.7536,
+          "idx_a": 22,
+          "idx_b": 23,
+          "height_a": "459",
+          "height_b": "489",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": false
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.6299,
+          "idx_a": 25,
+          "idx_b": 26,
+          "height_a": "628",
+          "height_b": "542",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.6203,
+          "idx_a": 40,
+          "idx_b": 41,
+          "height_a": "184",
+          "height_b": "214",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.7104,
+          "idx_a": 43,
+          "idx_b": 45,
+          "height_a": "248",
+          "height_b": "147",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": false
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.6625,
+          "idx_a": 45,
+          "idx_b": 46,
+          "height_a": "147",
+          "height_b": "178",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": false
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.5544,
+          "idx_a": 47,
+          "idx_b": 50,
+          "height_a": "469",
+          "height_b": "349",
+          "correct_at_055": false,
+          "correct_at_060": true,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.6092,
+          "idx_a": 52,
+          "idx_b": 54,
+          "height_a": "727",
+          "height_b": "283",
+          "correct_at_055": false,
+          "correct_at_060": false,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.5725,
+          "idx_a": 55,
+          "idx_b": 56,
+          "height_a": "718",
+          "height_b": "619",
+          "correct_at_055": false,
+          "correct_at_060": true,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.5537,
+          "idx_a": 59,
+          "idx_b": 60,
+          "height_a": "256",
+          "height_b": "192",
+          "correct_at_055": false,
+          "correct_at_060": true,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.5564,
+          "idx_a": 67,
+          "idx_b": 68,
+          "height_a": "310",
+          "height_b": "81",
+          "correct_at_055": false,
+          "correct_at_060": true,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.5959,
+          "idx_a": 70,
+          "idx_b": 72,
+          "height_a": "386",
+          "height_b": "344",
+          "correct_at_055": false,
+          "correct_at_060": true,
+          "correct_at_065": true
+        },
+        {
+          "case_type": "same_frame_high_similarity",
+          "description": "Different people with similar appearance in same frame",
+          "osnet_sim": 0.5595,
+          "idx_a": 70,
+          "idx_b": 73,
+          "height_a": "386",
+          "height_b": "451",
+          "correct_at_055": false,
+          "correct_at_060": true,
+          "correct_at_065": true
+        }
+      ],
+      "note": "These are different people that OSNet rates as highly similar"
+    },
+    "small_crop_analysis": {
+      "n_small_crops": 68,
+      "mean_inter_similarity": 0.4054,
+      "std_inter_similarity": 0.0907
+    },
+    "distance_variation": {
+      "n_tall_crops": 786,
+      "n_small_crops": 68,
+      "n_cross_distance_pairs": 53448,
+      "top_similarities": [
+        {
+          "tall_height": "525",
+          "small_height": "96",
+          "osnet_sim": 0.7264
+        },
+        {
+          "tall_height": "655",
+          "small_height": "115",
+          "osnet_sim": 0.7168
+        },
+        {
+          "tall_height": "549",
+          "small_height": "127",
+          "osnet_sim": 0.698
+        },
+        {
+          "tall_height": "515",
+          "small_height": "115",
+          "osnet_sim": 0.6912
+        },
+        {
+          "tall_height": "678",
+          "small_height": "85",
+          "osnet_sim": 0.6909
+        },
+        {
+          "tall_height": "686",
+          "small_height": "121",
+          "osnet_sim": 0.6846
+        },
+        {
+          "tall_height": "513",
+          "small_height": "111",
+          "osnet_sim": 0.6827
+        },
+        {
+          "tall_height": "719",
+          "small_height": "80",
+          "osnet_sim": 0.6794
+        },
+        {
+          "tall_height": "839",
+          "small_height": "115",
+          "osnet_sim": 0.6788
+        },
+        {
+          "tall_height": "802",
+          "small_height": "118",
+          "osnet_sim": 0.6781
+        }
+      ]
+    },
+    "partial_body": {
+      "n_narrow_aspect": 21,
+      "n_wide_aspect": 400
+    }
+  },
+  "gallery_size_impact": [
+    {
+      "gallery_size": 10,
+      "n_queries": 50,
+      "match_latency_ms": {
+        "avg": 0.003,
+        "p50": 0.003,
+        "p95": 0.005,
+        "p99": 0.026,
+        "max": 0.026,
+        "n": 50
+      },
+      "top1_sim_mean": 0.5191,
+      "top1_sim_std": 0.0743,
+      "top2_sim_mean": 0.4497,
+      "margin_mean": 0.0694,
+      "margin_min": 0.0008
+    },
+    {
+      "gallery_size": 25,
+      "n_queries": 50,
+      "match_latency_ms": {
+        "avg": 0.003,
+        "p50": 0.003,
+        "p95": 0.003,
+        "p99": 0.006,
+        "max": 0.006,
+        "n": 50
+      },
+      "top1_sim_mean": 0.5646,
+      "top1_sim_std": 0.0675,
+      "top2_sim_mean": 0.5258,
+      "margin_mean": 0.0388,
+      "margin_min": 0.0002
+    },
+    {
+      "gallery_size": 50,
+      "n_queries": 50,
+      "match_latency_ms": {
+        "avg": 0.004,
+        "p50": 0.004,
+        "p95": 0.004,
+        "p99": 0.015,
+        "max": 0.015,
+        "n": 50
+      },
+      "top1_sim_mean": 0.6234,
+      "top1_sim_std": 0.1065,
+      "top2_sim_mean": 0.5727,
+      "margin_mean": 0.0508,
+      "margin_min": 0.0009
+    },
+    {
+      "gallery_size": 100,
+      "n_queries": 50,
+      "match_latency_ms": {
+        "avg": 0.006,
+        "p50": 0.005,
+        "p95": 0.009,
+        "p99": 0.011,
+        "max": 0.011,
+        "n": 50
+      },
+      "top1_sim_mean": 0.6471,
+      "top1_sim_std": 0.0919,
+      "top2_sim_mean": 0.6007,
+      "margin_mean": 0.0464,
+      "margin_min": 0.0004
+    },
+    {
+      "gallery_size": 200,
+      "n_queries": 50,
+      "match_latency_ms": {
+        "avg": 0.009,
+        "p50": 0.008,
+        "p95": 0.009,
+        "p99": 0.024,
+        "max": 0.024,
+        "n": 50
+      },
+      "top1_sim_mean": 0.6751,
+      "top1_sim_std": 0.081,
+      "top2_sim_mean": 0.6364,
+      "margin_mean": 0.0386,
+      "margin_min": 0.0001
+    }
+  ],
+  "batching_test": [
+    {
+      "n_active_persons": 1,
+      "total_batch_ms": {
+        "avg": 23.43,
+        "p50": 23.336,
+        "p95": 24.431,
+        "p99": 25.407,
+        "max": 25.407,
+        "n": 50
+      },
+      "per_person_ms": 23.43,
+      "gpu_util_avg": 5.2,
+      "vram_max_mb": 8926.7
+    },
+    {
+      "n_active_persons": 4,
+      "total_batch_ms": {
+        "avg": 87.705,
+        "p50": 92.578,
+        "p95": 95.51,
+        "p99": 96.02,
+        "max": 96.02,
+        "n": 50
+      },
+      "per_person_ms": 21.926,
+      "gpu_util_avg": 7.4,
+      "vram_max_mb": 8850.8
+    },
+    {
+      "n_active_persons": 8,
+      "total_batch_ms": {
+        "avg": 147.496,
+        "p50": 145.165,
+        "p95": 186.152,
+        "p99": 190.527,
+        "max": 190.527,
+        "n": 50
+      },
+      "per_person_ms": 18.437,
+      "gpu_util_avg": 8.5,
+      "vram_max_mb": 8802.8
+    },
+    {
+      "n_active_persons": 12,
+      "total_batch_ms": {
+        "avg": 237.599,
+        "p50": 239.7,
+        "p95": 263.917,
+        "p99": 278.769,
+        "max": 278.769,
+        "n": 50
+      },
+      "per_person_ms": 19.8,
+      "gpu_util_avg": 7.6,
+      "vram_max_mb": 8779.6
+    }
+  ],
+  "reid_frequency": [
+    {
+      "interval": 5,
+      "extractions_per_10s": 60,
+      "extraction_latency_ms": {
+        "avg": 23.065,
+        "p50": 24.225,
+        "p95": 25.228,
+        "p99": 108.536,
+        "max": 108.536,
+        "n": 50
+      },
+      "compute_budget_pct": 13.84,
+      "embedding_stability": {
+        "mean": 1.0,
+        "min": 1.0,
+        "std": 0.0
+      }
+    },
+    {
+      "interval": 10,
+      "extractions_per_10s": 30,
+      "extraction_latency_ms": {
+        "avg": 19.945,
+        "p50": 23.819,
+        "p95": 25.583,
+        "p99": 26.341,
+        "max": 26.341,
+        "n": 30
+      },
+      "compute_budget_pct": 5.98,
+      "embedding_stability": {
+        "mean": 1.0,
+        "min": 1.0,
+        "std": 0.0
+      }
+    },
+    {
+      "interval": 15,
+      "extractions_per_10s": 20,
+      "extraction_latency_ms": {
+        "avg": 20.034,
+        "p50": 20.882,
+        "p95": 24.974,
+        "p99": 24.974,
+        "max": 24.974,
+        "n": 20
+      },
+      "compute_budget_pct": 4.01,
+      "embedding_stability": {
+        "mean": 1.0,
+        "min": 1.0,
+        "std": 0.0
+      }
+    },
+    {
+      "interval": 20,
+      "extractions_per_10s": 15,
+      "extraction_latency_ms": {
+        "avg": 18.602,
+        "p50": 16.066,
+        "p95": 25.193,
+        "p99": 25.193,
+        "max": 25.193,
+        "n": 15
+      },
+      "compute_budget_pct": 2.79,
+      "embedding_stability": {
+        "mean": 1.0,
+        "min": 1.0,
+        "std": 0.0
+      }
+    }
+  ],
+  "temporal_stability": {
+    "n_probes": 50,
+    "drift_mean": 0.0704,
+    "drift_max": 0.2694,
+    "drift_std": 0.0521,
+    "best_sim_mean": 0.7476,
+    "worst_sim_mean": 0.6772,
+    "stable": true,
+    "detail_samples": [
+      {
+        "probe_idx": 0,
+        "probe_height": "634",
+        "best_sim": 0.6055,
+        "worst_sim": 0.5959,
+        "mean_sim": 0.6004,
+        "drift": 0.0096,
+        "n_matches": 5
+      },
+      {
+        "probe_idx": 1,
+        "probe_height": "552",
+        "best_sim": 0.6612,
+        "worst_sim": 0.6312,
+        "mean_sim": 0.6463,
+        "drift": 0.0299,
+        "n_matches": 5
+      },
+      {
+        "probe_idx": 2,
+        "probe_height": "516",
+        "best_sim": 0.8159,
+        "worst_sim": 0.7866,
+        "mean_sim": 0.8002,
+        "drift": 0.0293,
+        "n_matches": 5
+      },
+      {
+        "probe_idx": 3,
+        "probe_height": "367",
+        "best_sim": 0.9206,
+        "worst_sim": 0.6512,
+        "mean_sim": 0.7175,
+        "drift": 0.2694,
+        "n_matches": 5
+      },
+      {
+        "probe_idx": 4,
+        "probe_height": "144",
+        "best_sim": 0.65,
+        "worst_sim": 0.5841,
+        "mean_sim": 0.6122,
+        "drift": 0.0658,
+        "n_matches": 5
+      },
+      {
+        "probe_idx": 5,
+        "probe_height": "434",
+        "best_sim": 0.7461,
+        "worst_sim": 0.6663,
+        "mean_sim": 0.6924,
+        "drift": 0.0799,
+        "n_matches": 5
+      },
+      {
+        "probe_idx": 6,
+        "probe_height": "286",
+        "best_sim": 0.7131,
+        "worst_sim": 0.6159,
+        "mean_sim": 0.6536,
+        "drift": 0.0972,
+        "n_matches": 5
+      },
+      {
+        "probe_idx": 7,
+        "probe_height": "658",
+        "best_sim": 0.682,
+        "worst_sim": 0.6013,
+        "mean_sim": 0.6374,
+        "drift": 0.0807,
+        "n_matches": 5
+      },
+      {
+        "probe_idx": 8,
+        "probe_height": "280",
+        "best_sim": 0.7549,
+        "worst_sim": 0.7058,
+        "mean_sim": 0.7248,
+        "drift": 0.0491,
+        "n_matches": 5
+      },
+      {
+        "probe_idx": 9,
+        "probe_height": "189",
+        "best_sim": 0.7869,
+        "worst_sim": 0.7265,
+        "mean_sim": 0.7504,
+        "drift": 0.0604,
+        "n_matches": 5
+      }
+    ]
+  }
+}

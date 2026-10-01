@@ -1,0 +1,146 @@
+{
+  "video_metadata": {
+    "file": "synth_people_720p.mp4",
+    "resolution": "1280x720",
+    "fps": 25.0,
+    "total_frames": 1520,
+    "duration_sec": 60.8
+  },
+  "experiments": [
+    {
+      "config": {
+        "name": "production_defaults",
+        "track_thresh": 0.5,
+        "track_buffer": 90,
+        "match_thresh": 0.8
+      },
+      "frames_processed": 500,
+      "total_unique_track_ids": 84,
+      "total_track_creations": 150,
+      "fragmented_tracks_lt5": 12,
+      "fragmentation_rate": 0.143,
+      "track_lifetime_stats": {
+        "avg": 31.9,
+        "median": 40.0,
+        "min": 1,
+        "max": 144,
+        "p25": 14.8,
+        "p75": 40.0
+      },
+      "active_tracks_per_frame": {
+        "avg": 5.4,
+        "max": 12,
+        "min": 1
+      },
+      "new_tracks_per_frame_avg": 0.3,
+      "lost_tracks_per_frame_avg": 0.29,
+      "detection_timing_ms": {
+        "avg": 9.191,
+        "p50": 6.429,
+        "p95": 7.968,
+        "p99": 11.923,
+        "max": 1289.254,
+        "n": 500
+      },
+      "tracking_timing_ms": {
+        "avg": 0.132,
+        "p50": 0.124,
+        "p95": 0.186,
+        "p99": 0.249,
+        "max": 1.465,
+        "n": 500
+      },
+      "tracking_fps": 107.3
+    },
+    {
+      "config": {
+        "name": "longer_buffer",
+        "track_thresh": 0.5,
+        "track_buffer": 150,
+        "match_thresh": 0.8
+      },
+      "frames_processed": 500,
+      "total_unique_track_ids": 84,
+      "total_track_creations": 150,
+      "fragmented_tracks_lt5": 12,
+      "fragmentation_rate": 0.143,
+      "track_lifetime_stats": {
+        "avg": 31.9,
+        "median": 40.0,
+        "min": 1,
+        "max": 144,
+        "p25": 14.8,
+        "p75": 40.0
+      },
+      "active_tracks_per_frame": {
+        "avg": 5.4,
+        "max": 12,
+        "min": 1
+      },
+      "new_tracks_per_frame_avg": 0.3,
+      "lost_tracks_per_frame_avg": 0.29,
+      "detection_timing_ms": {
+        "avg": 6.501,
+        "p50": 6.361,
+        "p95": 7.618,
+        "p99": 9.071,
+        "max": 10.98,
+        "n": 500
+      },
+      "tracking_timing_ms": {
+        "avg": 0.156,
+        "p50": 0.155,
+        "p95": 0.239,
+        "p99": 0.255,
+        "max": 0.271,
+        "n": 500
+      },
+      "tracking_fps": 150.2
+    },
+    {
+      "config": {
+        "name": "lower_thresh",
+        "track_thresh": 0.35,
+        "track_buffer": 90,
+        "match_thresh": 0.8
+      },
+      "frames_processed": 500,
+      "total_unique_track_ids": 135,
+      "total_track_creations": 280,
+      "fragmented_tracks_lt5": 53,
+      "fragmentation_rate": 0.393,
+      "track_lifetime_stats": {
+        "avg": 21.5,
+        "median": 13.0,
+        "min": 1,
+        "max": 158,
+        "p25": 2.5,
+        "p75": 40.0
+      },
+      "active_tracks_per_frame": {
+        "avg": 5.8,
+        "max": 13,
+        "min": 1
+      },
+      "new_tracks_per_frame_avg": 0.56,
+      "lost_tracks_per_frame_avg": 0.55,
+      "detection_timing_ms": {
+        "avg": 6.475,
+        "p50": 6.352,
+        "p95": 7.387,
+        "p99": 8.871,
+        "max": 10.897,
+        "n": 500
+      },
+      "tracking_timing_ms": {
+        "avg": 0.147,
+        "p50": 0.14,
+        "p95": 0.214,
+        "p99": 0.243,
+        "max": 0.337,
+        "n": 500
+      },
+      "tracking_fps": 151.0
+    }
+  ]
+}

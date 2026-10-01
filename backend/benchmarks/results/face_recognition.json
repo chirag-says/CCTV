@@ -1,0 +1,140 @@
+{
+  "test_metadata": {
+    "n_frames": 200,
+    "det_size": 1024,
+    "gallery_size": 116,
+    "gallery_persons": 25
+  },
+  "timing": {
+    "detection_ms": {
+      "avg": 33.234,
+      "p50": 31.905,
+      "p95": 46.115,
+      "p99": 52.748,
+      "max": 64.708,
+      "n": 200
+    },
+    "recognition_ms": {
+      "avg": 0.077,
+      "p50": 0.055,
+      "p95": 0.137,
+      "p99": 0.193,
+      "max": 0.234,
+      "n": 585
+    }
+  },
+  "recognition_gate_analysis": {
+    "50": {
+      "total_faces": 585,
+      "passes_gate": 260,
+      "rejected_by_gate": 325,
+      "matched": 48,
+      "unknown_after_recog": 212,
+      "match_rate": 0.185,
+      "gate_rejection_rate": 0.556,
+      "avg_distance": 0.4977,
+      "avg_margin": 0.2281
+    },
+    "60": {
+      "total_faces": 585,
+      "passes_gate": 210,
+      "rejected_by_gate": 375,
+      "matched": 35,
+      "unknown_after_recog": 175,
+      "match_rate": 0.167,
+      "gate_rejection_rate": 0.641,
+      "avg_distance": 0.4854,
+      "avg_margin": 0.229
+    },
+    "70": {
+      "total_faces": 585,
+      "passes_gate": 179,
+      "rejected_by_gate": 406,
+      "matched": 28,
+      "unknown_after_recog": 151,
+      "match_rate": 0.156,
+      "gate_rejection_rate": 0.694,
+      "avg_distance": 0.4903,
+      "avg_margin": 0.218
+    },
+    "80": {
+      "total_faces": 585,
+      "passes_gate": 148,
+      "rejected_by_gate": 437,
+      "matched": 23,
+      "unknown_after_recog": 125,
+      "match_rate": 0.155,
+      "gate_rejection_rate": 0.747,
+      "avg_distance": 0.4936,
+      "avg_margin": 0.208
+    },
+    "90": {
+      "total_faces": 585,
+      "passes_gate": 116,
+      "rejected_by_gate": 469,
+      "matched": 21,
+      "unknown_after_recog": 95,
+      "match_rate": 0.181,
+      "gate_rejection_rate": 0.802,
+      "avg_distance": 0.4957,
+      "avg_margin": 0.2088
+    },
+    "100": {
+      "total_faces": 585,
+      "passes_gate": 97,
+      "rejected_by_gate": 488,
+      "matched": 18,
+      "unknown_after_recog": 79,
+      "match_rate": 0.186,
+      "gate_rejection_rate": 0.834,
+      "avg_distance": 0.5,
+      "avg_margin": 0.1905
+    },
+    "120": {
+      "total_faces": 585,
+      "passes_gate": 62,
+      "rejected_by_gate": 523,
+      "matched": 8,
+      "unknown_after_recog": 54,
+      "match_rate": 0.129,
+      "gate_rejection_rate": 0.894,
+      "avg_distance": 0.5046,
+      "avg_margin": 0.1659
+    }
+  },
+  "temporal_analysis": {
+    "security 4": {
+      "n_observations": 11,
+      "best_single_distance": 0.3642,
+      "worst_single_distance": 0.5974,
+      "avg_distance": 0.465,
+      "distance_std": 0.0603,
+      "avg_margin": 0.2102
+    },
+    "security 2": {
+      "n_observations": 52,
+      "best_single_distance": 0.3151,
+      "worst_single_distance": 0.6179,
+      "avg_distance": 0.5172,
+      "distance_std": 0.0654,
+      "avg_margin": 0.2216
+    },
+    "lab": {
+      "n_observations": 4,
+      "best_single_distance": 0.4785,
+      "worst_single_distance": 0.5895,
+      "avg_distance": 0.5239,
+      "distance_std": 0.0408,
+      "avg_margin": 0.2504
+    },
+    "Chirag": {
+      "n_observations": 8,
+      "best_single_distance": 0.3534,
+      "worst_single_distance": 0.6134,
+      "avg_distance": 0.4896,
+      "distance_std": 0.0867,
+      "avg_margin": 0.2757
+    }
+  },
+  "total_faces_analyzed": 585
+}

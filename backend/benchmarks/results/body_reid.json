@@ -1,0 +1,97 @@
+{
+  "test_metadata": {
+    "n_frames": 100,
+    "n_crops": 285,
+    "gpu": {
+      "gpu_name": "NVIDIA GeForce RTX 5070",
+      "vram_used_mb": 1370.4,
+      "vram_total_mb": 12227.0,
+      "gpu_util_pct": 0,
+      "mem_util_pct": 0
+    }
+  },
+  "experiments": {
+    "current_resnet50_imagenet": {
+      "model": "current_resnet50_imagenet",
+      "feat_dim": 2048,
+      "n_crops": 285,
+      "single_extract_ms": {
+        "avg": 6.886,
+        "p50": 6.136,
+        "p95": 10.1,
+        "p99": 10.747,
+        "max": 10.931,
+        "n": 285
+      },
+      "batch_extract_ms": {
+        "avg": 16.623,
+        "p50": 17.159,
+        "p95": 21.338,
+        "p99": 25.823,
+        "max": 25.823,
+        "n": 36
+      },
+      "batch_size": 8,
+      "per_crop_batch_ms": 2.078,
+      "gpu_stats": {
+        "gpu_util_avg": 18.2,
+        "gpu_util_max": 26,
+        "vram_avg_mb": 1402.6,
+        "vram_max_mb": 1440.5,
+        "n_samples": 11
+      },
+      "similarity_distribution": {
+        "mean": 0.4188,
+        "std": 0.1201,
+        "min": 0.0547,
+        "max": 0.8926,
+        "p10": 0.2669,
+        "p25": 0.3352,
+        "p50": 0.4152,
+        "p75": 0.5022,
+        "p90": 0.5786
+      }
+    },
+    "osnet_x1_0": {
+      "model": "osnet_x1_0",
+      "feat_dim": 512,
+      "n_crops": 285,
+      "single_extract_ms": {
+        "avg": 3.672,
+        "p50": 3.927,
+        "p95": 5.444,
+        "p99": 6.128,
+        "max": 7.206,
+        "n": 285
+      },
+      "batch_extract_ms": {
+        "avg": 10.505,
+        "p50": 10.092,
+        "p95": 16.741,
+        "p99": 17.054,
+        "max": 17.054,
+        "n": 36
+      },
+      "batch_size": 8,
+      "per_crop_batch_ms": 1.313,
+      "gpu_stats": {
+        "gpu_util_avg": 20.3,
+        "gpu_util_max": 24,
+        "vram_avg_mb": 1438.4,
+        "vram_max_mb": 1440.5,
+        "n_samples": 6
+      },
+      "similarity_distribution": {
+        "mean": 0.6589,
+        "std": 0.0685,
+        "min": 0.2971,
+        "max": 0.9304,
+        "p10": 0.5736,
+        "p25": 0.614,
+        "p50": 0.6586,
+        "p75": 0.7049,
+        "p90": 0.7468
+      }
+    }
+  }
+}

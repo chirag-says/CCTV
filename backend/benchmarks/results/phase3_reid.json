@@ -1,0 +1,1138 @@
+{
+  "metadata": {
+    "timestamp": "2026-09-30T11:21:54.321521",
+    "n_frames": 300,
+    "n_crops": 500,
+    "gpu": {
+      "gpu_name": "NVIDIA GeForce RTX 5070",
+      "vram_used_mb": 1580.8,
+      "vram_total_mb": 12227.0,
+      "gpu_util_pct": 0,
+      "mem_util_pct": 0
+    },
+    "cpu": {
+      "cpu_pct": 2705.0,
+      "ram_mb": 5901.8,
+      "system_cpu_pct": 40.4
+    },
+    "device": "cuda"
+  },
+  "crop_quality": {
+    "total_crops": 500,
+    "height_distribution": {
+      "min": 64,
+      "max": 982,
+      "mean": 418.4,
+      "median": 375.5,
+      "p25": 221.0,
+      "p75": 596.2
+    },
+    "aspect_ratio_distribution": {
+      "min": 0.43,
+      "max": 5.98,
+      "mean": 2.3,
+      "median": 2.38
+    },
+    "very_small": 2,
+    "small": 19,
+    "medium": 135,
+    "large": 344,
+    "narrow_aspect": 21,
+    "wide_aspect": 87
+  },
+  "models": {
+    "resnet50_imagenet": {
+      "model_info": {
+        "name": "resnet50_imagenet",
+        "training": "ImageNet classification (NOT person-ReID)",
+        "feat_dim": 2048,
+        "input_size": [
+          256,
+          128
+        ],
+        "distance": "cosine",
+        "license": "BSD-3-Clause (torchvision)",
+        "param_count": 23508032
+      },
+      "latency": {
+        "single_ms": {
+          "avg": 7.708,
+          "p50": 8.753,
+          "p95": 10.916,
+          "p99": 11.972,
+          "max": 12.195,
+          "n": 500
+        },
+        "batch_4": {
+          "avg": 11.519,
+          "p50": 11.623,
+          "p95": 15.866,
+          "p99": 23.741,
+          "max": 33.109,
+          "n": 125,
+          "per_crop_ms": 2.88
+        },
+        "batch_8": {
+          "avg": 13.837,
+          "p50": 13.381,
+          "p95": 20.589,
+          "p99": 25.102,
+          "max": 25.102,
+          "n": 63,
+          "per_crop_ms": 1.73
+        },
+        "batch_16": {
+          "avg": 24.491,
+          "p50": 24.752,
+          "p95": 34.025,
+          "p99": 41.7,
+          "max": 41.7,
+          "n": 32,
+          "per_crop_ms": 1.531
+        }
+      },
+      "gpu": {
+        "gpu_util_avg": 59.0,
+        "gpu_util_max": 98,
+        "vram_avg_mb": 6908.0,
+        "vram_max_mb": 8540.0,
+        "n_samples": 56
+      },
+      "similarity_distribution": {
+        "all_pairs": {
+          "mean": 0.4159,
+          "std": 0.121,
+          "min": 0.0596,
+          "max": 0.9203,
+          "p5": 0.2271,
+          "p10": 0.2626,
+          "p25": 0.3274,
+          "p50": 0.4089,
+          "p75": 0.5011,
+          "p90": 0.5804,
+          "p95": 0.6237,
+          "n_pairs": 124750
+        }
+      },
+      "identity_separation": {
+        "same_frame_different_person": {
+          "n_pairs": 354,
+          "mean": 0.4571,
+          "std": 0.1452,
+          "min": 0.131,
+          "max": 0.7806,
+          "p50": 0.4575,
+          "p95": 0.7038
+        },
+        "high_confidence_same_person_proxy": {
+          "n_pairs": 6220,
+          "mean": 0.667,
+          "std": 0.0364,
+          "min": 0.6234,
+          "max": 0.9203
+        },
+        "separation_gap": -0.0804
+      },
+      "embedding_analysis": {
+        "l2_norm_mean": 1.0,
+        "l2_norm_std": 0.0,
+        "l2_norm_min": 1.0,
+        "l2_norm_max": 1.0,
+        "properly_normalized": true
+      },
+      "crop_padding_impact": {
+        "mean_similarity": 0.7701,
+        "std_similarity": 0.0724,
+        "min_similarity": 0.52,
+        "max_similarity": 0.9429,
+        "avg_drop_pct": 22.99
+      },
+      "threshold_calibration": {
+        "best_f1_threshold": 0.6173,
+        "best_f1": 0.9954,
+        "best_precision": 0.9909,
+        "best_recall": 1.0,
+        "eer_threshold": 0.6333,
+        "eer_fpr": 0.1271,
+        "eer_fnr": 0.1733,
+        "sweep": [
+          {
+            "threshold": 0.131,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 354,
+            "tn": 0,
+            "precision": 0.9462,
+            "recall": 1.0,
+            "fpr": 1.0,
+            "fnr": 0.0,
+            "f1": 0.9723
+          },
+          {
+            "threshold": 0.1709,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 352,
+            "tn": 2,
+            "precision": 0.9464,
+            "recall": 1.0,
+            "fpr": 0.9944,
+            "fnr": 0.0,
+            "f1": 0.9725
+          },
+          {
+            "threshold": 0.2108,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 342,
+            "tn": 12,
+            "precision": 0.9479,
+            "recall": 1.0,
+            "fpr": 0.9661,
+            "fnr": 0.0,
+            "f1": 0.9732
+          },
+          {
+            "threshold": 0.2506,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 323,
+            "tn": 31,
+            "precision": 0.9506,
+            "recall": 1.0,
+            "fpr": 0.9124,
+            "fnr": 0.0,
+            "f1": 0.9747
+          },
+          {
+            "threshold": 0.2905,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 299,
+            "tn": 55,
+            "precision": 0.9541,
+            "recall": 1.0,
+            "fpr": 0.8446,
+            "fnr": 0.0,
+            "f1": 0.9765
+          },
+          {
+            "threshold": 0.3303,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 270,
+            "tn": 84,
+            "precision": 0.9584,
+            "recall": 1.0,
+            "fpr": 0.7627,
+            "fnr": 0.0,
+            "f1": 0.9788
+          },
+          {
+            "threshold": 0.3702,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 248,
+            "tn": 106,
+            "precision": 0.9617,
+            "recall": 1.0,
+            "fpr": 0.7006,
+            "fnr": 0.0,
+            "f1": 0.9805
+          },
+          {
+            "threshold": 0.4101,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 219,
+            "tn": 135,
+            "precision": 0.966,
+            "recall": 1.0,
+            "fpr": 0.6186,
+            "fnr": 0.0,
+            "f1": 0.9827
+          },
+          {
+            "threshold": 0.4499,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 182,
+            "tn": 172,
+            "precision": 0.9716,
+            "recall": 1.0,
+            "fpr": 0.5141,
+            "fnr": 0.0,
+            "f1": 0.9856
+          },
+          {
+            "threshold": 0.4898,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 148,
+            "tn": 206,
+            "precision": 0.9768,
+            "recall": 1.0,
+            "fpr": 0.4181,
+            "fnr": 0.0,
+            "f1": 0.9882
+          },
+          {
+            "threshold": 0.5296,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 114,
+            "tn": 240,
+            "precision": 0.982,
+            "recall": 1.0,
+            "fpr": 0.322,
+            "fnr": 0.0,
+            "f1": 0.9909
+          },
+          {
+            "threshold": 0.5695,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 86,
+            "tn": 268,
+            "precision": 0.9864,
+            "recall": 1.0,
+            "fpr": 0.2429,
+            "fnr": 0.0,
+            "f1": 0.9931
+          },
+          {
+            "threshold": 0.6094,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 60,
+            "tn": 294,
+            "precision": 0.9904,
+            "recall": 1.0,
+            "fpr": 0.1695,
+            "fnr": 0.0,
+            "f1": 0.9952
+          },
+          {
+            "threshold": 0.6492,
+            "tp": 3738,
+            "fn": 2482,
+            "fp": 36,
+            "tn": 318,
+            "precision": 0.9905,
+            "recall": 0.601,
+            "fpr": 0.1017,
+            "fnr": 0.399,
+            "f1": 0.748
+          },
+          {
+            "threshold": 0.6891,
+            "tp": 1444,
+            "fn": 4776,
+            "fp": 24,
+            "tn": 330,
+            "precision": 0.9837,
+            "recall": 0.2322,
+            "fpr": 0.0678,
+            "fnr": 0.7678,
+            "f1": 0.3757
+          },
+          {
+            "threshold": 0.7289,
+            "tp": 429,
+            "fn": 5791,
+            "fp": 9,
+            "tn": 345,
+            "precision": 0.9795,
+            "recall": 0.069,
+            "fpr": 0.0254,
+            "fnr": 0.931,
+            "f1": 0.1289
+          },
+          {
+            "threshold": 0.7688,
+            "tp": 90,
+            "fn": 6130,
+            "fp": 1,
+            "tn": 353,
+            "precision": 0.989,
+            "recall": 0.0145,
+            "fpr": 0.0028,
+            "fnr": 0.9855,
+            "f1": 0.0285
+          },
+          {
+            "threshold": 0.8086,
+            "tp": 21,
+            "fn": 6199,
+            "fp": 0,
+            "tn": 354,
+            "precision": 1.0,
+            "recall": 0.0034,
+            "fpr": 0.0,
+            "fnr": 0.9966,
+            "f1": 0.0067
+          },
+          {
+            "threshold": 0.8485,
+            "tp": 7,
+            "fn": 6213,
+            "fp": 0,
+            "tn": 354,
+            "precision": 1.0,
+            "recall": 0.0011,
+            "fpr": 0.0,
+            "fnr": 0.9989,
+            "f1": 0.0022
+          },
+          {
+            "threshold": 0.8884,
+            "tp": 1,
+            "fn": 6219,
+            "fp": 0,
+            "tn": 354,
+            "precision": 1.0,
+            "recall": 0.0002,
+            "fpr": 0.0,
+            "fnr": 0.9998,
+            "f1": 0.0003
+          }
+        ]
+      }
+    },
+    "osnet_x1_0_market1501": {
+      "model_info": {
+        "name": "osnet_x1_0_market1501",
+        "training": "Market-1501 person ReID (triplet+softmax, 751 identities)",
+        "feat_dim": 512,
+        "input_size": [
+          256,
+          128
+        ],
+        "distance": "cosine",
+        "license": "MIT (torchreid)",
+        "param_count": 2170021
+      },
+      "latency": {
+        "single_ms": {
+          "avg": 21.832,
+          "p50": 21.053,
+          "p95": 28.227,
+          "p99": 128.345,
+          "max": 183.08,
+          "n": 500
+        },
+        "batch_4": {
+          "avg": 20.452,
+          "p50": 22.579,
+          "p95": 27.659,
+          "p99": 31.99,
+          "max": 41.456,
+          "n": 125,
+          "per_crop_ms": 5.113
+        },
+        "batch_8": {
+          "avg": 24.261,
+          "p50": 24.234,
+          "p95": 33.09,
+          "p99": 34.257,
+          "max": 34.257,
+          "n": 63,
+          "per_crop_ms": 3.033
+        },
+        "batch_16": {
+          "avg": 35.666,
+          "p50": 39.119,
+          "p95": 49.701,
+          "p99": 50.209,
+          "max": 50.209,
+          "n": 32,
+          "per_crop_ms": 2.229
+        }
+      },
+      "gpu": {
+        "gpu_util_avg": 10.3,
+        "gpu_util_max": 28,
+        "vram_avg_mb": 8799.2,
+        "vram_max_mb": 8936.4,
+        "n_samples": 99
+      },
+      "similarity_distribution": {
+        "all_pairs": {
+          "mean": 0.5498,
+          "std": 0.0907,
+          "min": 0.2684,
+          "max": 0.972,
+          "p5": 0.4158,
+          "p10": 0.4401,
+          "p25": 0.4851,
+          "p50": 0.542,
+          "p75": 0.6064,
+          "p90": 0.6695,
+          "p95": 0.7098,
+          "n_pairs": 124750
+        }
+      },
+      "identity_separation": {
+        "same_frame_different_person": {
+          "n_pairs": 354,
+          "mean": 0.5871,
+          "std": 0.0993,
+          "min": 0.3733,
+          "max": 0.9245,
+          "p50": 0.5778,
+          "p95": 0.7716
+        },
+        "high_confidence_same_person_proxy": {
+          "n_pairs": 6220,
+          "mean": 0.7621,
+          "std": 0.0478,
+          "min": 0.7096,
+          "max": 0.972
+        },
+        "separation_gap": -0.062
+      },
+      "embedding_analysis": {
+        "l2_norm_mean": 1.0,
+        "l2_norm_std": 0.0,
+        "l2_norm_min": 1.0,
+        "l2_norm_max": 1.0,
+        "properly_normalized": true
+      },
+      "crop_padding_impact": {
+        "mean_similarity": 0.868,
+        "std_similarity": 0.0464,
+        "min_similarity": 0.7238,
+        "max_similarity": 0.9736,
+        "avg_drop_pct": 13.2
+      },
+      "threshold_calibration": {
+        "best_f1_threshold": 0.7059,
+        "best_f1": 0.9969,
+        "best_precision": 0.9938,
+        "best_recall": 1.0,
+        "eer_threshold": 0.718,
+        "eer_fpr": 0.096,
+        "eer_fnr": 0.1453,
+        "sweep": [
+          {
+            "threshold": 0.3733,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 354,
+            "tn": 0,
+            "precision": 0.9462,
+            "recall": 1.0,
+            "fpr": 1.0,
+            "fnr": 0.0,
+            "f1": 0.9723
+          },
+          {
+            "threshold": 0.4036,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 348,
+            "tn": 6,
+            "precision": 0.947,
+            "recall": 1.0,
+            "fpr": 0.9831,
+            "fnr": 0.0,
+            "f1": 0.9728
+          },
+          {
+            "threshold": 0.4338,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 340,
+            "tn": 14,
+            "precision": 0.9482,
+            "recall": 1.0,
+            "fpr": 0.9605,
+            "fnr": 0.0,
+            "f1": 0.9734
+          },
+          {
+            "threshold": 0.464,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 322,
+            "tn": 32,
+            "precision": 0.9508,
+            "recall": 1.0,
+            "fpr": 0.9096,
+            "fnr": 0.0,
+            "f1": 0.9748
+          },
+          {
+            "threshold": 0.4943,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 293,
+            "tn": 61,
+            "precision": 0.955,
+            "recall": 1.0,
+            "fpr": 0.8277,
+            "fnr": 0.0,
+            "f1": 0.977
+          },
+          {
+            "threshold": 0.5245,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 257,
+            "tn": 97,
+            "precision": 0.9603,
+            "recall": 1.0,
+            "fpr": 0.726,
+            "fnr": 0.0,
+            "f1": 0.9798
+          },
+          {
+            "threshold": 0.5547,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 211,
+            "tn": 143,
+            "precision": 0.9672,
+            "recall": 1.0,
+            "fpr": 0.596,
+            "fnr": 0.0,
+            "f1": 0.9833
+          },
+          {
+            "threshold": 0.585,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 162,
+            "tn": 192,
+            "precision": 0.9746,
+            "recall": 1.0,
+            "fpr": 0.4576,
+            "fnr": 0.0,
+            "f1": 0.9871
+          },
+          {
+            "threshold": 0.6152,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 128,
+            "tn": 226,
+            "precision": 0.9798,
+            "recall": 1.0,
+            "fpr": 0.3616,
+            "fnr": 0.0,
+            "f1": 0.9898
+          },
+          {
+            "threshold": 0.6454,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 93,
+            "tn": 261,
+            "precision": 0.9853,
+            "recall": 1.0,
+            "fpr": 0.2627,
+            "fnr": 0.0,
+            "f1": 0.9926
+          },
+          {
+            "threshold": 0.6757,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 59,
+            "tn": 295,
+            "precision": 0.9906,
+            "recall": 1.0,
+            "fpr": 0.1667,
+            "fnr": 0.0,
+            "f1": 0.9953
+          },
+          {
+            "threshold": 0.7059,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 39,
+            "tn": 315,
+            "precision": 0.9938,
+            "recall": 1.0,
+            "fpr": 0.1102,
+            "fnr": 0.0,
+            "f1": 0.9969
+          },
+          {
+            "threshold": 0.7361,
+            "tp": 3855,
+            "fn": 2365,
+            "fp": 28,
+            "tn": 326,
+            "precision": 0.9928,
+            "recall": 0.6198,
+            "fpr": 0.0791,
+            "fnr": 0.3802,
+            "f1": 0.7631
+          },
+          {
+            "threshold": 0.7664,
+            "tp": 2194,
+            "fn": 4026,
+            "fp": 20,
+            "tn": 334,
+            "precision": 0.991,
+            "recall": 0.3527,
+            "fpr": 0.0565,
+            "fnr": 0.6473,
+            "f1": 0.5203
+          },
+          {
+            "threshold": 0.7966,
+            "tp": 1272,
+            "fn": 4948,
+            "fp": 11,
+            "tn": 343,
+            "precision": 0.9914,
+            "recall": 0.2045,
+            "fpr": 0.0311,
+            "fnr": 0.7955,
+            "f1": 0.3391
+          },
+          {
+            "threshold": 0.8268,
+            "tp": 700,
+            "fn": 5520,
+            "fp": 5,
+            "tn": 349,
+            "precision": 0.9929,
+            "recall": 0.1125,
+            "fpr": 0.0141,
+            "fnr": 0.8875,
+            "f1": 0.2022
+          },
+          {
+            "threshold": 0.8571,
+            "tp": 369,
+            "fn": 5851,
+            "fp": 4,
+            "tn": 350,
+            "precision": 0.9893,
+            "recall": 0.0593,
+            "fpr": 0.0113,
+            "fnr": 0.9407,
+            "f1": 0.1119
+          },
+          {
+            "threshold": 0.8873,
+            "tp": 145,
+            "fn": 6075,
+            "fp": 3,
+            "tn": 351,
+            "precision": 0.9797,
+            "recall": 0.0233,
+            "fpr": 0.0085,
+            "fnr": 0.9767,
+            "f1": 0.0455
+          },
+          {
+            "threshold": 0.9175,
+            "tp": 49,
+            "fn": 6171,
+            "fp": 1,
+            "tn": 353,
+            "precision": 0.98,
+            "recall": 0.0079,
+            "fpr": 0.0028,
+            "fnr": 0.9921,
+            "f1": 0.0156
+          },
+          {
+            "threshold": 0.9478,
+            "tp": 8,
+            "fn": 6212,
+            "fp": 0,
+            "tn": 354,
+            "precision": 1.0,
+            "recall": 0.0013,
+            "fpr": 0.0,
+            "fnr": 0.9987,
+            "f1": 0.0026
+          }
+        ]
+      }
+    },
+    "osnet_x1_0_msmt17": {
+      "model_info": {
+        "name": "osnet_x1_0_msmt17",
+        "training": "MSMT17 person ReID (combineall, 4,101 identities, 15 cameras)",
+        "feat_dim": 512,
+        "input_size": [
+          256,
+          128
+        ],
+        "distance": "cosine",
+        "license": "MIT (torchreid)",
+        "param_count": 2170021
+      },
+      "latency": {
+        "single_ms": {
+          "avg": 17.106,
+          "p50": 18.203,
+          "p95": 23.166,
+          "p99": 24.366,
+          "max": 27.109,
+          "n": 500
+        },
+        "batch_4": {
+          "avg": 20.008,
+          "p50": 19.863,
+          "p95": 27.729,
+          "p99": 28.582,
+          "max": 32.07,
+          "n": 125,
+          "per_crop_ms": 5.002
+        },
+        "batch_8": {
+          "avg": 25.06,
+          "p50": 26.145,
+          "p95": 32.551,
+          "p99": 36.504,
+          "max": 36.504,
+          "n": 63,
+          "per_crop_ms": 3.132
+        },
+        "batch_16": {
+          "avg": 35.279,
+          "p50": 37.6,
+          "p95": 44.889,
+          "p99": 49.141,
+          "max": 49.141,
+          "n": 32,
+          "per_crop_ms": 2.205
+        }
+      },
+      "gpu": {
+        "gpu_util_avg": 11.2,
+        "gpu_util_max": 20,
+        "vram_avg_mb": 8937.1,
+        "vram_max_mb": 8945.5,
+        "n_samples": 90
+      },
+      "similarity_distribution": {
+        "all_pairs": {
+          "mean": 0.3753,
+          "std": 0.0986,
+          "min": 0.1424,
+          "max": 0.9461,
+          "p5": 0.2472,
+          "p10": 0.268,
+          "p25": 0.3076,
+          "p50": 0.3593,
+          "p75": 0.4235,
+          "p90": 0.5007,
+          "p95": 0.5602,
+          "n_pairs": 124750
+        }
+      },
+      "identity_separation": {
+        "same_frame_different_person": {
+          "n_pairs": 354,
+          "mean": 0.4019,
+          "std": 0.1117,
+          "min": 0.2121,
+          "max": 0.8911,
+          "p50": 0.3812,
+          "p95": 0.6157
+        },
+        "high_confidence_same_person_proxy": {
+          "n_pairs": 6220,
+          "mean": 0.6457,
+          "std": 0.0738,
+          "min": 0.56,
+          "max": 0.9461
+        },
+        "separation_gap": -0.0556
+      },
+      "embedding_analysis": {
+        "l2_norm_mean": 1.0,
+        "l2_norm_std": 0.0,
+        "l2_norm_min": 1.0,
+        "l2_norm_max": 1.0,
+        "properly_normalized": true
+      },
+      "crop_padding_impact": {
+        "mean_similarity": 0.7925,
+        "std_similarity": 0.0854,
+        "min_similarity": 0.42,
+        "max_similarity": 0.946,
+        "avg_drop_pct": 20.75
+      },
+      "threshold_calibration": {
+        "best_f1_threshold": 0.5532,
+        "best_f1": 0.9973,
+        "best_precision": 0.9946,
+        "best_recall": 1.0,
+        "eer_threshold": 0.568,
+        "eer_fpr": 0.0847,
+        "eer_fnr": 0.0897,
+        "sweep": [
+          {
+            "threshold": 0.2121,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 354,
+            "tn": 0,
+            "precision": 0.9462,
+            "recall": 1.0,
+            "fpr": 1.0,
+            "fnr": 0.0,
+            "f1": 0.9723
+          },
+          {
+            "threshold": 0.2492,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 343,
+            "tn": 11,
+            "precision": 0.9477,
+            "recall": 1.0,
+            "fpr": 0.9689,
+            "fnr": 0.0,
+            "f1": 0.9732
+          },
+          {
+            "threshold": 0.2862,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 315,
+            "tn": 39,
+            "precision": 0.9518,
+            "recall": 1.0,
+            "fpr": 0.8898,
+            "fnr": 0.0,
+            "f1": 0.9753
+          },
+          {
+            "threshold": 0.3233,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 270,
+            "tn": 84,
+            "precision": 0.9584,
+            "recall": 1.0,
+            "fpr": 0.7627,
+            "fnr": 0.0,
+            "f1": 0.9788
+          },
+          {
+            "threshold": 0.3604,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 210,
+            "tn": 144,
+            "precision": 0.9673,
+            "recall": 1.0,
+            "fpr": 0.5932,
+            "fnr": 0.0,
+            "f1": 0.9834
+          },
+          {
+            "threshold": 0.3975,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 151,
+            "tn": 203,
+            "precision": 0.9763,
+            "recall": 1.0,
+            "fpr": 0.4266,
+            "fnr": 0.0,
+            "f1": 0.988
+          },
+          {
+            "threshold": 0.4345,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 107,
+            "tn": 247,
+            "precision": 0.9831,
+            "recall": 1.0,
+            "fpr": 0.3023,
+            "fnr": 0.0,
+            "f1": 0.9915
+          },
+          {
+            "threshold": 0.4716,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 73,
+            "tn": 281,
+            "precision": 0.9884,
+            "recall": 1.0,
+            "fpr": 0.2062,
+            "fnr": 0.0,
+            "f1": 0.9942
+          },
+          {
+            "threshold": 0.5087,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 49,
+            "tn": 305,
+            "precision": 0.9922,
+            "recall": 1.0,
+            "fpr": 0.1384,
+            "fnr": 0.0,
+            "f1": 0.9961
+          },
+          {
+            "threshold": 0.5457,
+            "tp": 6220,
+            "fn": 0,
+            "fp": 38,
+            "tn": 316,
+            "precision": 0.9939,
+            "recall": 1.0,
+            "fpr": 0.1073,
+            "fnr": 0.0,
+            "f1": 0.997
+          },
+          {
+            "threshold": 0.5828,
+            "tp": 4790,
+            "fn": 1430,
+            "fp": 28,
+            "tn": 326,
+            "precision": 0.9942,
+            "recall": 0.7701,
+            "fpr": 0.0791,
+            "fnr": 0.2299,
+            "f1": 0.8679
+          },
+          {
+            "threshold": 0.6199,
+            "tp": 3263,
+            "fn": 2957,
+            "fp": 17,
+            "tn": 337,
+            "precision": 0.9948,
+            "recall": 0.5246,
+            "fpr": 0.048,
+            "fnr": 0.4754,
+            "f1": 0.6869
+          },
+          {
+            "threshold": 0.657,
+            "tp": 2226,
+            "fn": 3994,
+            "fp": 12,
+            "tn": 342,
+            "precision": 0.9946,
+            "recall": 0.3579,
+            "fpr": 0.0339,
+            "fnr": 0.6421,
+            "f1": 0.5264
+          },
+          {
+            "threshold": 0.694,
+            "tp": 1494,
+            "fn": 4726,
+            "fp": 8,
+            "tn": 346,
+            "precision": 0.9947,
+            "recall": 0.2402,
+            "fpr": 0.0226,
+            "fnr": 0.7598,
+            "f1": 0.3869
+          },
+          {
+            "threshold": 0.7311,
+            "tp": 906,
+            "fn": 5314,
+            "fp": 8,
+            "tn": 346,
+            "precision": 0.9912,
+            "recall": 0.1457,
+            "fpr": 0.0226,
+            "fnr": 0.8543,
+            "f1": 0.254
+          },
+          {
+            "threshold": 0.7682,
+            "tp": 505,
+            "fn": 5715,
+            "fp": 2,
+            "tn": 352,
+            "precision": 0.9961,
+            "recall": 0.0812,
+            "fpr": 0.0056,
+            "fnr": 0.9188,
+            "f1": 0.1501
+          },
+          {
+            "threshold": 0.8052,
+            "tp": 246,
+            "fn": 5974,
+            "fp": 2,
+            "tn": 352,
+            "precision": 0.9919,
+            "recall": 0.0395,
+            "fpr": 0.0056,
+            "fnr": 0.9605,
+            "f1": 0.0761
+          },
+          {
+            "threshold": 0.8423,
+            "tp": 94,
+            "fn": 6126,
+            "fp": 1,
+            "tn": 353,
+            "precision": 0.9895,
+            "recall": 0.0151,
+            "fpr": 0.0028,
+            "fnr": 0.9849,
+            "f1": 0.0298
+          },
+          {
+            "threshold": 0.8794,
+            "tp": 30,
+            "fn": 6190,
+            "fp": 1,
+            "tn": 353,
+            "precision": 0.9677,
+            "recall": 0.0048,
+            "fpr": 0.0028,
+            "fnr": 0.9952,
+            "f1": 0.0096
+          },
+          {
+            "threshold": 0.9165,
+            "tp": 2,
+            "fn": 6218,
+            "fp": 0,
+            "tn": 354,
+            "precision": 1.0,
+            "recall": 0.0003,
+            "fpr": 0.0,
+            "fnr": 0.9997,
+            "f1": 0.0006
+          }
+        ]
+      }
+    }
+  },
+  "cross_model_comparison": {
+    "resnet50_imagenet_vs_osnet_x1_0_market1501": {
+      "same_dim": false,
+      "dim1": 2048,
+      "dim2": 512,
+      "note": "Cannot directly compare embeddings of different dimensions"
+    },
+    "resnet50_imagenet_vs_osnet_x1_0_msmt17": {
+      "same_dim": false,
+      "dim1": 2048,
+      "dim2": 512,
+      "note": "Cannot directly compare embeddings of different dimensions"
+    },
+    "osnet_x1_0_market1501_vs_osnet_x1_0_msmt17": {
+      "same_dim": true,
+      "mean_agreement": 0.335,
+      "std_agreement": 0.045
+    }
+  }
+}

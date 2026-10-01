@@ -52,9 +52,9 @@ class Camera(Base):
     updated_at = Column(DateTime(timezone=True), default=utcnow, onupdate=utcnow)
 
     # Relationships
-    events = relationship("DetectionEvent", back_populates="camera", lazy="dynamic")
-    tracking_sessions = relationship("TrackingSession", back_populates="camera", lazy="dynamic")
-    unknown_faces = relationship("UnknownFace", back_populates="camera", lazy="dynamic")
+    events = relationship("DetectionEvent", back_populates="camera", lazy="dynamic", cascade="all, delete-orphan", passive_deletes=True)
+    tracking_sessions = relationship("TrackingSession", back_populates="camera", lazy="dynamic", cascade="all, delete-orphan", passive_deletes=True)
+    unknown_faces = relationship("UnknownFace", back_populates="camera", lazy="dynamic", cascade="all, delete-orphan", passive_deletes=True)
 
 
 # ── Persons ──────────────────────────────────────────────────────

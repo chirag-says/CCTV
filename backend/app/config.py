@@ -157,6 +157,20 @@ class Settings(BaseSettings):
     TRACKING_MODE: str = "person"
     PERSON_DET_CONF: float = 0.35   # YOLO person confidence floor for tracking
 
+    # ── Phase 1 upgrade: configurable person-detection model ───────
+    # Previously the person detector always loaded HAZARD_MODEL_PATH, so the
+    # person detector and the hazard detector were the same YOLO weights.
+    # PERSON_DET_MODEL decouples them: when set, it names the weights file for
+    # person detection (e.g. "yolo11m.pt"). When empty, the previous behaviour
+    # is preserved (HAZARD_MODEL_PATH, currently yolov8n.pt).
+    #
+    # Benchmarked on 200 real 2688x1520 CCTV frames (RTX 5070, fp16):
+    #   yolov8n @ 640:  4.89 det/frame,  6.6 ms avg
+    #   yolo11m @ 640:  6.48 det/frame,  8.9 ms avg  (+32% recall, +35% latency)
+    #
+    # Rollback: set PERSON_DET_MODEL="" (or remove the .env line).
+    PERSON_DET_MODEL: str = ""
+
     # ── Phase 2 item 0a: run the person detector in fp16, at a fixed size ──
     # The person YOLO call passed neither `half` nor `imgsz`, so ultralytics
     # used its defaults: fp32, and an imgsz it re-derives from each frame's
@@ -847,6 +861,7 @@ class Settings(BaseSettings):
     REID_GALLERY_MAX_SIZE: int = 500      # Max tracked persons before LRU eviction
     REID_SIGHTING_COOLDOWN: float = 5.0   # Min seconds between sightings per person/camera
     REID_FRAME_INTERVAL: int = 10         # Extract ReID features every N frames (performance)
+    REID_MODEL: str = "resnet50_imagenet" # Options: resnet50_imagenet, osnet_x1_0_msmt17
 
     # ── Stream Health & Auto-Recovery ─────────────────────────
     STREAM_STALE_TIMEOUT_SEC: float = 10.0       # No fresh frame for this long → STALE

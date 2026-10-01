@@ -1,0 +1,530 @@
+{
+  "experiment_metadata": {
+    "date": "2026-09-29 12:17:38",
+    "n_frames_static": 200,
+    "n_frames_video": 500,
+    "gallery_size": 116,
+    "gallery_persons": 25,
+    "det_size": 640,
+    "det_thresh": 0.5,
+    "match_threshold": 0.62,
+    "match_margin": 0.1,
+    "gates_tested": [
+      80,
+      70,
+      60
+    ],
+    "total_faces_detected": 400,
+    "gpu": {
+      "gpu_util_avg": 47.2,
+      "gpu_util_max": 56,
+      "vram_avg_mb": 1646.9,
+      "vram_max_mb": 1647.1,
+      "n_samples": 14
+    }
+  },
+  "gate_results": {
+    "80": {
+      "gate_px": 80,
+      "total_faces_detected": 400,
+      "faces_passing_gate": 155,
+      "faces_blocked_by_gate": 245,
+      "recognition_attempts": 155,
+      "correct_known_matches": 21,
+      "incorrect_known_matches": 5,
+      "correct_unknown_rejects": 124,
+      "incorrect_unknown_rejects": 4,
+      "low_quality_unusable": 1,
+      "false_acceptance_rate": 0.0388,
+      "false_rejection_rate": 0.16,
+      "match_rate": 0.1677,
+      "similarity_top1": {
+        "mean": 0.3087,
+        "median": 0.2724,
+        "p95": 0.5499,
+        "min": 0.116,
+        "max": 0.6577
+      },
+      "similarity_top2": {
+        "mean": 0.2403,
+        "median": 0.214
+      },
+      "match_margin": {
+        "mean": 0.209,
+        "median": 0.1973,
+        "min": 0.1027
+      },
+      "matched_distances": {
+        "mean": 0.4875,
+        "median": 0.5033,
+        "min": 0.3423,
+        "max": 0.5802
+      },
+      "recognition_latency_ms": {
+        "avg": 0.075,
+        "p95": 0.102,
+        "max": 0.22,
+        "n": 155
+      },
+      "bucket_breakdown": {
+        "50-59px": {
+          "total": 43,
+          "passes_gate": false,
+          "matched": 0,
+          "gt_correct_known": 6,
+          "gt_incorrect_known": 1,
+          "gt_correct_unknown": 31,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 5,
+          "avg_similarity": 0.2978,
+          "avg_distance": 0.7022
+        },
+        "60-69px": {
+          "total": 36,
+          "passes_gate": false,
+          "matched": 0,
+          "gt_correct_known": 10,
+          "gt_incorrect_known": 2,
+          "gt_correct_unknown": 24,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 0,
+          "avg_similarity": 0.3204,
+          "avg_distance": 0.6796
+        },
+        "70-79px": {
+          "total": 31,
+          "passes_gate": false,
+          "matched": 0,
+          "gt_correct_known": 4,
+          "gt_incorrect_known": 1,
+          "gt_correct_unknown": 25,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 1,
+          "avg_similarity": 0.3254,
+          "avg_distance": 0.6746
+        },
+        "80-99px": {
+          "total": 60,
+          "passes_gate": true,
+          "matched": 5,
+          "gt_correct_known": 5,
+          "gt_incorrect_known": 0,
+          "gt_correct_unknown": 55,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 0,
+          "avg_similarity": 0.2755,
+          "avg_distance": 0.7245
+        },
+        "100-119px": {
+          "total": 31,
+          "passes_gate": true,
+          "matched": 10,
+          "gt_correct_known": 10,
+          "gt_incorrect_known": 0,
+          "gt_correct_unknown": 19,
+          "gt_incorrect_unknown": 2,
+          "gt_low_quality": 0,
+          "avg_similarity": 0.391,
+          "avg_distance": 0.609
+        },
+        "120+px": {
+          "total": 64,
+          "passes_gate": true,
+          "matched": 11,
+          "gt_correct_known": 6,
+          "gt_incorrect_known": 5,
+          "gt_correct_unknown": 50,
+          "gt_incorrect_unknown": 2,
+          "gt_low_quality": 1,
+          "avg_similarity": 0.2998,
+          "avg_distance": 0.7002
+        }
+      }
+    },
+    "70": {
+      "gate_px": 70,
+      "total_faces_detected": 400,
+      "faces_passing_gate": 186,
+      "faces_blocked_by_gate": 214,
+      "recognition_attempts": 186,
+      "correct_known_matches": 25,
+      "incorrect_known_matches": 6,
+      "correct_unknown_rejects": 149,
+      "incorrect_unknown_rejects": 4,
+      "low_quality_unusable": 2,
+      "false_acceptance_rate": 0.0387,
+      "false_rejection_rate": 0.1379,
+      "match_rate": 0.1667,
+      "similarity_top1": {
+        "mean": 0.3114,
+        "median": 0.273,
+        "p95": 0.5599,
+        "min": 0.116,
+        "max": 0.6577
+      },
+      "similarity_top2": {
+        "mean": 0.242,
+        "median": 0.2153
+      },
+      "match_margin": {
+        "mean": 0.2198,
+        "median": 0.2029,
+        "min": 0.1027
+      },
+      "matched_distances": {
+        "mean": 0.4811,
+        "median": 0.4973,
+        "min": 0.3423,
+        "max": 0.5802
+      },
+      "recognition_latency_ms": {
+        "avg": 0.074,
+        "p95": 0.102,
+        "max": 0.22,
+        "n": 186
+      },
+      "bucket_breakdown": {
+        "50-59px": {
+          "total": 43,
+          "passes_gate": false,
+          "matched": 0,
+          "gt_correct_known": 6,
+          "gt_incorrect_known": 1,
+          "gt_correct_unknown": 31,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 5,
+          "avg_similarity": 0.2978,
+          "avg_distance": 0.7022
+        },
+        "60-69px": {
+          "total": 36,
+          "passes_gate": false,
+          "matched": 0,
+          "gt_correct_known": 10,
+          "gt_incorrect_known": 2,
+          "gt_correct_unknown": 24,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 0,
+          "avg_similarity": 0.3204,
+          "avg_distance": 0.6796
+        },
+        "70-79px": {
+          "total": 31,
+          "passes_gate": true,
+          "matched": 5,
+          "gt_correct_known": 4,
+          "gt_incorrect_known": 1,
+          "gt_correct_unknown": 25,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 1,
+          "avg_similarity": 0.3254,
+          "avg_distance": 0.6746
+        },
+        "80-99px": {
+          "total": 60,
+          "passes_gate": true,
+          "matched": 5,
+          "gt_correct_known": 5,
+          "gt_incorrect_known": 0,
+          "gt_correct_unknown": 55,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 0,
+          "avg_similarity": 0.2755,
+          "avg_distance": 0.7245
+        },
+        "100-119px": {
+          "total": 31,
+          "passes_gate": true,
+          "matched": 10,
+          "gt_correct_known": 10,
+          "gt_incorrect_known": 0,
+          "gt_correct_unknown": 19,
+          "gt_incorrect_unknown": 2,
+          "gt_low_quality": 0,
+          "avg_similarity": 0.391,
+          "avg_distance": 0.609
+        },
+        "120+px": {
+          "total": 64,
+          "passes_gate": true,
+          "matched": 11,
+          "gt_correct_known": 6,
+          "gt_incorrect_known": 5,
+          "gt_correct_unknown": 50,
+          "gt_incorrect_unknown": 2,
+          "gt_low_quality": 1,
+          "avg_similarity": 0.2998,
+          "avg_distance": 0.7002
+        }
+      }
+    },
+    "60": {
+      "gate_px": 60,
+      "total_faces_detected": 400,
+      "faces_passing_gate": 222,
+      "faces_blocked_by_gate": 178,
+      "recognition_attempts": 222,
+      "correct_known_matches": 35,
+      "incorrect_known_matches": 8,
+      "correct_unknown_rejects": 173,
+      "incorrect_unknown_rejects": 4,
+      "low_quality_unusable": 2,
+      "false_acceptance_rate": 0.0442,
+      "false_rejection_rate": 0.1026,
+      "match_rate": 0.1937,
+      "similarity_top1": {
+        "mean": 0.3129,
+        "median": 0.2736,
+        "p95": 0.5529,
+        "min": 0.116,
+        "max": 0.6715
+      },
+      "similarity_top2": {
+        "mean": 0.2392,
+        "median": 0.2189
+      },
+      "match_margin": {
+        "mean": 0.2169,
+        "median": 0.2048,
+        "min": 0.1027
+      },
+      "matched_distances": {
+        "mean": 0.4937,
+        "median": 0.5093,
+        "min": 0.3285,
+        "max": 0.6085
+      },
+      "recognition_latency_ms": {
+        "avg": 0.074,
+        "p95": 0.102,
+        "max": 0.22,
+        "n": 222
+      },
+      "bucket_breakdown": {
+        "50-59px": {
+          "total": 43,
+          "passes_gate": false,
+          "matched": 0,
+          "gt_correct_known": 6,
+          "gt_incorrect_known": 1,
+          "gt_correct_unknown": 31,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 5,
+          "avg_similarity": 0.2978,
+          "avg_distance": 0.7022
+        },
+        "60-69px": {
+          "total": 36,
+          "passes_gate": true,
+          "matched": 12,
+          "gt_correct_known": 10,
+          "gt_incorrect_known": 2,
+          "gt_correct_unknown": 24,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 0,
+          "avg_similarity": 0.3204,
+          "avg_distance": 0.6796
+        },
+        "70-79px": {
+          "total": 31,
+          "passes_gate": true,
+          "matched": 5,
+          "gt_correct_known": 4,
+          "gt_incorrect_known": 1,
+          "gt_correct_unknown": 25,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 1,
+          "avg_similarity": 0.3254,
+          "avg_distance": 0.6746
+        },
+        "80-99px": {
+          "total": 60,
+          "passes_gate": true,
+          "matched": 5,
+          "gt_correct_known": 5,
+          "gt_incorrect_known": 0,
+          "gt_correct_unknown": 55,
+          "gt_incorrect_unknown": 0,
+          "gt_low_quality": 0,
+          "avg_similarity": 0.2755,
+          "avg_distance": 0.7245
+        },
+        "100-119px": {
+          "total": 31,
+          "passes_gate": true,
+          "matched": 10,
+          "gt_correct_known": 10,
+          "gt_incorrect_known": 0,
+          "gt_correct_unknown": 19,
+          "gt_incorrect_unknown": 2,
+          "gt_low_quality": 0,
+          "avg_similarity": 0.391,
+          "avg_distance": 0.609
+        },
+        "120+px": {
+          "total": 64,
+          "passes_gate": true,
+          "matched": 11,
+          "gt_correct_known": 6,
+          "gt_incorrect_known": 5,
+          "gt_correct_unknown": 50,
+          "gt_incorrect_unknown": 2,
+          "gt_low_quality": 1,
+          "avg_similarity": 0.2998,
+          "avg_distance": 0.7002
+        }
+      }
+    }
+  },
+  "temporal_stability": {
+    "80": {
+      "total_tracks": 0,
+      "recognized_tracks": 0,
+      "identity_flips": {
+        "total": 0,
+        "mean_per_track": 0,
+        "max": 0
+      },
+      "recognition_persistence": {
+        "mean": 0,
+        "min": 0
+      },
+      "time_to_first_correct": {
+        "mean_frames": null,
+        "max_frames": null
+      },
+      "incorrect_before_stable": {
+        "mean": 0,
+        "max": 0
+      }
+    },
+    "70": {
+      "total_tracks": 0,
+      "recognized_tracks": 0,
+      "identity_flips": {
+        "total": 0,
+        "mean_per_track": 0,
+        "max": 0
+      },
+      "recognition_persistence": {
+        "mean": 0,
+        "min": 0
+      },
+      "time_to_first_correct": {
+        "mean_frames": null,
+        "max_frames": null
+      },
+      "incorrect_before_stable": {
+        "mean": 0,
+        "max": 0
+      }
+    },
+    "60": {
+      "total_tracks": 0,
+      "recognized_tracks": 0,
+      "identity_flips": {
+        "total": 0,
+        "mean_per_track": 0,
+        "max": 0
+      },
+      "recognition_persistence": {
+        "mean": 0,
+        "min": 0
+      },
+      "time_to_first_correct": {
+        "mean_frames": null,
+        "max_frames": null
+      },
+      "incorrect_before_stable": {
+        "mean": 0,
+        "max": 0
+      }
+    }
+  },
+  "comparison_table": [
+    {
+      "gate_px": 80,
+      "faces_passing": 155,
+      "recognition_attempts": 155,
+      "correct_matches": 21,
+      "incorrect_matches": 5,
+      "correct_rejects": 124,
+      "incorrect_rejects": 4,
+      "low_quality": 1,
+      "FAR": 0.0388,
+      "FRR": 0.16,
+      "sim_top1_mean": 0.3087,
+      "sim_top2_mean": 0.2403,
+      "margin_mean": 0.209,
+      "recog_latency_avg_ms": 0.075,
+      "recog_latency_p95_ms": 0.102,
+      "identity_flips_total": 0,
+      "persistence_mean": 0
+    },
+    {
+      "gate_px": 70,
+      "faces_passing": 186,
+      "recognition_attempts": 186,
+      "correct_matches": 25,
+      "incorrect_matches": 6,
+      "correct_rejects": 149,
+      "incorrect_rejects": 4,
+      "low_quality": 2,
+      "FAR": 0.0387,
+      "FRR": 0.1379,
+      "sim_top1_mean": 0.3114,
+      "sim_top2_mean": 0.242,
+      "margin_mean": 0.2198,
+      "recog_latency_avg_ms": 0.074,
+      "recog_latency_p95_ms": 0.102,
+      "identity_flips_total": 0,
+      "persistence_mean": 0
+    },
+    {
+      "gate_px": 60,
+      "faces_passing": 222,
+      "recognition_attempts": 222,
+      "correct_matches": 35,
+      "incorrect_matches": 8,
+      "correct_rejects": 173,
+      "incorrect_rejects": 4,
+      "low_quality": 2,
+      "FAR": 0.0442,
+      "FRR": 0.1026,
+      "sim_top1_mean": 0.3129,
+      "sim_top2_mean": 0.2392,
+      "margin_mean": 0.2169,
+      "recog_latency_avg_ms": 0.074,
+      "recog_latency_p95_ms": 0.102,
+      "identity_flips_total": 0,
+      "persistence_mean": 0
+    }
+  ],
+  "recommendation": {
+    "verdict": "LOWER GATE TO 60px",
+    "recommended_gate": 60,
+    "rationale": "60px adds 14 correct recognitions (+67%) with FAR delta of only +0.0054. No significant identity stability regression.",
+    "regressions": [],
+    "evidence": {
+      "recall_gain_60": 14,
+      "recall_gain_70": 4,
+      "far_delta_60": 0.0054,
+      "far_delta_70": -0.0001
+    }
+  },
+  "detection_latency_ms": {
+    "avg": 16.222,
+    "p95": 24.076,
+    "max": 46.256
+  },
+  "ground_truth_summary": {
+    "total_annotated": 400,
+    "categories": {
+      "correct_unknown_reject": 297,
+      "low_quality_unusable": 34,
+      "correct_known_match": 52,
+      "incorrect_known_match": 13,
+      "incorrect_unknown_reject": 4
+    }
+  }
+}

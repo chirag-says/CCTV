@@ -1,3 +1,4 @@
+#!python3.11
 """Quick check of all vision modules."""
 import sys
 sys.path.insert(0, ".")

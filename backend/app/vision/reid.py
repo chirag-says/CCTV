@@ -34,11 +34,13 @@ logger = logging.getLogger(__name__)
 
 class ReIDFeatureExtractor:
     """
-    Extracts appearance features from person crops using ResNet50.
+    Extracts appearance features from person crops for re-identification.
 
-    The final classification layer is removed, producing a 2048-dim feature
-    that is projected down to 512-dim via a learned linear layer, then
-    L2-normalized for cosine similarity matching.
+    Supports two backends (controlled by settings.REID_MODEL):
+      - 'resnet50_imagenet': ResNet50 with ImageNet weights (2048-dim, production default)
+      - 'osnet_x1_0_msmt17': OSNet x1.0 trained on MSMT17 person-ReID (512-dim)
+
+    Features are L2-normalized for cosine similarity matching.
     """
 
     _instance = None
@@ -65,7 +67,12 @@ class ReIDFeatureExtractor:
         logger.info("ReID Feature Extractor created (lazy-load on first use)")
 
     def _load_model(self):
-        """Lazy-load the ResNet50 model on first inference."""
+        """Lazy-load the ReID model on first inference.
+
+        Model selection is controlled by settings.REID_MODEL:
+          - 'resnet50_imagenet': Original ResNet50 ImageNet backbone (2048-dim)
+          - 'osnet_x1_0_msmt17': OSNet x1.0 trained on MSMT17 person-ReID (512-dim)
+        """
         if self._loaded:
             return
 
@@ -77,6 +84,7 @@ class ReIDFeatureExtractor:
                 import torch
                 import torch.nn as nn
                 from torchvision import models, transforms
+                from app.config import settings
 
                 # Determine device
                 if torch.cuda.is_available():
@@ -84,23 +92,14 @@ class ReIDFeatureExtractor:
                 else:
                     self._device = torch.device("cpu")
 
-                # Load pre-trained ResNet50, remove classification head.
-                # Use the raw 2048-dim features from avgpool directly —
-                # these are already discriminative for person appearance.
-                # No untrained projection layers needed.
-                backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+                reid_model = getattr(settings, 'REID_MODEL', 'resnet50_imagenet')
 
-                self._model = nn.Sequential(
-                    # All ResNet layers except fc
-                    nn.Sequential(*list(backbone.children())[:-1]),  # → (B, 2048, 1, 1)
-                    nn.Flatten(),                                     # → (B, 2048)
-                ).to(self._device)
-                self._model.eval()
+                if reid_model == 'osnet_x1_0_msmt17':
+                    self._load_osnet_msmt17(torch, nn)
+                else:
+                    self._load_resnet50_imagenet(torch, nn, models)
 
-                # Update feature dimension to match actual output
-                self._feat_dim = 2048
-
-                # Standard ImageNet normalization
+                # Standard ImageNet normalization (same for both models)
                 self._transform = transforms.Compose([
                     transforms.ToPILImage(),
                     transforms.Resize((256, 128)),  # Standard ReID input size
@@ -113,36 +112,94 @@ class ReIDFeatureExtractor:
 
                 self._loaded = True
                 logger.info(
-                    f"ReID model loaded: ResNet50 → {self._feat_dim}-dim on {self._device}"
+                    f"ReID model loaded: {reid_model} -> {self._feat_dim}-dim on {self._device}"
                 )
 
             except Exception as e:
                 logger.error(f"Failed to load ReID model: {e}", exc_info=True)
                 raise
 
+    def _load_resnet50_imagenet(self, torch, nn, models):
+        """Load the original ResNet50 ImageNet backbone (production default)."""
+        backbone = models.resnet50(weights=models.ResNet50_Weights.DEFAULT)
+        self._model = nn.Sequential(
+            nn.Sequential(*list(backbone.children())[:-1]),  # -> (B, 2048, 1, 1)
+            nn.Flatten(),                                     # -> (B, 2048)
+        ).to(self._device)
+        self._model.eval()
+        self._feat_dim = 2048
+
+    def _load_osnet_msmt17(self, torch, nn):
+        """Load OSNet x1.0 trained on MSMT17 person-ReID dataset (512-dim).
+
+        Phase 3 validated candidate. Trained with softmax + label smoothing
+        on MSMT17 (4,101 identities, 15 cameras, combineall=True).
+        Weights: models/osnet_x1_0_msmt17.pth (from HuggingFace kaiyangzhou/osnet)
+        """
+        import os
+        try:
+            import torchreid
+        except ImportError:
+            logger.error("torchreid not installed. Run: pip install torchreid")
+            raise
+
+        model = torchreid.models.build_model(
+            name='osnet_x1_0',
+            num_classes=1,  # dummy, classifier is not used for feature extraction
+            pretrained=False,
+        )
+
+        # Locate weights file
+        weights_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.dirname(__file__))),
+            'models', 'osnet_x1_0_msmt17.pth'
+        )
+        if os.path.exists(weights_path):
+            state = torch.load(weights_path, map_location='cpu', weights_only=True)
+            if 'state_dict' in state:
+                state = state['state_dict']
+            model_dict = model.state_dict()
+            filtered = {k: v for k, v in state.items()
+                        if k in model_dict and v.shape == model_dict[k].shape}
+            model_dict.update(filtered)
+            model.load_state_dict(model_dict, strict=False)
+            logger.info(f"OSNet MSMT17: loaded {len(filtered)}/{len(model_dict)} weight keys")
+        else:
+            logger.warning(
+                f"OSNet MSMT17 weights not found at {weights_path}. "
+                f"Using random init (NOT recommended for production)."
+            )
+
+        self._model = model.to(self._device)
+        self._model.eval()
+        self._feat_dim = 512
+
     def extract(self, person_crop: np.ndarray) -> Optional[np.ndarray]:
         """
-        Extract a 512-dim L2-normalized feature from a person crop.
+        Extract an L2-normalized appearance feature from a person crop.
 
         Args:
             person_crop: BGR image of a person (any size, will be resized)
 
         Returns:
-            512-dim numpy array (L2-normalized), or None on failure
+            L2-normalized numpy feature vector (dim depends on model), or None on failure
         """
         self._load_model()
 
         try:
             import torch
 
-            # Convert BGR → RGB
+            # Convert BGR -> RGB
             rgb = cv2.cvtColor(person_crop, cv2.COLOR_BGR2RGB)
 
             # Transform and add batch dimension
             tensor = self._transform(rgb).unsqueeze(0).to(self._device)
 
             with torch.no_grad():
-                features = self._model(tensor)  # (1, 512)
+                features = self._model(tensor)  # (1, feat_dim)
+                # OSNet may return tuple in some modes
+                if isinstance(features, (tuple, list)):
+                    features = features[0]
 
             # L2-normalize
             feat = features.cpu().numpy().flatten()

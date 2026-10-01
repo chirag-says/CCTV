@@ -232,7 +232,14 @@ class InferenceServer:
                 from app.vision.engines import get_engine
                 from ultralytics import YOLO
 
-                weights = getattr(settings, "HAZARD_MODEL_PATH", "yolov8n.pt")
+                # Phase 1: prefer PERSON_DET_MODEL when set, else fall back
+                # to HAZARD_MODEL_PATH for backward compatibility.
+                person_model = getattr(settings, "PERSON_DET_MODEL", "")
+                weights = (
+                    person_model
+                    if person_model
+                    else getattr(settings, "HAZARD_MODEL_PATH", "yolov8n.pt")
+                )
                 path = get_engine(
                     weights,
                     batch=int(getattr(settings, "TRT_MAX_BATCH", 32)),

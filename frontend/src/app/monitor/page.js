@@ -6,7 +6,7 @@
  * Supports browser-side RF-DETR WebGPU object detection overlay.
  */
 
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import AppShell from '@/components/AppShell';
 import api, { API_BASE } from '@/lib/api';
 import DetectionOverlay from '@/components/DetectionOverlay';
@@ -38,6 +38,43 @@ export default function MonitorPage() {
         }
         return 'single';
     });
+
+    // Grid slot assignments: { slotIndex: cameraId } persisted in localStorage
+    const [gridSlots, setGridSlots] = useState(() => {
+        if (typeof window !== 'undefined') {
+            try {
+                return JSON.parse(localStorage.getItem('sentinel-grid-slots') || '{}');
+            } catch { return {}; }
+        }
+        return {};
+    });
+
+    const updateGridSlot = useCallback((slotIndex, cameraId) => {
+        setGridSlots(prev => {
+            const next = { ...prev, [slotIndex]: cameraId };
+            localStorage.setItem('sentinel-grid-slots', JSON.stringify(next));
+            return next;
+        });
+    }, []);
+
+    // Resolve which camera goes in each slot, falling back to array order
+    const resolveGridCamera = useCallback((slotIndex, fallbackCameras) => {
+        const assignedId = gridSlots[slotIndex];
+        if (assignedId) {
+            const found = cameras.find(c => c.id === assignedId);
+            if (found) return found;
+        }
+        return fallbackCameras[slotIndex] || null;
+    }, [gridSlots, cameras]);
+
+    // Sort cameras with online first for the sidebar
+    const sortedCameras = useMemo(() => {
+        return [...cameras].sort((a, b) => {
+            if (a.status === 'online' && b.status !== 'online') return -1;
+            if (a.status !== 'online' && b.status === 'online') return 1;
+            return 0;
+        });
+    }, [cameras]);
     /**
      * presenceLog: Array of presence entries, each representing a person's
      * visit to the camera view. One entry per person per visit.
@@ -318,19 +355,26 @@ export default function MonitorPage() {
                     gridTemplateColumns: 'repeat(2, 1fr)',
                     gap: '14px',
                 }}>
-                    {cameras.slice(0, 4).map((camera) => (
-                        <CameraFeedCard
-                            key={camera.id}
-                            camera={camera}
-                            aiDetectEnabled={aiDetectEnabled}
-                            onAiStats={setAiStats}
-                            onClick={() => {
-                                setSelectedCamera(camera);
-                                setLayout('single');
-                                localStorage.setItem('sentinel-monitor-layout', 'single');
-                            }}
-                        />
-                    ))}
+                    {[0, 1, 2, 3].map((slotIdx) => {
+                        const cam = resolveGridCamera(slotIdx, cameras);
+                        if (!cam) return null;
+                        return (
+                            <CameraFeedCard
+                                key={`slot-${slotIdx}-${cam.id}`}
+                                camera={cam}
+                                aiDetectEnabled={aiDetectEnabled}
+                                onAiStats={setAiStats}
+                                slotIndex={slotIdx}
+                                allCameras={cameras}
+                                onSlotChange={updateGridSlot}
+                                onClick={() => {
+                                    setSelectedCamera(cam);
+                                    setLayout('single');
+                                    localStorage.setItem('sentinel-monitor-layout', 'single');
+                                }}
+                            />
+                        );
+                    })}
                 </div>
             ) : layout === 'bunch' ? (
                 /* One section per zone: every COE camera side by side, every
@@ -383,20 +427,27 @@ export default function MonitorPage() {
                     gridTemplateColumns: 'repeat(3, 1fr)',
                     gap: '12px',
                 }}>
-                    {cameras.slice(0, 9).map((camera) => (
-                        <CameraFeedCard
-                            key={camera.id}
-                            camera={camera}
-                            compact
-                            aiDetectEnabled={aiDetectEnabled}
-                            onAiStats={setAiStats}
-                            onClick={() => {
-                                setSelectedCamera(camera);
-                                setLayout('single');
-                                localStorage.setItem('sentinel-monitor-layout', 'single');
-                            }}
-                        />
-                    ))}
+                    {[0, 1, 2, 3, 4, 5, 6, 7, 8].map((slotIdx) => {
+                        const cam = resolveGridCamera(slotIdx, cameras);
+                        if (!cam) return null;
+                        return (
+                            <CameraFeedCard
+                                key={`slot-${slotIdx}-${cam.id}`}
+                                camera={cam}
+                                compact
+                                aiDetectEnabled={aiDetectEnabled}
+                                onAiStats={setAiStats}
+                                slotIndex={slotIdx}
+                                allCameras={cameras}
+                                onSlotChange={updateGridSlot}
+                                onClick={() => {
+                                    setSelectedCamera(cam);
+                                    setLayout('single');
+                                    localStorage.setItem('sentinel-monitor-layout', 'single');
+                                }}
+                            />
+                        );
+                    })}
                 </div>
             ) : (
                 <div className="dashboard-grid-3">
@@ -418,7 +469,7 @@ export default function MonitorPage() {
                                 <h3 className="card-title">Cameras</h3>
                             </div>
                             <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
-                                {cameras.map((camera) => (
+                                {sortedCameras.map((camera) => (
                                     <button
                                         key={camera.id}
                                         className={`nav-item ${selectedCamera?.id === camera.id ? 'active' : ''}`}
@@ -816,178 +867,440 @@ function MjpegFeed({ camera, onStatus, onStale, aiDetectEnabled, onAiStats }) {
  * used when go2rtc cannot relay this camera -- a webcam index it does not own,
  * a browser-pushed session -- or when ?mjpeg=1 forces it.
  */
-function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDetectEnabled = false, onAiStats }) {
+function CameraFeedCard({ camera, large = false, compact = false, onClick, aiDetectEnabled = false, onAiStats, slotIndex, allCameras, onSlotChange }) {
     const [streamStatus, setStreamStatus] = useState('connecting');
-    const [staleInfo, setStaleInfo] = useState(null);  // { stream_state, stale_since, reconnect_attempts, last_frame_age }
-    const [webrtc, setWebrtc] = useState(null);        // null = not asked yet
-    // Has this tile ever shown video? Once it has, a reconnect leaves the last
-    // frame on screen rather than dropping the placeholder over it -- a frozen
-    // picture reads as "this camera stalled", a black rectangle reads as
-    // "this camera is gone", and only one of those is true.
+    const [staleInfo, setStaleInfo] = useState(null);
+    const [webrtc, setWebrtc] = useState(null);
     const [everStreamed, setEverStreamed] = useState(false);
     const forceMjpeg = mjpegForced();
 
-    useEffect(() => {
-        // Neither of these needs asking. An offline camera has no transport
-        // to choose, and a forced fallback has already chosen; `status` and
-        // `useWebrtc` below read both straight off props rather than
-        // mirroring them into state.
-        if (camera.status !== 'online' || forceMjpeg) return undefined;
+    // ── Zoom & Pan state ──────────────────────────────────────────
+    const [zoom, setZoom] = useState(1);
+    const [pan, setPan] = useState({ x: 0, y: 0 });
+    const [dragging, setDragging] = useState(false);
+    const dragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+    const containerRef = useRef(null);
 
+    // ── Slot picker state ─────────────────────────────────────────
+    const [pickerOpen, setPickerOpen] = useState(false);
+    const pickerRef = useRef(null);
+
+    // Close picker on click outside
+    useEffect(() => {
+        if (!pickerOpen) return;
+        const handler = (e) => {
+            if (pickerRef.current && !pickerRef.current.contains(e.target)) {
+                setPickerOpen(false);
+            }
+        };
+        document.addEventListener('mousedown', handler);
+        return () => document.removeEventListener('mousedown', handler);
+    }, [pickerOpen]);
+
+    useEffect(() => {
+        if (camera.status !== 'online' || forceMjpeg) return undefined;
         let mounted = true;
         api.getCameraWebrtc(camera.id)
             .then((info) => { if (mounted) setWebrtc(info); })
             .catch(() => {
-                // A relay that cannot be asked is a relay that cannot be used.
-                // Falling back is the whole reason MJPEG is still here.
                 if (mounted) setWebrtc({ available: false });
             });
         return () => { mounted = false; };
     }, [camera.id, camera.status, forceMjpeg]);
 
-    // Same latch as in Go2RtcPlayer, set where the status arrives rather than
-    // in an effect reacting to it.
     const handleStatus = useCallback((next) => {
         setStreamStatus(next);
         if (next === 'streaming') setEverStreamed(true);
     }, []);
 
+    // ── Zoom helpers ──────────────────────────────────────────────
+    const MIN_ZOOM = 1;
+    const MAX_ZOOM = 5;
+
+    const clampPan = useCallback((x, y, z) => {
+        if (z <= 1) return { x: 0, y: 0 };
+        const el = containerRef.current;
+        if (!el) return { x: 0, y: 0 };
+        const w = el.offsetWidth;
+        const h = el.offsetHeight;
+        const maxX = w * (z - 1);
+        const maxY = h * (z - 1);
+        return {
+            x: Math.max(-maxX, Math.min(0, x)),
+            y: Math.max(-maxY, Math.min(0, y)),
+        };
+    }, []);
+
+    const handleWheel = useCallback((e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const delta = e.deltaY < 0 ? 0.3 : -0.3;
+        setZoom(prev => {
+            const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, prev + delta));
+            if (next <= 1) {
+                setPan({ x: 0, y: 0 });
+            } else {
+                // Re-clamp pan for new zoom
+                setPan(p => clampPan(p.x, p.y, next));
+            }
+            return next;
+        });
+    }, [clampPan]);
+
+    const handleMouseDown = useCallback((e) => {
+        if (zoom <= 1) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setDragging(true);
+        dragStart.current = { x: e.clientX, y: e.clientY, panX: pan.x, panY: pan.y };
+    }, [zoom, pan]);
+
+    const handleMouseMove = useCallback((e) => {
+        if (!dragging) return;
+        e.preventDefault();
+        const dx = e.clientX - dragStart.current.x;
+        const dy = e.clientY - dragStart.current.y;
+        setPan(clampPan(dragStart.current.panX + dx, dragStart.current.panY + dy, zoom));
+    }, [dragging, zoom, clampPan]);
+
+    const handleMouseUp = useCallback(() => {
+        setDragging(false);
+    }, []);
+
+    useEffect(() => {
+        if (!dragging) return;
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [dragging, handleMouseMove, handleMouseUp]);
+
+    const zoomIn = (e) => { e.stopPropagation(); setZoom(z => Math.min(MAX_ZOOM, z + 0.5)); };
+    const zoomOut = (e) => {
+        e.stopPropagation();
+        setZoom(z => {
+            const next = Math.max(MIN_ZOOM, z - 0.5);
+            if (next <= 1) setPan({ x: 0, y: 0 });
+            else setPan(p => clampPan(p.x, p.y, next));
+            return next;
+        });
+    };
+    const zoomReset = (e) => { e.stopPropagation(); setZoom(1); setPan({ x: 0, y: 0 }); };
+
     const decided = forceMjpeg || webrtc !== null;
     const useWebrtc = !forceMjpeg && Boolean(webrtc?.available && webrtc?.signalling_url);
     const transportLabel = useWebrtc ? 'WEBRTC' : 'MJPEG';
     const status = camera.status === 'online' ? streamStatus : 'offline';
+    const isZoomed = zoom > 1;
+
+    // Sorted cameras for slot picker: online first
+    const pickerCameras = useMemo(() => {
+        if (!allCameras) return [];
+        const online = allCameras.filter(c => c.status === 'online');
+        const offline = allCameras.filter(c => c.status !== 'online');
+        return { online, offline };
+    }, [allCameras]);
+
+    const hasSlotPicker = slotIndex !== undefined && allCameras && onSlotChange;
 
     return (
-        <div className="card" style={{ padding: 0, overflow: 'hidden', cursor: onClick ? 'pointer' : 'default' }} onClick={onClick}>
-            <div className="live-feed-container" style={{ aspectRatio: '16/9', position: 'relative', background: '#000000' }}>
-                {camera.status === 'online' ? (
-                    <>
-                        <div className="live-indicator">
-                            <span className={`live-indicator-dot${status === 'stream_frozen' ? ' frozen' : ''}`}></span>
-                            {status === 'streaming' ? 'LIVE'
-                                : status === 'stream_frozen' ? (staleInfo?.stream_state === 'OFFLINE' ? 'OFFLINE' : 'FROZEN')
-                                : status === 'connecting' ? 'CONNECTING'
-                                : status === 'unavailable' ? 'NO RELAY'
-                                : 'RECONNECTING'}
-                            <span style={{
-                                marginLeft: '6px',
-                                padding: '1px 5px',
-                                borderRadius: '4px',
-                                background: 'rgba(148, 163, 184, 0.2)',
-                                border: '1px solid rgba(148, 163, 184, 0.35)',
-                                fontSize: '0.563rem',
-                                fontWeight: 700,
-                                color: '#cbd5e1',
-                                letterSpacing: '0.5px',
-                            }}>{transportLabel}</span>
-                            {aiDetectEnabled && !useWebrtc && status === 'streaming' && (
+        <div className="card" style={{ padding: 0, overflow: 'hidden', cursor: onClick && !isZoomed ? 'pointer' : 'default' }} onClick={!isZoomed ? onClick : undefined}>
+            <div
+                ref={containerRef}
+                className="live-feed-container"
+                style={{ aspectRatio: '16/9', position: 'relative', background: '#000000', overflow: 'hidden' }}
+                onWheel={handleWheel}
+            >
+                {/* Zoom Controls */}
+                <div className={`zoom-controls${isZoomed ? ' zoom-active' : ''}`}>
+                    <button className="zoom-btn" onClick={zoomIn} title="Zoom in">+</button>
+                    <button className="zoom-btn" onClick={zoomOut} title="Zoom out">−</button>
+                    {isZoomed && (
+                        <>
+                            <div className="zoom-level-badge">{zoom.toFixed(1)}x</div>
+                            <button className="zoom-btn reset" onClick={zoomReset} title="Reset zoom">RST</button>
+                        </>
+                    )}
+                </div>
+
+                <div
+                    className={`live-feed-content${isZoomed ? ' zoomed' : ''}${dragging ? ' grabbing' : ''}`}
+                    style={{
+                        transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                    }}
+                    onMouseDown={handleMouseDown}
+                >
+                    {camera.status === 'online' ? (
+                        <>
+                            <div className="live-indicator">
+                                <span className={`live-indicator-dot${status === 'stream_frozen' ? ' frozen' : ''}`}></span>
+                                {status === 'streaming' ? 'LIVE'
+                                    : status === 'stream_frozen' ? (staleInfo?.stream_state === 'OFFLINE' ? 'OFFLINE' : 'FROZEN')
+                                    : status === 'connecting' ? 'CONNECTING'
+                                    : status === 'unavailable' ? 'NO RELAY'
+                                    : 'RECONNECTING'}
                                 <span style={{
                                     marginLeft: '6px',
                                     padding: '1px 5px',
                                     borderRadius: '4px',
-                                    background: 'rgba(99, 102, 241, 0.3)',
-                                    border: '1px solid rgba(99, 102, 241, 0.5)',
+                                    background: 'rgba(148, 163, 184, 0.2)',
+                                    border: '1px solid rgba(148, 163, 184, 0.35)',
                                     fontSize: '0.563rem',
                                     fontWeight: 700,
-                                    color: '#a5b4fc',
+                                    color: '#cbd5e1',
                                     letterSpacing: '0.5px',
-                                }}>RF-DETR</span>
+                                }}>{transportLabel}</span>
+                                {aiDetectEnabled && !useWebrtc && status === 'streaming' && (
+                                    <span style={{
+                                        marginLeft: '6px',
+                                        padding: '1px 5px',
+                                        borderRadius: '4px',
+                                        background: 'rgba(99, 102, 241, 0.3)',
+                                        border: '1px solid rgba(99, 102, 241, 0.5)',
+                                        fontSize: '0.563rem',
+                                        fontWeight: 700,
+                                        color: '#a5b4fc',
+                                        letterSpacing: '0.5px',
+                                    }}>RF-DETR</span>
+                                )}
+                            </div>
+
+                            {!decided ? null : useWebrtc ? (
+                                <Go2RtcPlayer
+                                    camera={camera}
+                                    signallingUrl={webrtc.signalling_url}
+                                    onStatus={handleStatus}
+                                />
+                            ) : (
+                                <MjpegFeed
+                                    camera={camera}
+                                    onStatus={handleStatus}
+                                    onStale={setStaleInfo}
+                                    aiDetectEnabled={aiDetectEnabled}
+                                    onAiStats={onAiStats}
+                                />
                             )}
+
+                            {status === 'stream_frozen' && (
+                                <div className="stream-frozen-overlay">
+                                    <div className="stream-frozen-icon">
+                                        <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+                                            <line x1="12" y1="9" x2="12" y2="13" />
+                                            <line x1="12" y1="17" x2="12.01" y2="17" />
+                                        </svg>
+                                    </div>
+                                    <div className="stream-frozen-title">
+                                        {staleInfo?.stream_state === 'OFFLINE' ? 'STREAM OFFLINE' : 'STREAM FROZEN'}
+                                    </div>
+                                    <div className="stream-frozen-detail">
+                                        {staleInfo?.stream_state === 'RECONNECTING'
+                                            ? `Attempting reconnection... #${staleInfo.reconnect_attempts || 0}`
+                                            : staleInfo?.stream_state === 'OFFLINE'
+                                            ? 'Max reconnect attempts exceeded'
+                                            : 'No new frames received'}
+                                    </div>
+                                    {staleInfo?.last_frame_age && (
+                                        <div className="stream-frozen-age">
+                                            Last frame: {staleInfo.last_frame_age >= 60
+                                                ? `${Math.floor(staleInfo.last_frame_age / 60)}m ${Math.round(staleInfo.last_frame_age % 60)}s ago`
+                                                : `${Math.round(staleInfo.last_frame_age)}s ago`}
+                                        </div>
+                                    )}
+                                </div>
+                            )}
+
+                            {status !== 'streaming' && status !== 'stream_frozen' && !everStreamed && (
+                                <div className="live-feed-placeholder">
+                                    <div style={{ animation: 'pulse 2s ease-in-out infinite', display: 'flex' }}>
+                                        <VideoCameraIcon size={32} />
+                                    </div>
+                                    <div style={{ fontWeight: 500 }}>{camera.name}</div>
+                                    <div style={{ fontSize: '0.75rem' }}>
+                                        {status === 'unavailable'
+                                            ? 'Relay has no stream for this camera'
+                                            : status === 'connecting'
+                                            ? 'Connecting to video stream...'
+                                            : 'Reconnecting...'}
+                                    </div>
+                                    <div style={{ fontSize: '0.688rem', opacity: 0.5 }}>
+                                        {useWebrtc
+                                            ? 'Negotiating WebRTC with the relay'
+                                            : 'Waiting for frames from backend pipeline'}
+                                    </div>
+                                </div>
+                            )}
+                        </>
+                    ) : (
+                        <div className="live-feed-placeholder">
+                            <div style={{ opacity: 0.2, display: 'flex' }}>
+                                <VideoCameraOffIcon size={32} />
+                            </div>
+                            <div style={{ fontWeight: 500 }}>{camera.name}</div>
+                            <div style={{ fontSize: '0.75rem', color: 'var(--danger)' }}>Camera Offline</div>
                         </div>
-
-                        {!decided ? null : useWebrtc ? (
-                            <Go2RtcPlayer
-                                camera={camera}
-                                signallingUrl={webrtc.signalling_url}
-                                onStatus={handleStatus}
-                            />
-                        ) : (
-                            <MjpegFeed
-                                camera={camera}
-                                onStatus={handleStatus}
-                                onStale={setStaleInfo}
-                                aiDetectEnabled={aiDetectEnabled}
-                                onAiStats={onAiStats}
-                            />
-                        )}
-
-                        {status === 'stream_frozen' && (
-                            <div className="stream-frozen-overlay">
-                                <div className="stream-frozen-icon">
-                                    <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                        <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
-                                        <line x1="12" y1="9" x2="12" y2="13" />
-                                        <line x1="12" y1="17" x2="12.01" y2="17" />
+                    )}
+                </div>
+            </div>
+            {compact ? (
+                <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative' }}>
+                    <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>{camera.name}</div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                        <span className={`badge ${camera.status}`} style={{ fontSize: '0.625rem', padding: '2px 6px' }}>
+                            {camera.status}
+                        </span>
+                        {hasSlotPicker && (
+                            <div ref={pickerRef} style={{ position: 'relative' }}>
+                                <button
+                                    className="slot-swap-btn"
+                                    onClick={(e) => { e.stopPropagation(); setPickerOpen(!pickerOpen); }}
+                                    title="Change camera for this slot"
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <polyline points="16 3 21 3 21 8" />
+                                        <line x1="4" y1="20" x2="21" y2="3" />
+                                        <polyline points="21 16 21 21 16 21" />
+                                        <line x1="15" y1="15" x2="21" y2="21" />
+                                        <line x1="4" y1="4" x2="9" y2="9" />
                                     </svg>
-                                </div>
-                                <div className="stream-frozen-title">
-                                    {staleInfo?.stream_state === 'OFFLINE' ? 'STREAM OFFLINE' : 'STREAM FROZEN'}
-                                </div>
-                                <div className="stream-frozen-detail">
-                                    {staleInfo?.stream_state === 'RECONNECTING'
-                                        ? `Attempting reconnection... #${staleInfo.reconnect_attempts || 0}`
-                                        : staleInfo?.stream_state === 'OFFLINE'
-                                        ? 'Max reconnect attempts exceeded'
-                                        : 'No new frames received'}
-                                </div>
-                                {staleInfo?.last_frame_age && (
-                                    <div className="stream-frozen-age">
-                                        Last frame: {staleInfo.last_frame_age >= 60
-                                            ? `${Math.floor(staleInfo.last_frame_age / 60)}m ${Math.round(staleInfo.last_frame_age % 60)}s ago`
-                                            : `${Math.round(staleInfo.last_frame_age)}s ago`}
+                                </button>
+                                {pickerOpen && (
+                                    <div className="slot-picker-dropdown">
+                                        {pickerCameras.online?.length > 0 && (
+                                            <>
+                                                <div className="slot-picker-divider">Online</div>
+                                                {pickerCameras.online.map(c => (
+                                                    <button
+                                                        key={c.id}
+                                                        className={`slot-picker-item${c.id === camera.id ? ' active' : ''}`}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            onSlotChange(slotIndex, c.id);
+                                                            setPickerOpen(false);
+                                                        }}
+                                                    >
+                                                        <VideoCameraIcon size={14} />
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <div className="picker-cam-name">{c.name}</div>
+                                                            <div className="picker-cam-loc">{c.location}</div>
+                                                        </div>
+                                                        <span className="badge online" style={{ fontSize: '0.5rem', padding: '1px 4px' }}>
+                                                            <span className="badge-dot"></span>
+                                                        </span>
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
+                                        {pickerCameras.offline?.length > 0 && (
+                                            <>
+                                                <div className="slot-picker-divider">Offline</div>
+                                                {pickerCameras.offline.map(c => (
+                                                    <button
+                                                        key={c.id}
+                                                        className={`slot-picker-item${c.id === camera.id ? ' active' : ''}`}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            onSlotChange(slotIndex, c.id);
+                                                            setPickerOpen(false);
+                                                        }}
+                                                    >
+                                                        <VideoCameraOffIcon size={14} />
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <div className="picker-cam-name">{c.name}</div>
+                                                            <div className="picker-cam-loc">{c.location}</div>
+                                                        </div>
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
                                     </div>
                                 )}
                             </div>
                         )}
-
-                        {status !== 'streaming' && status !== 'stream_frozen' && !everStreamed && (
-                            <div className="live-feed-placeholder">
-                                <div style={{ animation: 'pulse 2s ease-in-out infinite', display: 'flex' }}>
-                                    <VideoCameraIcon size={32} />
-                                </div>
-                                <div style={{ fontWeight: 500 }}>{camera.name}</div>
-                                <div style={{ fontSize: '0.75rem' }}>
-                                    {status === 'unavailable'
-                                        ? 'Relay has no stream for this camera'
-                                        : status === 'connecting'
-                                        ? 'Connecting to video stream...'
-                                        : 'Reconnecting...'}
-                                </div>
-                                <div style={{ fontSize: '0.688rem', opacity: 0.5 }}>
-                                    {useWebrtc
-                                        ? 'Negotiating WebRTC with the relay'
-                                        : 'Waiting for frames from backend pipeline'}
-                                </div>
-                            </div>
-                        )}
-                    </>
-                ) : (
-                    <div className="live-feed-placeholder">
-                        <div style={{ opacity: 0.2, display: 'flex' }}>
-                            <VideoCameraOffIcon size={32} />
-                        </div>
-                        <div style={{ fontWeight: 500 }}>{camera.name}</div>
-                        <div style={{ fontSize: '0.75rem', color: 'var(--danger)' }}>Camera Offline</div>
                     </div>
-                )}
-            </div>
-            {compact ? (
-                <div style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-                    <div style={{ fontWeight: 600, fontSize: '0.75rem' }}>{camera.name}</div>
-                    <span className={`badge ${camera.status}`} style={{ fontSize: '0.625rem', padding: '2px 6px' }}>
-                        {camera.status}
-                    </span>
                 </div>
             ) : (
-                <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+                <div style={{ padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', position: 'relative' }}>
                     <div>
                         <div style={{ fontWeight: 600, fontSize: '0.875rem' }}>{camera.name}</div>
                         <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{camera.location}</div>
                     </div>
-                    <span className={`badge ${camera.status}`}>
-                        {camera.status === 'online' && <span className="badge-dot"></span>}
-                        {camera.status}
-                    </span>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <span className={`badge ${camera.status}`}>
+                            {camera.status === 'online' && <span className="badge-dot"></span>}
+                            {camera.status}
+                        </span>
+                        {hasSlotPicker && (
+                            <div ref={pickerRef} style={{ position: 'relative' }}>
+                                <button
+                                    className="slot-swap-btn"
+                                    onClick={(e) => { e.stopPropagation(); setPickerOpen(!pickerOpen); }}
+                                    title="Change camera for this slot"
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <polyline points="16 3 21 3 21 8" />
+                                        <line x1="4" y1="20" x2="21" y2="3" />
+                                        <polyline points="21 16 21 21 16 21" />
+                                        <line x1="15" y1="15" x2="21" y2="21" />
+                                        <line x1="4" y1="4" x2="9" y2="9" />
+                                    </svg>
+                                </button>
+                                {pickerOpen && (
+                                    <div className="slot-picker-dropdown">
+                                        {pickerCameras.online?.length > 0 && (
+                                            <>
+                                                <div className="slot-picker-divider">Online</div>
+                                                {pickerCameras.online.map(c => (
+                                                    <button
+                                                        key={c.id}
+                                                        className={`slot-picker-item${c.id === camera.id ? ' active' : ''}`}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            onSlotChange(slotIndex, c.id);
+                                                            setPickerOpen(false);
+                                                        }}
+                                                    >
+                                                        <VideoCameraIcon size={14} />
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <div className="picker-cam-name">{c.name}</div>
+                                                            <div className="picker-cam-loc">{c.location}</div>
+                                                        </div>
+                                                        <span className="badge online" style={{ fontSize: '0.5rem', padding: '1px 4px' }}>
+                                                            <span className="badge-dot"></span>
+                                                        </span>
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
+                                        {pickerCameras.offline?.length > 0 && (
+                                            <>
+                                                <div className="slot-picker-divider">Offline</div>
+                                                {pickerCameras.offline.map(c => (
+                                                    <button
+                                                        key={c.id}
+                                                        className={`slot-picker-item${c.id === camera.id ? ' active' : ''}`}
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            onSlotChange(slotIndex, c.id);
+                                                            setPickerOpen(false);
+                                                        }}
+                                                    >
+                                                        <VideoCameraOffIcon size={14} />
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <div className="picker-cam-name">{c.name}</div>
+                                                            <div className="picker-cam-loc">{c.location}</div>
+                                                        </div>
+                                                    </button>
+                                                ))}
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </div>
                 </div>
             )}
         </div>

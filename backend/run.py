@@ -1,6 +1,7 @@
+#!python3.11
 """
 Application entry point.
-Run with: python run.py
+Run with: py run.py (or py -3.11 run.py)
 """
 
 import os

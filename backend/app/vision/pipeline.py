@@ -2952,7 +2952,14 @@ class VisionPipeline:
                     from ultralytics import YOLO
                     import torch
                     device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                    model_path = getattr(settings, 'HAZARD_MODEL_PATH', 'yolov8n.pt')
+                    # Phase 1: prefer PERSON_DET_MODEL when set, else fall
+                    # back to HAZARD_MODEL_PATH for backward compatibility.
+                    person_model = getattr(settings, 'PERSON_DET_MODEL', '')
+                    model_path = (
+                        person_model
+                        if person_model
+                        else getattr(settings, 'HAZARD_MODEL_PATH', 'yolov8n.pt')
+                    )
                     # Item 1: prefer a TensorRT engine. resolve_weights returns
                     # the .pt unchanged when engines are off, unavailable, or
                     # the build failed -- a slower path, never a dead one.

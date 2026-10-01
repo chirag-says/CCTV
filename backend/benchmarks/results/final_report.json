@@ -1,0 +1,291 @@
+{
+  "timestamp": "2026-09-29T10:56:29.296034",
+  "total_time_sec": 79.7,
+  "gpu_final": {
+    "gpu_name": "NVIDIA GeForce RTX 5070",
+    "vram_used_mb": 1380.9,
+    "vram_total_mb": 12227.0,
+    "gpu_util_pct": 22,
+    "mem_util_pct": 8
+  },
+  "cpu_final": {
+    "cpu_pct": 2277.3,
+    "ram_mb": 2701.6,
+    "system_cpu_pct": 63.8
+  },
+  "summary": {
+    "components": [
+      {
+        "component": "Person Detector",
+        "current_or_candidate": "current",
+        "configuration": "yolov8n.pt @ 640px fp16",
+        "detections_per_frame": 4.89,
+        "latency_avg_ms": 6.572,
+        "latency_p95_ms": 7.67,
+        "effective_fps": 152.2,
+        "gpu_util_avg": 15.0,
+        "vram_mb": 1282.6,
+        "height_buckets": {
+          "200+px": 773,
+          "120-199px": 187,
+          "80-119px": 16,
+          "50-79px": 2
+        }
+      },
+      {
+        "component": "Person Detector",
+        "current_or_candidate": "candidate",
+        "configuration": "yolov8n.pt @ 960px fp16",
+        "detections_per_frame": 6.04,
+        "latency_avg_ms": 8.298,
+        "latency_p95_ms": 9.512,
+        "effective_fps": 120.5,
+        "gpu_util_avg": 15.5,
+        "vram_mb": 1296.2,
+        "height_buckets": {
+          "200+px": 799,
+          "120-199px": 324,
+          "80-119px": 69,
+          "50-79px": 17
+        }
+      },
+      {
+        "component": "Person Detector",
+        "current_or_candidate": "candidate",
+        "configuration": "yolov8n.pt @ 1280px fp16",
+        "detections_per_frame": 6.8,
+        "latency_avg_ms": 10.075,
+        "latency_p95_ms": 11.901,
+        "effective_fps": 99.3,
+        "gpu_util_avg": 17.6,
+        "vram_mb": 1324.4,
+        "height_buckets": {
+          "200+px": 816,
+          "120-199px": 376,
+          "50-79px": 51,
+          "80-119px": 112,
+          "30-49px": 5,
+          "<30px": 1
+        }
+      },
+      {
+        "component": "Person Detector",
+        "current_or_candidate": "candidate",
+        "configuration": "yolo11m.pt @ 640px fp16",
+        "detections_per_frame": 6.48,
+        "latency_avg_ms": 8.852,
+        "latency_p95_ms": 9.925,
+        "effective_fps": 113.0,
+        "gpu_util_avg": 28.6,
+        "vram_mb": 1375.2,
+        "height_buckets": {
+          "200+px": 857,
+          "120-199px": 349,
+          "80-119px": 76,
+          "50-79px": 12,
+          "30-49px": 2
+        }
+      },
+      {
+        "component": "Person Detector",
+        "current_or_candidate": "candidate",
+        "configuration": "yolo11m.pt @ 960px fp16",
+        "detections_per_frame": 7.57,
+        "latency_avg_ms": 10.679,
+        "latency_p95_ms": 11.608,
+        "effective_fps": 93.6,
+        "gpu_util_avg": 35.1,
+        "vram_mb": 1520.4,
+        "height_buckets": {
+          "200+px": 864,
+          "120-199px": 443,
+          "80-119px": 126,
+          "50-79px": 70,
+          "30-49px": 9,
+          "<30px": 2
+        }
+      },
+      {
+        "component": "Person Detector",
+        "current_or_candidate": "candidate",
+        "configuration": "yolo11m.pt @ 1280px fp16",
+        "detections_per_frame": 7.88,
+        "latency_avg_ms": 13.018,
+        "latency_p95_ms": 13.99,
+        "effective_fps": 76.8,
+        "gpu_util_avg": 38.4,
+        "vram_mb": 1679.4,
+        "height_buckets": {
+          "200+px": 878,
+          "120-199px": 455,
+          "50-79px": 92,
+          "80-119px": 134,
+          "30-49px": 14,
+          "<30px": 2
+        }
+      },
+      {
+        "component": "Face Detector",
+        "current_or_candidate": "candidate",
+        "configuration": "SCRFD-10G @ 640px",
+        "faces_per_frame": 2.0,
+        "latency_avg_ms": 16.26,
+        "latency_p95_ms": 23.852,
+        "effective_fps": 61.5,
+        "gpu_util_avg": 49.1,
+        "vram_mb": 1964.3,
+        "face_size_buckets": {
+          "50-64px": 64,
+          "32-49px": 105,
+          "65-79px": 46,
+          "120+px": 64,
+          "80-119px": 91,
+          "<32px": 30
+        }
+      },
+      {
+        "component": "Face Detector",
+        "current_or_candidate": "current",
+        "configuration": "SCRFD-10G @ 1024px",
+        "faces_per_frame": 2.92,
+        "latency_avg_ms": 32.466,
+        "latency_p95_ms": 43.715,
+        "effective_fps": 30.8,
+        "gpu_util_avg": 43.1,
+        "vram_mb": 2255.2,
+        "face_size_buckets": {
+          "50-64px": 67,
+          "32-49px": 146,
+          "<32px": 179,
+          "120+px": 62,
+          "65-79px": 45,
+          "80-119px": 86
+        }
+      },
+      {
+        "component": "Body ReID",
+        "current_or_candidate": "current",
+        "configuration": "current_resnet50_imagenet (2048-dim)",
+        "latency_avg_ms": 6.905,
+        "batch_per_crop_ms": 2.214,
+        "gpu_util_avg": 15.8,
+        "vram_mb": 1454.9,
+        "sim_mean": 0.4188,
+        "sim_std": 0.1201
+      }
+    ],
+    "recognition_gate_analysis": {
+      "50": {
+        "total_faces": 585,
+        "passes_gate": 260,
+        "rejected_by_gate": 325,
+        "matched": 48,
+        "unknown_after_recog": 212,
+        "match_rate": 0.185,
+        "gate_rejection_rate": 0.556,
+        "avg_distance": 0.4977,
+        "avg_margin": 0.2281
+      },
+      "60": {
+        "total_faces": 585,
+        "passes_gate": 210,
+        "rejected_by_gate": 375,
+        "matched": 35,
+        "unknown_after_recog": 175,
+        "match_rate": 0.167,
+        "gate_rejection_rate": 0.641,
+        "avg_distance": 0.4854,
+        "avg_margin": 0.229
+      },
+      "70": {
+        "total_faces": 585,
+        "passes_gate": 179,
+        "rejected_by_gate": 406,
+        "matched": 28,
+        "unknown_after_recog": 151,
+        "match_rate": 0.156,
+        "gate_rejection_rate": 0.694,
+        "avg_distance": 0.4903,
+        "avg_margin": 0.218
+      },
+      "80": {
+        "total_faces": 585,
+        "passes_gate": 148,
+        "rejected_by_gate": 437,
+        "matched": 23,
+        "unknown_after_recog": 125,
+        "match_rate": 0.155,
+        "gate_rejection_rate": 0.747,
+        "avg_distance": 0.4936,
+        "avg_margin": 0.208
+      },
+      "90": {
+        "total_faces": 585,
+        "passes_gate": 116,
+        "rejected_by_gate": 469,
+        "matched": 21,
+        "unknown_after_recog": 95,
+        "match_rate": 0.181,
+        "gate_rejection_rate": 0.802,
+        "avg_distance": 0.4957,
+        "avg_margin": 0.2088
+      },
+      "100": {
+        "total_faces": 585,
+        "passes_gate": 97,
+        "rejected_by_gate": 488,
+        "matched": 18,
+        "unknown_after_recog": 79,
+        "match_rate": 0.186,
+        "gate_rejection_rate": 0.834,
+        "avg_distance": 0.5,
+        "avg_margin": 0.1905
+      },
+      "120": {
+        "total_faces": 585,
+        "passes_gate": 62,
+        "rejected_by_gate": 523,
+        "matched": 8,
+        "unknown_after_recog": 54,
+        "match_rate": 0.129,
+        "gate_rejection_rate": 0.894,
+        "avg_distance": 0.5046,
+        "avg_margin": 0.1659
+      }
+    },
+    "temporal_analysis": {
+      "security 4": {
+        "n_observations": 11,
+        "best_single_distance": 0.3642,
+        "worst_single_distance": 0.5974,
+        "avg_distance": 0.465,
+        "distance_std": 0.0603,
+        "avg_margin": 0.2102
+      },
+      "security 2": {
+        "n_observations": 52,
+        "best_single_distance": 0.3151,
+        "worst_single_distance": 0.6179,
+        "avg_distance": 0.5172,
+        "distance_std": 0.0654,
+        "avg_margin": 0.2216
+      },
+      "lab": {
+        "n_observations": 4,
+        "best_single_distance": 0.4785,
+        "worst_single_distance": 0.5895,
+        "avg_distance": 0.5239,
+        "distance_std": 0.0408,
+        "avg_margin": 0.2504
+      },
+      "Chirag": {
+        "n_observations": 8,
+        "best_single_distance": 0.3534,
+        "worst_single_distance": 0.6134,
+        "avg_distance": 0.4896,
+        "distance_std": 0.0867,
+        "avg_margin": 0.2757
+      }
+    }
+  }
+}

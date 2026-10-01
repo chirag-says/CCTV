@@ -1,0 +1,68 @@
+{
+  "80": {
+    "total_tracks": 0,
+    "recognized_tracks": 0,
+    "identity_flips": {
+      "total": 0,
+      "mean_per_track": 0,
+      "max": 0
+    },
+    "recognition_persistence": {
+      "mean": 0,
+      "min": 0
+    },
+    "time_to_first_correct": {
+      "mean_frames": null,
+      "max_frames": null
+    },
+    "incorrect_before_stable": {
+      "mean": 0,
+      "max": 0
+    },
+    "per_track_details": []
+  },
+  "70": {
+    "total_tracks": 0,
+    "recognized_tracks": 0,
+    "identity_flips": {
+      "total": 0,
+      "mean_per_track": 0,
+      "max": 0
+    },
+    "recognition_persistence": {
+      "mean": 0,
+      "min": 0
+    },
+    "time_to_first_correct": {
+      "mean_frames": null,
+      "max_frames": null
+    },
+    "incorrect_before_stable": {
+      "mean": 0,
+      "max": 0
+    },
+    "per_track_details": []
+  },
+  "60": {
+    "total_tracks": 0,
+    "recognized_tracks": 0,
+    "identity_flips": {
+      "total": 0,
+      "mean_per_track": 0,
+      "max": 0
+    },
+    "recognition_persistence": {
+      "mean": 0,
+      "min": 0
+    },
+    "time_to_first_correct": {
+      "mean_frames": null,
+      "max_frames": null
+    },
+    "incorrect_before_stable": {
+      "mean": 0,
+      "max": 0
+    },
+    "per_track_details": []
+  }
+}

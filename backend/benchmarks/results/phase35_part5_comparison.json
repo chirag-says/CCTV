@@ -1,0 +1,42 @@
+{
+  "n_positive": 49683,
+  "n_negative": 2483,
+  "osnet_msmt17": {
+    "embedding_dim": 512,
+    "same_person_mean": 0.5649,
+    "same_person_std": 0.1536,
+    "diff_person_mean": 0.3943,
+    "diff_person_std": 0.1066,
+    "diff_person_p95": 0.5986,
+    "separation_gap": -0.0337,
+    "best_threshold": 0.3,
+    "best_f1": 0.9611,
+    "precision": 0.9585,
+    "recall": 0.9638,
+    "far": 0.8357,
+    "frr": 0.0362,
+    "tp": 47885,
+    "fp": 2075,
+    "fn": 1798,
+    "tn": 408
+  },
+  "resnet50_imagenet": {
+    "embedding_dim": 2048,
+    "same_person_mean": 0.6032,
+    "same_person_std": 0.1169,
+    "diff_person_mean": 0.4494,
+    "diff_person_std": 0.139,
+    "diff_person_p95": 0.6812,
+    "separation_gap": -0.078,
+    "best_threshold": 0.3,
+    "best_f1": 0.9716,
+    "precision": 0.9584,
+    "recall": 0.9852,
+    "far": 0.8546,
+    "frr": 0.0148,
+    "tp": 48948,
+    "fp": 2122,
+    "fn": 735,
+    "tn": 361
+  }
+}
