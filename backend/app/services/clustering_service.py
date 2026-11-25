@@ -274,6 +274,86 @@ class ClusteringService:
             db.close()
 
     @staticmethod
+    def reconcile() -> Dict[str, int]:
+        """
+        Bring active clusters back in line with the faces that still exist.
+
+        A cluster is a claim about a set of unknown faces. Faces leave -- they
+        are enrolled, dismissed, or removed after UNKNOWN_FACE_RETENTION_DAYS --
+        and nothing told the cluster. The first retention run (2026-11-20) left
+        61 "active" clusters with no faces at all and three review candidates
+        whose only evidence was an image that had just been deleted: the
+        review page showed broken pictures for matches nobody could check.
+
+        So, for every active cluster:
+          * no pending face left -> the cluster and its candidates are removed.
+            There is nothing to look at, so there is nothing to review.
+          * some left            -> its count is corrected, and if the face
+            it showed is gone it shows the best one that remains.
+
+        Reviewed and merged clusters are left alone: they are history.
+        """
+        from collections import defaultdict
+
+        from app.db.models import IdentityReviewCandidate
+
+        stats = {"clusters_removed": 0, "candidates_removed": 0, "clusters_repaired": 0}
+        db = SessionLocal()
+        try:
+            clusters = db.query(UnknownCluster).filter(UnknownCluster.status == "active").all()
+            if not clusters:
+                return stats
+            members = defaultdict(list)
+            for face in (
+                db.query(UnknownFace)
+                .filter(
+                    UnknownFace.status == "pending",
+                    UnknownFace.cluster_id.in_([c.id for c in clusters]),
+                )
+                .all()
+            ):
+                members[face.cluster_id].append(face)
+
+            for cluster in clusters:
+                faces = members.get(cluster.id, [])
+                if not faces:
+                    # Explicit, not left to ON DELETE CASCADE: the constraint
+                    # only exists where the migration was applied by hand.
+                    stats["candidates_removed"] += (
+                        db.query(IdentityReviewCandidate)
+                        .filter(IdentityReviewCandidate.cluster_id == cluster.id)
+                        .delete(synchronize_session=False)
+                    )
+                    db.delete(cluster)
+                    stats["clusters_removed"] += 1
+                    continue
+                repaired = False
+                if cluster.member_count != len(faces):
+                    cluster.member_count = len(faces)
+                    repaired = True
+                if cluster.representative_face_id not in {f.id for f in faces}:
+                    best = max(faces, key=lambda f: f.occurrence or 1)
+                    cluster.representative_face_id = best.id
+                    cluster.representative_snapshot = best.snapshot_url
+                    repaired = True
+                if repaired:
+                    cluster.updated_at = datetime.now(timezone.utc)
+                    stats["clusters_repaired"] += 1
+            db.commit()
+            if any(stats.values()):
+                logger.info(
+                    f"Cluster reconcile: removed {stats['clusters_removed']} empty clusters "
+                    f"({stats['candidates_removed']} candidates), repaired {stats['clusters_repaired']}"
+                )
+            return stats
+        except Exception as e:
+            db.rollback()
+            logger.error(f"Cluster reconcile failed: {e}", exc_info=True)
+            return stats
+        finally:
+            db.close()
+
+    @staticmethod
     def get_cluster_members(cluster_id: str) -> List[Dict[str, Any]]:
         """Get all unknown faces in a cluster."""
         db = SessionLocal()

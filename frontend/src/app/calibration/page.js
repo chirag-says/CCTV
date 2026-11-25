@@ -24,6 +24,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import AppShell from '@/components/AppShell';
 import api from '@/lib/api';
 import { VideoCameraIcon, UsersIcon, DetectionIcon } from '@/components/Icons';
+import HandoffEditor from './HandoffEditor';
 
 // Default landmark names. Deliberately about a rectangle on the floor, since
 // that is what makes the world coordinates trivial to derive from two measured
@@ -276,11 +277,12 @@ export default function CalibrationPage() {
     return (
         <AppShell>
             <div className="page-header">
-                <h1>Ground-Plane Calibration</h1>
+                <h1>Cross-Camera Tracking</h1>
                 <p>
                     Teach each camera where the floor is, so cameras in the same zone can
                     agree on where a person is standing — even when only one of them can
-                    see their face.
+                    see their face — and mark where people pass between cameras that do not
+                    overlap, so their number follows them.
                 </p>
             </div>
 
@@ -308,8 +310,9 @@ export default function CalibrationPage() {
                 </div>
                 {zone && !zone.cross_camera_ready && (
                     <div style={{ marginTop: '10px', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
-                        Cross-camera tracking needs at least <strong>two</strong> calibrated cameras in
-                        this zone. {zone.calibrated_count} of {zone.camera_count} done.
+                        Floor calibration is <strong>optional</strong>: cameras learn where their views overlap
+                        from people walking (step 5). Calibrate two or more here only if you also want
+                        positions in metres. {zone.calibrated_count} of {zone.camera_count} usable.
                     </div>
                 )}
             </div>
@@ -399,10 +402,15 @@ export default function CalibrationPage() {
                                 >
                                     <VideoCameraIcon size={13} />
                                     {cam.name}
-                                    {cam.calibrated && (
+                                    {/* Saved is not usable: four clicks always fit themselves, so a
+                                        residual says nothing about whether they are on the floor. */}
+                                    {cam.calibrated && cam.usable !== false && (
                                         <span className="badge online" style={{ fontSize: '0.563rem' }}>
                                             {Math.round((cam.residual || 0) * 100)}cm
                                         </span>
+                                    )}
+                                    {cam.calibrated && cam.usable === false && (
+                                        <span className="badge offline" style={{ fontSize: '0.563rem' }}>redo</span>
                                     )}
                                 </button>
                             ))}
@@ -410,6 +418,22 @@ export default function CalibrationPage() {
 
                         {selectedCamera && (
                             <>
+                                {(zone.cameras.find((c) => c.id === selectedCamera.id)?.problems || []).length > 0 && (
+                                    <div style={{
+                                        marginBottom: '12px', padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+                                        fontSize: '0.813rem', background: 'var(--bg-tertiary)',
+                                        borderLeft: '3px solid var(--danger)',
+                                    }}>
+                                        <strong>This camera&rsquo;s saved calibration is being ignored.</strong>
+                                        {zone.cameras.find((c) => c.id === selectedCamera.id).problems.map((p, i) => (
+                                            <div key={i} style={{ marginTop: '4px', color: 'var(--text-secondary)' }}>{p}</div>
+                                        ))}
+                                        <div style={{ marginTop: '4px', color: 'var(--text-muted)', fontSize: '0.75rem' }}>
+                                            Clear the points and click four spots on the <em>floor</em> — tile corners work well —
+                                            or remove the calibration. Cross-camera numbering does not depend on it.
+                                        </div>
+                                    </div>
+                                )}
                                 <div style={{
                                     display: 'flex', alignItems: 'center', gap: '10px',
                                     marginBottom: '10px', flexWrap: 'wrap',
@@ -582,6 +606,8 @@ export default function CalibrationPage() {
                     </>
                 )}
             </div>
+
+            {zone && <HandoffEditor key={zone.zone} zone={zone.zone} cameras={zone.cameras} />}
 
             {/* Live proof */}
             <div className="card">

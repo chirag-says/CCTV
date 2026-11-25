@@ -41,36 +41,64 @@ def _unknown_to_dict(face: UnknownFaceDB) -> dict:
 
 @router.get("")
 async def list_unknown_faces(
-    status: Optional[str] = Query("pending", description="pending/enrolled/dismissed"),
-    limit: int = Query(50, ge=1, le=200),
+    status: Optional[str] = Query("pending", description="pending/enrolled/dismissed/archived/all"),
+    sort: str = Query("last_seen", pattern="^(last_seen|first_seen|occurrence|created_at)$"),
+    order: str = Query("desc", pattern="^(asc|desc)$"),
+    limit: int = Query(24, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    camera_id: Optional[str] = Query(None),
     current_user: dict = Depends(get_current_user),
 ):
-    """List unknown faces queue, sorted by most recently seen first."""
-    db = SessionLocal()
-    try:
-        query = db.query(UnknownFaceDB)
+    """
+    One page of the unknown-faces queue.
 
-        if status:
-            query = query.filter(UnknownFaceDB.status == status)
+    `total` and `total_sightings` describe everything matching the filter, not
+    just this page, so the page can say how many there really are and how many
+    pages that makes.
+    """
+    from app.config import settings
+    from app.services.unknown_service import UnknownService
 
-        total = query.count()
-        faces = (
-            query.order_by(
-                UnknownFaceDB.last_seen.desc(),
-                UnknownFaceDB.occurrence.desc(),
-            )
-            .offset(offset)
-            .limit(limit)
-            .all()
-        )
+    page = UnknownService.list_page(
+        status=status, sort=sort, order=order, limit=limit, offset=offset, camera_id=camera_id,
+    )
+    return {
+        "data": [
+            {**_unknown_to_dict(face), "camera_name": camera_name}
+            for face, camera_name in page["rows"]
+        ],
+        "total": page["total"],
+        "total_sightings": page["total_sightings"],
+        "limit": limit,
+        "offset": offset,
+        "sort": sort,
+        "order": order,
+        # 0 means unknown faces are kept until someone deals with them.
+        "retention_days": int(getattr(settings, "UNKNOWN_FACE_RETENTION_DAYS", 0) or 0),
+    }
 
-        return {
-            "data": [_unknown_to_dict(f) for f in faces],
-            "total": total,
-        }
-    finally:
-        db.close()
+
+@router.get("/retention")
+async def unknown_face_retention(
+    days: Optional[int] = Query(None, ge=1, le=3650, description="Preview a different age"),
+    current_user: dict = Depends(get_current_user),
+):
+    """How long unknown faces are kept, and how many are past that age now.
+
+    Read-only. Passing `days` previews what a setting WOULD remove without
+    changing anything.
+    """
+    from app.config import settings
+    from app.services.unknown_service import UnknownService
+
+    configured = int(getattr(settings, "UNKNOWN_FACE_RETENTION_DAYS", 0) or 0)
+    preview = days or configured
+    return {
+        "retention_days": configured,
+        "enabled": configured > 0,
+        "preview_days": preview,
+        "would_remove": UnknownService.count_expired(preview) if preview else 0,
+    }
 
 
 @router.get("/suggestions")

@@ -101,7 +101,21 @@ def build_frame_metadata(
 
         objects.append({
             "kind": kind,
+            # Explicitly camera-local. Kept as `track_id` for compatibility.
             "track_id": int(track_id) if track_id is not None else None,
+            "local_track_id": int(track_id) if track_id is not None else None,
+            "global_id": str(entry["global_id"]) if entry.get("global_id") else None,
+            "known_person_id": (
+                str(entry["known_person_id"]) if entry.get("known_person_id") else None
+            ),
+            "identity_state": (
+                str(entry["identity_state"]) if entry.get("identity_state") else None
+            ),
+            "identity_source": (
+                str(entry["identity_source"]) if entry.get("identity_source") else None
+            ),
+            "last_camera": str(entry["last_camera"]) if entry.get("last_camera") else None,
+            "last_seen": float(entry["last_seen"]) if entry.get("last_seen") is not None else None,
             "box": box,
             "label": str(label),
             "identity": str(identity) if identity else None,

@@ -18,6 +18,7 @@ import pytest
 from app.vision.ground_plane import (
     CalibrationError,
     GroundPlane,
+    calibration_problems,
     fit_homography,
     foot_point,
 )
@@ -246,3 +247,51 @@ def test_foot_point_differs_from_centroid():
     centroid_v = (box[0] + box[2]) / 2
     assert v != centroid_v
     assert v > centroid_v
+
+
+# ── A calibration that solves is not a calibration that works ─────────────────
+#
+# Four points always fit themselves, so the residual above is zero for ANY four
+# clicks. Both COE corridor cameras were saved with four points up a door post:
+# "fit error 0 cm", and every person projected forty metres outside the
+# building or beyond the horizon. These tests pin the check that asks the real
+# question -- can this mapping locate a person? -- in normalised coordinates,
+# which is how calibrations are stored.
+
+FLOOR_NORMALISED = [[0.16, 0.83], [0.84, 0.83], [0.63, 0.31], [0.38, 0.31]]
+COE_LEFT_AS_SAVED = [[0.5847, 0.1642], [0.5767, 0.1500], [0.5738, 0.3430], [0.5796, 0.3648]]
+COE_RIGHT_AS_SAVED = [[0.4711, 0.1156], [0.4660, 0.1271], [0.4675, 0.2776], [0.4718, 0.2583]]
+
+
+def test_a_floor_rectangle_has_no_problems():
+    assert calibration_problems(FLOOR_NORMALISED, WORLD) == []
+    assert GroundPlane.build("cam-a", "COE", FLOOR_NORMALISED, WORLD).problems() == []
+
+
+def test_a_small_but_real_floor_patch_far_down_a_corridor_is_accepted():
+    """The check must not punish a careful operator with a distant rectangle."""
+    far_patch = [[0.42, 0.45], [0.58, 0.45], [0.54, 0.28], [0.46, 0.28]]
+    assert calibration_problems(far_patch, WORLD) == []
+
+
+@pytest.mark.parametrize("saved", [COE_LEFT_AS_SAVED, COE_RIGHT_AS_SAVED])
+def test_points_up_a_door_post_solve_perfectly_and_are_refused(saved):
+    plane = GroundPlane.build("coe", "COE", saved, WORLD)
+    assert plane.residual < 1e-3                 # the number the UI showed as "0 cm"
+    problems = plane.problems()
+    assert problems and "door post" in problems[0]
+    # ... and this is what "0 cm" was hiding: most of where people stand is
+    # not on this calibration's floor at all.
+    lost = sum(plane.project(u / 10, 0.9) is None for u in range(1, 10))
+    assert lost >= 3
+
+
+def test_points_that_put_the_horizon_through_the_floor_are_refused():
+    """Right four spots, wrong order: the fit is exact and the floor is inside out."""
+    crossed = [FLOOR_NORMALISED[0], FLOOR_NORMALISED[2], FLOOR_NORMALISED[1], FLOOR_NORMALISED[3]]
+    assert any("horizon" in p for p in calibration_problems(crossed, WORLD))
+
+
+def test_unsolvable_points_are_reported_not_raised():
+    problems = calibration_problems([[0.1, 0.1], [0.2, 0.2], [0.3, 0.3], [0.4, 0.4]], WORLD)
+    assert len(problems) == 1 and "collinear" in problems[0]

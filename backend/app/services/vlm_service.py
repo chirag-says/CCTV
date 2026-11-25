@@ -26,7 +26,7 @@ import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -647,6 +647,69 @@ _vlm_cache = VLMCache(
 def get_vlm_cache() -> VLMCache:
     """Get the module-level VLM result cache."""
     return _vlm_cache
+
+
+_status_cache: Dict[str, Any] = {"at": 0.0, "value": None}
+
+
+def get_vlm_status(max_age_sec: float = 30.0) -> Dict[str, Any]:
+    """
+    Is the AI verifier actually there? Cheap, cached, never raises.
+
+    The worker used to find out by trying: every cycle it sent each ambiguous
+    match to Ollama, every call was refused, and the only trace was one error
+    line at startup. The review page gave no hint that the "AI" in AI Identity
+    Review had not answered for weeks. This asks first -- one two-second GET --
+    so the worker can skip the calls and the page can say what is wrong and
+    what to do about it.
+
+    Returns {provider, model, available, detail}. `available` False is not an
+    error: review carries on with the face-similarity score alone, and matches
+    simply arrive without a second opinion.
+    """
+    import time as _time
+
+    now = _time.time()
+    if _status_cache["value"] is not None and now - _status_cache["at"] < max_age_sec:
+        return _status_cache["value"]
+
+    provider = str(settings.IDENTITY_REVIEW_VLM_PROVIDER or "").lower()
+    status: Dict[str, Any] = {"provider": provider, "model": "", "available": False, "detail": ""}
+    if provider == "ollama":
+        host, model = settings.OLLAMA_HOST, settings.OLLAMA_MODEL
+        status["model"] = model
+        try:
+            import httpx
+
+            response = httpx.get(f"{host.rstrip('/')}/api/tags", timeout=2.0)
+            response.raise_for_status()
+            installed = {m.get("name", "") for m in response.json().get("models", [])}
+            if model in installed or f"{model}:latest" in installed:
+                status["available"] = True
+                status["detail"] = f"Ollama is running with {model}."
+            else:
+                status["detail"] = (
+                    f"Ollama is running at {host} but the model {model} is not installed. "
+                    f"Run: ollama pull {model}"
+                )
+        except Exception:
+            status["detail"] = (
+                f"Ollama is not running at {host}. Start the Ollama app (or run "
+                f"'ollama serve'); it is picked up within a minute, no restart needed."
+            )
+    elif provider == "openai":
+        status["model"] = settings.IDENTITY_REVIEW_VLM_MODEL
+        if settings.IDENTITY_REVIEW_VLM_API_KEY:
+            status["available"] = True
+            status["detail"] = f"Using OpenAI {status['model']}."
+        else:
+            status["detail"] = "The OpenAI provider is selected but IDENTITY_REVIEW_VLM_API_KEY is empty."
+    else:
+        status["provider"] = "disabled"
+        status["detail"] = "AI verification is switched off (IDENTITY_REVIEW_VLM_PROVIDER)."
+
+    _status_cache.update(at=now, value=status)
+    return status
 
 
 def get_vlm_reviewer() -> VLMReviewer:

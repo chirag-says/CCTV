@@ -16,6 +16,42 @@ import api, { API_BASE } from '@/lib/api';
 import { useToast } from '@/lib/ToastContext';
 import { UserIcon, CameraIcon, CheckIcon, XIcon, CheckCircleIcon, UnknownFaceIcon } from '@/components/Icons';
 
+/** First / previous / page numbers / next / last, with a line saying where you are. */
+function Pager({ page, pageCount, onPage, summary, disabled }) {
+    // Up to five page numbers centred on the current one.
+    const from = Math.max(0, Math.min(page - 2, pageCount - 5));
+    const numbers = Array.from({ length: Math.min(5, pageCount) }, (_, i) => from + i);
+    const go = (target) => onPage(Math.min(pageCount - 1, Math.max(0, target)));
+    return (
+        <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            flexWrap: 'wrap', gap: '10px', margin: '12px 0',
+        }}>
+            <span style={{ fontSize: '0.8125rem', color: 'var(--text-muted)' }}>{summary}</span>
+            {pageCount > 1 && (
+                <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                    <button className="btn btn-secondary btn-sm" onClick={() => go(0)} disabled={disabled || page === 0} aria-label="First page">«</button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => go(page - 1)} disabled={disabled || page === 0}>Previous</button>
+                    {numbers.map((n) => (
+                        <button
+                            key={n}
+                            className={`btn btn-sm ${n === page ? 'btn-primary' : 'btn-secondary'}`}
+                            onClick={() => go(n)}
+                            disabled={disabled}
+                            aria-current={n === page ? 'page' : undefined}
+                            style={{ minWidth: '36px' }}
+                        >
+                            {n + 1}
+                        </button>
+                    ))}
+                    <button className="btn btn-secondary btn-sm" onClick={() => go(page + 1)} disabled={disabled || page >= pageCount - 1}>Next</button>
+                    <button className="btn btn-secondary btn-sm" onClick={() => go(pageCount - 1)} disabled={disabled || page >= pageCount - 1} aria-label="Last page">»</button>
+                </div>
+            )}
+        </div>
+    );
+}
+
 export default function UnknownFacesPage() {
     const [unknowns, setUnknowns] = useState([]);
     const [suggestions, setSuggestions] = useState([]);
@@ -34,10 +70,28 @@ export default function UnknownFacesPage() {
     const [selectedPerson, setSelectedPerson] = useState(null);
     const [merging, setMerging] = useState(false);
 
+    // ── Sorting and paging ────────────────────────────────────
+    // The server does both. The queue runs to thousands of faces, so the page
+    // only ever holds the slice it is showing, and the totals come from the
+    // server rather than from counting that slice.
+    const [sortKey, setSortKey] = useState('last_seen:desc');
+    const [pageSize, setPageSize] = useState(24);
+    const [page, setPage] = useState(0);
+    const [total, setTotal] = useState(0);
+    const [totalSightings, setTotalSightings] = useState(0);
+    const [retentionDays, setRetentionDays] = useState(0);
+    const [refreshing, setRefreshing] = useState(false);
+
     useEffect(() => {
-        loadUnknowns();
         loadSuggestions();
     }, []);
+
+    useEffect(() => {
+        // Only the very first load swaps in the "Loading" card; turning a
+        // page or re-sorting keeps the grid on screen while it updates.
+        loadUnknowns({ quiet: unknowns.length > 0 });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [sortKey, pageSize, page]);
 
     // Load persons when switching to merge mode
     useEffect(() => {
@@ -55,19 +109,50 @@ export default function UnknownFacesPage() {
         }
     }
 
-    async function loadUnknowns() {
-        setLoading(true);
+    // `quiet` reloads in place (after an enrol or dismiss, or the Refresh
+    // button) without swapping the whole grid for a "Loading" card.
+    async function loadUnknowns({ quiet = false, atPage = page } = {}) {
+        if (quiet) setRefreshing(true); else setLoading(true);
         setError(null);
         try {
-            const result = await api.getUnknownFaces({ status: 'pending' });
-            setUnknowns(result.data || []);
+            const [sort, order] = sortKey.split(':');
+            const result = await api.getUnknownFaces({
+                status: 'pending', sort, order, limit: pageSize, offset: atPage * pageSize,
+            });
+            const rows = result.data || [];
+            const count = result.total ?? rows.length;
+            // The last face on the last page was just dealt with: step back
+            // rather than showing an empty page with faces still waiting.
+            if (rows.length === 0 && count > 0 && atPage > 0) {
+                setPage(Math.max(0, Math.ceil(count / pageSize) - 1));
+                return;
+            }
+            setUnknowns(rows);
+            setTotal(count);
+            setTotalSightings(result.total_sightings ?? rows.reduce((acc, u) => acc + (u.occurrence || 0), 0));
+            setRetentionDays(result.retention_days || 0);
         } catch (e) {
             setError('Could not load unknown faces. Make sure the backend is running.');
             setUnknowns([]);
         } finally {
             setLoading(false);
+            setRefreshing(false);
         }
     }
+
+    function changeSort(value) {
+        setSortKey(value);
+        setPage(0);
+    }
+
+    function changePageSize(value) {
+        setPageSize(Number(value));
+        setPage(0);
+    }
+
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const firstShown = total === 0 ? 0 : page * pageSize + 1;
+    const lastShown = Math.min(total, page * pageSize + unknowns.length);
 
     async function loadPersons(search = '') {
         setPersonsLoading(true);
@@ -112,6 +197,7 @@ export default function UnknownFacesPage() {
             await api.enrollUnknownFace(selectedUnknown.id, enrollData);
             closeEnrollModal();
             setUnknowns(unknowns.filter(u => u.id !== selectedUnknown.id));
+            loadUnknowns({ quiet: true });
             showToast({ type: 'success', message: `Enrolled ${enrollData.name} successfully` });
         } catch (e) {
             showToast({ type: 'error', message: e.message });
@@ -125,6 +211,7 @@ export default function UnknownFacesPage() {
             const result = await api.mergeUnknownFace(selectedUnknown.id, selectedPerson.id);
             closeEnrollModal();
             setUnknowns(unknowns.filter(u => u.id !== selectedUnknown.id));
+            loadUnknowns({ quiet: true });
             showToast({
                 type: 'success',
                 message: result.message || `Merged face into ${selectedPerson.name}`,
@@ -141,6 +228,7 @@ export default function UnknownFacesPage() {
         try {
             await api.dismissUnknownFace(unknownId);
             setUnknowns(unknowns.filter(u => u.id !== unknownId));
+            loadUnknowns({ quiet: true });
         } catch (e) {
             showToast({ type: 'error', message: e.message });
         }
@@ -186,7 +274,7 @@ export default function UnknownFacesPage() {
     });
 
     return (
-        <AppShell unknownCount={unknowns.length}>
+        <AppShell unknownCount={total}>
             <div className="page-header">
                 <h1>Unknown Faces</h1>
                 <p>Review unrecognized persons and enroll them into the system</p>
@@ -215,14 +303,60 @@ export default function UnknownFacesPage() {
                         <div style={{ display: 'flex', gap: '24px' }}>
                             <div>
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Pending Review</div>
-                                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: unknowns.length > 0 ? 'var(--warning)' : 'var(--success)' }}>{unknowns.length}</div>
+                                <div style={{ fontSize: '1.5rem', fontWeight: 800, color: total > 0 ? 'var(--warning)' : 'var(--success)' }}>{total.toLocaleString()}</div>
                             </div>
                             <div>
                                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em' }}>Total Sightings</div>
-                                <div style={{ fontSize: '1.5rem', fontWeight: 800 }}>{unknowns.reduce((acc, u) => acc + (u.occurrence || 0), 0)}</div>
+                                <div style={{ fontSize: '1.5rem', fontWeight: 800 }}>{totalSightings.toLocaleString()}</div>
                             </div>
                         </div>
+
+                        <div style={{ display: 'flex', gap: '10px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                            <label style={{ fontSize: '0.688rem', color: 'var(--text-muted)' }}>
+                                Sort by
+                                <select
+                                    className="input"
+                                    id="unknown-sort"
+                                    value={sortKey}
+                                    onChange={(e) => changeSort(e.target.value)}
+                                    style={{ display: 'block', marginTop: '4px', fontSize: '0.8125rem', minWidth: '210px' }}
+                                >
+                                    <option value="last_seen:desc">Last seen — newest first</option>
+                                    <option value="last_seen:asc">Last seen — oldest first</option>
+                                    <option value="first_seen:desc">First seen — newest first</option>
+                                    <option value="first_seen:asc">First seen — oldest first</option>
+                                    <option value="occurrence:desc">Seen most often</option>
+                                    <option value="occurrence:asc">Seen least often</option>
+                                </select>
+                            </label>
+                            <label style={{ fontSize: '0.688rem', color: 'var(--text-muted)' }}>
+                                Per page
+                                <select
+                                    className="input"
+                                    id="unknown-page-size"
+                                    value={pageSize}
+                                    onChange={(e) => changePageSize(e.target.value)}
+                                    style={{ display: 'block', marginTop: '4px', fontSize: '0.8125rem' }}
+                                >
+                                    {[12, 24, 48, 96].map((n) => <option key={n} value={n}>{n}</option>)}
+                                </select>
+                            </label>
+                            <button
+                                className="btn btn-secondary btn-sm"
+                                id="unknown-refresh"
+                                onClick={() => { loadUnknowns({ quiet: true }); loadSuggestions(); }}
+                                disabled={refreshing}
+                            >
+                                {refreshing ? 'Refreshing…' : 'Refresh'}
+                            </button>
+                        </div>
                     </div>
+
+                    {retentionDays > 0 && (
+                        <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', margin: '-8px 0 16px' }}>
+                            Unknown faces not seen for {retentionDays} days are removed automatically. Enrolled faces are kept.
+                        </div>
+                    )}
 
                     {/* Enrollment Suggestions */}
                     {suggestions.length > 0 && (
@@ -287,7 +421,12 @@ export default function UnknownFacesPage() {
 
                     {/* Unknown Faces Grid */}
                     {unknowns.length > 0 ? (
-                        <div className="unknown-faces-grid">
+                        <>
+                        <Pager
+                            page={page} pageCount={pageCount} onPage={setPage} disabled={refreshing}
+                            summary={`Showing ${firstShown.toLocaleString()}–${lastShown.toLocaleString()} of ${total.toLocaleString()}`}
+                        />
+                        <div className="unknown-faces-grid" style={{ opacity: refreshing ? 0.6 : 1, transition: 'opacity 0.15s' }}>
                             {unknowns.map((unknown) => {
                                 const imageUrl = unknown.context_url || unknown.snapshot_url;
                                 return (
@@ -350,6 +489,11 @@ export default function UnknownFacesPage() {
                                 )
                             })}
                         </div>
+                        <Pager
+                            page={page} pageCount={pageCount} onPage={setPage} disabled={refreshing}
+                            summary={`Page ${page + 1} of ${pageCount.toLocaleString()}`}
+                        />
+                        </>
                     ) : (
                         <div className="card">
                             <div className="empty-state">

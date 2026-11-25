@@ -59,6 +59,7 @@ from app.vision.hazard_detector import HazardDetector
 from app.vision.anpr import PlateRecognizer
 from app.vision.traffic import TrafficMonitor
 from app.vision.reid import get_reid_tracker, ReIDTracker
+from app.vision.global_identity import get_global_resolver
 from app.vision.unknown_registry import make_label as make_unknown_label
 from app.vision.stream_health import StreamHealthMonitor, StreamState
 from app.vision.frame_metadata import build_frame_metadata
@@ -332,6 +333,13 @@ class VisionPipeline:
             self._last_reid_frame = 0
             logger.info(f"[{camera_id}] ReID enabled (threshold={settings.REID_MATCH_THRESHOLD}, interval={self._reid_frame_interval})")
 
+        # -- Global Identity Resolver (Phase 4) ----------------------------------------
+        # Shadow-mode: computes global person IDs alongside existing recognition
+        # without changing any detection or tracking behaviour.
+        self._gid_resolver = get_global_resolver()  # None when GLOBAL_ID_MODE=off
+        if self._gid_resolver:
+            logger.info(f"[{camera_id}] Global Identity resolver active (mode={self._gid_resolver.mode.value})")
+
         # Pipeline state
         self._frame_count = 0
         self._last_frame = None  # Last processed frame (for MJPEG streaming)
@@ -425,6 +433,20 @@ class VisionPipeline:
                 f"[{camera_id}] faces on tracked crops at {self._face_fps:g} fps "
                 f"(analysis {self._analysis_fps:g} fps)"
             )
+
+        # Body crops for cross-camera handoff. This process only cuts and
+        # sends them; the re-identification model runs in the main process,
+        # beside the handoff engine (see app/vision/appearance.py). Person
+        # mode only: a face box has no body in it.
+        self._appearance_crops = None
+        if (
+            getattr(settings, "HANDOFF_ENABLED", True)
+            and getattr(settings, "HANDOFF_APPEARANCE_ENABLED", True)
+            and self._tracking_mode == "person"
+        ):
+            from app.vision.appearance import CropSchedule
+            self._appearance_crops = CropSchedule()
+        self._appearance_min_px = int(getattr(settings, "HANDOFF_APPEARANCE_MIN_PX", 96))
 
         # Performance metrics
         self._fps = 0.0
@@ -920,6 +942,11 @@ class VisionPipeline:
         # predecessor exist? It does not assign identity yet.
         self._observe_identity_continuity(active_tracks)
 
+        # Body crops for cross-camera handoff. Cut HERE, before anything is
+        # drawn: clean_frame is an alias of the frame the overlay path may
+        # draw into, and a box burned into a crop is part of its appearance.
+        self._publish_appearance(clean_frame, active_tracks)
+
         # ── FACES, from the tracks rather than the frame (item 6) ──
         # After the tracker, because the crops ARE the tracks; and on its own
         # clock, so a camera tracking at 25 fps still only looks for faces
@@ -1152,6 +1179,22 @@ class VisionPipeline:
                         confidence=result.confidence,
                         centroid=centroid,
                     )
+
+                    # -- Global ID resolve (shadow) ----------------
+                    if self._gid_resolver and best_embedding is not None:
+                        try:
+                            gid_decision = self._gid_resolver.resolve(
+                                camera_id=self.camera_id,
+                                local_track_id=track.track_id,
+                                face_embedding=best_embedding,
+                                body_embedding=None,
+                                known_person_id=result.person_id,
+                                known_person_name=result.person_name,
+                                face_verified=track.identity_state == IdentityState.KNOWN,
+                            )
+                            track._gid_decision = gid_decision
+                        except Exception as _gid_e:
+                            logger.debug(f"[{self.camera_id}] GID resolve error: {_gid_e}")
 
                     # ── Attribute extraction: only on track lock ─────
                     # Gate on recognition_locked to avoid unnecessary
@@ -2120,9 +2163,19 @@ class VisionPipeline:
             return unknown_id
 
         # ── Confirmation gate ───────────────────────────────────────
-        # Only applies to tracked faces creating a NEW identity. A sighting of
-        # an identity that already exists is not in question.
-        if track_id is not None and is_new and not confirmed:
+        # Only applies to tracked faces whose identity has no row yet. A
+        # sighting of an identity that already has one is not in question.
+        #
+        # "Has no row yet", NOT "was minted on this call". The identity is
+        # minted on the first frame a face fails to match, and confirmation
+        # takes several such frames spread over a second -- so the frame that
+        # mints it is never the frame that confirms it. Gating on is_new meant
+        # the one call allowed to create the row always arrived unconfirmed,
+        # and every later call reported a "repeat sighting" of an id with no
+        # row, which the consumer rightly dropped. A tracked stranger could
+        # not be saved at all.
+        needs_row = is_new or self.unknown_registry.needs_row(unknown_id)
+        if track_id is not None and needs_row and not confirmed:
             return unknown_id  # identified for this track, not yet persisted
 
         # Views the registry learned since the last call. They must reach the
@@ -2139,8 +2192,15 @@ class VisionPipeline:
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             })
 
-        if is_new:
-            # First time anyone has seen this person. Copy the crops now: the
+        if needs_row:
+            # Offered again every UNKNOWN_SIGHTING_COOLDOWN_SEC until the
+            # consumer says a row exists (see mark_persisted): the report is
+            # megabytes of pixels, and the answer normally comes back within a
+            # frame or two. A repeat that does get through is harmless -- the
+            # consumer's dedup finds the row and counts a sighting.
+            if not self.unknown_registry.should_report_sighting(unknown_id):
+                return unknown_id
+            # Nobody has saved this person yet. Copy the crops now: the
             # frame buffer is reused on the next iteration. These copies are
             # ~0.5ms each versus ~10-30ms for save_snapshot, which is why the
             # disk write itself stays deferred to the EventQueue consumer.
@@ -2462,7 +2522,7 @@ class VisionPipeline:
             out.append((scaled_loc, label, color, conf) + tuple(entry[4:]))
         return out
 
-    def _coasting_boxes(self) -> List[tuple]:
+    def _coasting_boxes(self, with_track_ids: bool = False) -> List[tuple]:
         """
         Draw args for tracks ByteTrack has lost but has not forgotten.
 
@@ -2470,6 +2530,9 @@ class VisionPipeline:
         identity at a last-observed position; nothing about them is
         re-recognised and no presence event is emitted for them. Purely
         what the tracker already believes, made visible.
+
+        with_track_ids returns (draw_args, track_id) pairs for the metadata
+        channel; drawing callers keep the plain tuples.
         """
         if not getattr(settings, "BYTETRACK_COAST_ENABLED", True):
             return []
@@ -2489,7 +2552,8 @@ class VisionPipeline:
             else:
                 label = f"Track #{track.track_id}"
                 color = (140, 100, 0)    # dimmed amber -- tracked, unidentified
-            boxes.append((location, label, color, 0.0, True))
+            draw_args = (location, label, color, 0.0, True)
+            boxes.append((draw_args, track.track_id) if with_track_ids else draw_args)
 
         if boxes:
             profiler.record_coasting(len(boxes))
@@ -2622,23 +2686,33 @@ class VisionPipeline:
         for track in active_tracks or ():
             name = getattr(track, "person_name", None)
             unknown_label = getattr(track, "unknown_label", None)
+            # Global ID fields from the resolver (populated in process_frame)
+            gid_d = getattr(track, "_gid_decision", None)
             entries.append({
                 "kind": kind,
                 "box": track.to_location(),
                 "track_id": getattr(track, "track_id", None),
                 "label": name or unknown_label or f"Track #{getattr(track, 'track_id', '?')}",
                 "identity": name,
+                "global_id": gid_d.global_id if gid_d else None,
+                "known_person_id": getattr(track, "person_id", None),
+                "identity_state": gid_d.state.value if gid_d else None,
+                "identity_source": gid_d.reason if gid_d else None,
+                "last_camera": self.camera_id,
+                "last_seen": time.time(),
             })
 
         # Tracks ByteTrack has lost but not forgotten are drawn, so they are
         # published too -- with the same `coasting` flag the overlay uses to
         # dash them, rather than being passed off as a live observation.
-        for entry in self._coasting_boxes():
+        # The track id rides along so cross-camera handoff can label the dashed
+        # box with the same global number the solid one carried.
+        for entry, track_id in self._coasting_boxes(with_track_ids=True):
             location, label, _color, _conf = entry[:4]
             entries.append({
                 "kind": kind,
                 "box": location,
-                "track_id": None,
+                "track_id": track_id,
                 "label": label,
                 "identity": label if not str(label).startswith("Track #") else None,
                 "coasting": True,
@@ -2687,6 +2761,63 @@ class VisionPipeline:
             self.on_event({"event_type": "frame_metadata", **message})
         except Exception as e:
             logger.debug(f"[{self.camera_id}] metadata publish failed: {e}")
+
+    def _publish_appearance(self, frame, active_tracks) -> None:
+        """Send a body crop for each track that is due one. Never raises.
+
+        A handful per second at most: a track is looked at a few times while
+        it is new -- which is when cross-camera handoff is deciding who it is
+        -- and rarely afterwards. Tracks whose box is too small, cut off by
+        the frame, or mostly covered by someone else are skipped rather than
+        sent, because a crop of half a person or of two people describes
+        nobody.
+
+        Goes out as an ordinary pipeline event, like frame metadata, so the
+        thread and process deployments behave identically.
+        """
+        schedule = self._appearance_crops
+        if schedule is None or self.on_event is None or frame is None:
+            return
+        if self._tracking_mode != "person":
+            return
+        try:
+            from app.vision.appearance import encode_body_crop, usable_body_box
+
+            now = time.time()
+            h, w = frame.shape[:2]
+            boxes = {}
+            for track in active_tracks or ():
+                top, right, bottom, left = track.to_location()
+                boxes[track.track_id] = (left, top, right, bottom)
+
+            sent = 0
+            for track in active_tracks or ():
+                track_id = track.track_id
+                # A track two frames old may still be a detector flicker, and
+                # the handoff engine has not heard of it yet either.
+                if getattr(track, "tracklet_len", 3) < 3 or not schedule.due(track_id, now):
+                    continue
+                box = boxes[track_id]
+                others = [b for other_id, b in boxes.items() if other_id != track_id]
+                if not usable_body_box(box, w, h, others, self._appearance_min_px):
+                    continue
+                jpeg = encode_body_crop(frame, box)
+                if jpeg is None:
+                    continue
+                schedule.sent(track_id, now)
+                self.on_event({
+                    "event_type": "track_crop",
+                    "camera_id": self.camera_id,
+                    "track_id": int(track_id),
+                    "timestamp": now,
+                    "jpeg": jpeg,
+                })
+                sent += 1
+                if sent >= schedule.per_frame:
+                    break
+            schedule.forget_except(boxes.keys())
+        except Exception as e:
+            logger.debug(f"[{self.camera_id}] appearance crop failed: {e}")
 
     def attach_inference_client(self, client):
         """Route this pipeline's model calls at the shared inference server.

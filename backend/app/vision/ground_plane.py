@@ -249,7 +249,7 @@ class GroundPlane:
             return None
         return x, y
 
-    def metres_per_pixel(self, u: float, v: float) -> float:
+    def metres_per_pixel(self, u: float, v: float, step: float = 1.0) -> float:
         """
         Local scale: how much floor one pixel covers here.
 
@@ -259,12 +259,19 @@ class GroundPlane:
         is meaningless (at the horizon, or where a neighbouring pixel crosses
         it) — which flows through position_sigma into a weight of zero, so a
         useless observation is ignored rather than trusted.
+
+        `step` is the size of one pixel in the units u and v are given in. The
+        default suits pixel coordinates. Callers working in NORMALISED
+        coordinates (which is how calibrations are stored) must pass a small
+        step: differencing by 1.0 there would span the whole frame and nearly
+        always cross the horizon. The result is then metres per normalised
+        unit, so a noise expressed in normalised units still yields metres.
         """
         here = self.project(u, v)
         if here is None:
             return float("inf")
-        right = self.project(u + 1.0, v)
-        down = self.project(u, v + 1.0)
+        right = self.project(u + step, v)
+        down = self.project(u, v + step)
         if right is None or down is None:
             return float("inf")
         du = np.hypot(right[0] - here[0], right[1] - here[1])
@@ -272,27 +279,35 @@ class GroundPlane:
         # Max, not mean: near the horizon the vertical direction blows up while
         # the horizontal stays tame, and averaging would hide exactly the error
         # that matters.
-        scale = float(max(du, dv))
+        scale = float(max(du, dv)) / step
         return scale if np.isfinite(scale) else float("inf")
 
-    def position_sigma(self, u: float, v: float, noise_px: float) -> float:
+    def position_sigma(self, u: float, v: float, noise_px: float, step: float = 1.0) -> float:
         """
         Standard deviation of the floor position implied by `noise_px` pixels
         of uncertainty in the foot point. Feeds inverse-variance fusion.
         """
-        return self.metres_per_pixel(u, v) * max(noise_px, 1e-3)
+        return self.metres_per_pixel(u, v, step) * max(noise_px, 1e-3 * step)
 
     def observe(
-        self, u: float, v: float, noise_px: float
+        self, u: float, v: float, noise_px: float, step: float = 1.0
     ) -> Optional[Tuple[float, float, float]]:
         """Convenience: (x, y, sigma), or None if this pixel is not on the floor."""
         pos = self.project(u, v)
         if pos is None:
             return None
-        sigma = self.position_sigma(u, v, noise_px)
+        sigma = self.position_sigma(u, v, noise_px, step)
         if not np.isfinite(sigma):
             return None
         return pos[0], pos[1], sigma
+
+    def problems(self) -> List[str]:
+        """Why this calibration cannot locate people, or [] if it can.
+
+        Only meaningful for a plane built from NORMALISED image points, which
+        every stored calibration is. See calibration_problems.
+        """
+        return calibration_problems(self.image_points, self.world_points)
 
     # ── Persistence ──────────────────────────────────────────────────────
 
@@ -346,6 +361,75 @@ class GroundPlane:
         except (CalibrationError, KeyError, TypeError, ValueError) as e:
             logger.warning(f"Camera {camera_id} has an unusable ground-plane calibration: {e}")
             return None
+
+
+def calibration_problems(
+    image_points: Sequence[Sequence[float]],
+    world_points: Sequence[Sequence[float]],
+) -> List[str]:
+    """
+    Why a calibration that SOLVES still cannot be used. Empty list = usable.
+
+    A four-point homography always fits its own four points exactly, so the
+    reprojection residual reads "0 cm" for any clicks at all -- including four
+    points up a door post, which is what both COE corridor cameras were saved
+    with. That calibration reported a perfect fit and placed people forty
+    metres outside the building, or beyond the horizon, for most of the frame;
+    floor association then never fired and nothing said why.
+
+    The residual asks "do the clicks agree with themselves". These checks ask
+    the question that matters: can this mapping locate a PERSON, standing
+    somewhere other than on the clicked points?
+
+    `image_points` must be NORMALISED (0..1), which is how calibrations are
+    stored. Messages are written for the operator who has to redo the clicks.
+    """
+    try:
+        img = _as_points(image_points, "image_points")
+        wld = _as_points(world_points, "world_points")
+        H = fit_homography(img, wld)
+    except CalibrationError as e:
+        return [str(e)]
+
+    problems: List[str] = []
+
+    # 1. The clicks must span a real patch of the picture. Position error
+    #    grows with distance from the clicked points divided by their spread,
+    #    so a patch a few pixels wide extrapolates wildly everywhere else.
+    span_u = float(img[:, 0].max() - img[:, 0].min())
+    span_v = float(img[:, 1].max() - img[:, 1].min())
+    if min(span_u, span_v) < _MIN_SPAN:
+        problems.append(
+            f"the points cover only {span_u * 100:.0f}% x {span_v * 100:.0f}% of the "
+            f"picture -- they look like points along a line (a door post, a wall "
+            f"edge) rather than the corners of a rectangle on the FLOOR. Click four "
+            f"floor points spread as wide as the camera can see."
+        )
+
+    # 2. Feet in the lower part of the picture must be ON the floor. A camera
+    #    looks down at the floor there, so a real calibration puts all of it
+    #    below the horizon; one that puts the horizon through the middle of
+    #    where people stand is not describing this camera's floor.
+    total = on_floor = 0
+    for v in np.linspace(0.40, 0.98, 8):
+        for u in np.linspace(0.05, 0.95, 9):
+            total += 1
+            if float((H @ np.array([u, v, 1.0]))[2]) > _W_EPS:
+                on_floor += 1
+    if on_floor / total < _MIN_COVERAGE:
+        problems.append(
+            f"only {on_floor * 100 // total}% of the lower picture maps onto the "
+            f"floor at all; the rest falls beyond the horizon. The points are "
+            f"probably not on the floor, or not in the same order as the measured "
+            f"rectangle."
+        )
+    return problems
+
+
+# calibration_problems thresholds. Deliberately loose: they exist to catch a
+# calibration that is not a floor rectangle at all, not to grade a careful one.
+_MIN_SPAN = 0.04       # clicked points must span 4% of the frame in both axes
+_MIN_COVERAGE = 0.60   # fraction of the lower frame that must be below the horizon
 
 
 def foot_point(location: Sequence[float]) -> Tuple[float, float]:

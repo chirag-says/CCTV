@@ -635,6 +635,70 @@ class ApiClient {
     const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
     return this.request(`/api/identity-review/activity?${params}`);
   }
+
+  // ── Zones: floor calibration and cross-camera handoff ────
+
+  async getZones() {
+    return this.request('/api/zones');
+  }
+
+  async getZoneLive(zone) {
+    return this.request(`/api/zones/${encodeURIComponent(zone)}/live`);
+  }
+
+  async getCalibration(cameraId) {
+    return this.request(`/api/zones/cameras/${cameraId}/calibration`);
+  }
+
+  async saveCalibration(cameraId, { zone, imagePoints, worldPoints }) {
+    return this.request(`/api/zones/cameras/${cameraId}/calibration`, {
+      method: 'PUT',
+      body: JSON.stringify({ zone, image_points: imagePoints, world_points: worldPoints }),
+    });
+  }
+
+  async deleteCalibration(cameraId) {
+    return this.request(`/api/zones/cameras/${cameraId}/calibration`, { method: 'DELETE' });
+  }
+
+  async getZoneHandoff(zone) {
+    return this.request(`/api/zones/${encodeURIComponent(zone)}/handoff`);
+  }
+
+  async saveZoneHandoff(zone, doc) {
+    return this.request(`/api/zones/${encodeURIComponent(zone)}/handoff`, {
+      method: 'PUT',
+      body: JSON.stringify(doc),
+    });
+  }
+
+  async getZoneHandoffLive(zone) {
+    return this.request(`/api/zones/${encodeURIComponent(zone)}/handoff/live`);
+  }
+
+  /** Drop the learned shared views and routes for a zone (after a camera is re-aimed). */
+  async forgetZoneLearned(zone) {
+    return this.request(`/api/zones/${encodeURIComponent(zone)}/handoff/learned`, { method: 'DELETE' });
+  }
+
+  /**
+   * One current frame from a camera, as an object URL the caller must revoke.
+   *
+   * fetch + blob because the endpoint needs the Authorization header, which
+   * an <img src> cannot send. 204 means the camera has no frame to give.
+   */
+  async getCameraSnapshotUrl(cameraId) {
+    const token = this.getToken();
+    const resp = await fetch(`${this.baseUrl}/api/cameras/${cameraId}/feed`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      cache: 'no-store',
+    });
+    if (resp.status === 204) throw new Error('No frame available — the camera is not streaming right now.');
+    if (!resp.ok) throw new Error(`Could not load a frame (${resp.status})`);
+    const blob = await resp.blob();
+    if (!blob.size) throw new Error('No frame available — the camera is not streaming right now.');
+    return URL.createObjectURL(blob);
+  }
 }
 
 const api = new ApiClient();

@@ -73,6 +73,7 @@ const navItems = [
         items: [
             { href: '/persons', icon: UsersIcon, label: 'Persons', id: 'nav-persons' },
             { href: '/cameras', icon: CameraIcon, label: 'Cameras', id: 'nav-cameras' },
+            { href: '/calibration', icon: ReIDIcon, label: 'Cross-Camera', id: 'nav-calibration' },
             { href: '/unknown-faces', icon: UnknownFaceIcon, label: 'Unknown Faces', id: 'nav-unknown', badge: true },
             { href: '/identity-review', icon: AIReviewIcon, label: 'AI Identity Review', id: 'nav-identity-review' },
         ],

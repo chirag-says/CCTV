@@ -360,6 +360,11 @@ class UnknownRegistry:
         self._unsaved_views = []
         return out
 
+    def needs_row(self, unknown_id: str) -> bool:
+        """True while this identity has no database row that we know of."""
+        ident = self._identities.get(unknown_id)
+        return ident is not None and not ident.persisted
+
     def should_report_sighting(self, unknown_id: str) -> bool:
         """
         Rate-limit repeat sighting reports so `occurrence` counts visits, not

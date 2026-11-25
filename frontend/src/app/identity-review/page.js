@@ -345,6 +345,12 @@ export default function IdentityReviewPage() {
 
 // ── Dashboard Tab ───────────────────────────────────────────────
 
+// A snapshot can be gone (unknown faces are removed after a retention period).
+// Show an empty tile rather than the browser's broken-image icon and alt text.
+function hideBrokenImage(e) {
+    e.currentTarget.style.visibility = 'hidden';
+}
+
 function DashboardTab({ stats, candidates, onOpenDetail, onAction, actionLoading }) {
     const statCards = [
         { label: 'Unknown Faces', value: stats?.unknown_faces || 0, color: 'var(--warning)' },
@@ -355,8 +361,36 @@ function DashboardTab({ stats, candidates, onOpenDetail, onAction, actionLoading
         { label: 'Gallery Improvements', value: stats?.gallery_improvements || 0, color: 'var(--success)' },
     ];
 
+    const verifier = stats?.verifier;
+
     return (
         <>
+            {/* Whether the AI half of this page is answering. It used to fail
+                silently for weeks; now it says so, and says what to do. */}
+            {verifier && (
+                <div style={{
+                    display: 'flex', alignItems: 'flex-start', gap: '10px',
+                    padding: '10px 14px', marginBottom: '16px', borderRadius: 'var(--radius-md)',
+                    background: 'var(--bg-tertiary)', fontSize: '0.8125rem',
+                    borderLeft: `3px solid ${verifier.available ? 'var(--success)' : 'var(--warning)'}`,
+                }}>
+                    <span style={{
+                        width: '8px', height: '8px', borderRadius: '50%', marginTop: '6px', flexShrink: 0,
+                        background: verifier.available ? 'var(--success)' : 'var(--warning)',
+                    }} />
+                    <div>
+                        <strong>{verifier.available ? 'AI verifier is running' : 'AI verifier is offline'}</strong>
+                        <div style={{ color: 'var(--text-secondary)', marginTop: '2px' }}>{verifier.detail}</div>
+                        {!verifier.available && (
+                            <div style={{ color: 'var(--text-muted)', marginTop: '2px', fontSize: '0.75rem' }}>
+                                Review still works: matches are listed using the face-similarity score alone,
+                                without the AI&rsquo;s second opinion.
+                            </div>
+                        )}
+                    </div>
+                </div>
+            )}
+
             {/* Stats Grid */}
             <div style={{
                 display: 'grid',
@@ -435,7 +469,7 @@ function CandidateCard({ candidate: c, onOpenDetail, onAction, actionLoading }) 
                     border: '2px solid var(--warning)', flexShrink: 0, background: '#000',
                 }}>
                     {c.cluster_snapshot ? (
-                        <img src={snapshotUrl(c.cluster_snapshot)} alt="Unknown" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                        <img src={snapshotUrl(c.cluster_snapshot)} alt="Unknown" onError={hideBrokenImage} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                     ) : (
                         <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.625rem' }}>?</div>
                     )}
@@ -580,7 +614,7 @@ function ClustersTab({ clusters, onIgnore }) {
                             background: '#000', border: '2px solid var(--border-color)', flexShrink: 0,
                         }}>
                             {c.representative_snapshot ? (
-                                <img src={snapshotUrl(c.representative_snapshot)} alt="Cluster" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                                <img src={snapshotUrl(c.representative_snapshot)} alt="Cluster" onError={hideBrokenImage} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                             ) : (
                                 <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', fontSize: '0.75rem' }}>?</div>
                             )}

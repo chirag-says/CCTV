@@ -214,6 +214,213 @@ class UnknownService:
     # reversible (see record_sighting), keeps the snapshot for audit, and drops
     # the row out of the pending query the registry loads from.
 
+    # ── The review queue, a page at a time ────────────────────────────────
+
+    # What the queue can be ordered by. A whitelist, because the value comes
+    # from a query string and goes into ORDER BY.
+    SORT_COLUMNS = {
+        "last_seen": UnknownFace.last_seen,
+        "first_seen": UnknownFace.first_seen,
+        "occurrence": UnknownFace.occurrence,
+        "created_at": UnknownFace.created_at,
+    }
+
+    @staticmethod
+    def list_page(
+        status: Optional[str] = "pending",
+        sort: str = "last_seen",
+        order: str = "desc",
+        limit: int = 24,
+        offset: int = 0,
+        camera_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        One page of the queue, with the totals for the WHOLE filter.
+
+        The totals are computed here rather than from the page: the page used
+        to count whatever it had loaded, so with twelve thousand faces pending
+        it reported "50 pending" and summed the sightings of those fifty.
+        """
+        from app.db.models import Camera
+
+        column = UnknownService.SORT_COLUMNS.get(sort, UnknownFace.last_seen)
+        direction = column.asc() if order == "asc" else column.desc()
+        db: Session = SessionLocal()
+        try:
+            query = db.query(UnknownFace, Camera.name).outerjoin(
+                Camera, Camera.id == UnknownFace.camera_id
+            )
+            if status and status != "all":
+                query = query.filter(UnknownFace.status == status)
+            if camera_id:
+                query = query.filter(UnknownFace.camera_id == camera_id)
+
+            total, sightings = query.with_entities(
+                func.count(UnknownFace.id), func.coalesce(func.sum(UnknownFace.occurrence), 0)
+            ).one()
+            # The id is a tiebreak: many rows share a timestamp or a count, and
+            # without it a face can appear on two pages or on none.
+            rows = (
+                query.order_by(direction, UnknownFace.id.asc())
+                .offset(max(0, int(offset)))
+                .limit(max(1, int(limit)))
+                .all()
+            )
+            return {
+                "rows": rows,
+                "total": int(total or 0),
+                "total_sightings": int(sightings or 0),
+            }
+        finally:
+            db.close()
+
+    # ── Removal after a fixed age ─────────────────────────────────────────
+    #
+    # Different from archive_stale() below on purpose. Archiving hides a face
+    # and keeps it; this DELETES the row, its extra views and its image files,
+    # for good. Enrolled rows are never touched: their snapshot is the
+    # person's avatar and the source image of their first face encoding.
+
+    @staticmethod
+    def _expired_query(db: Session, days: int):
+        cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+        return db.query(UnknownFace).filter(
+            UnknownFace.status != "enrolled",
+            UnknownFace.last_seen < cutoff,
+        )
+
+    @staticmethod
+    def count_expired(days: int) -> int:
+        """How many unknown faces purge_expired(days) would remove right now."""
+        if days <= 0:
+            return 0
+        db: Session = SessionLocal()
+        try:
+            return int(UnknownService._expired_query(db, days).count())
+        finally:
+            db.close()
+
+    @staticmethod
+    def _snapshot_files(unknown_id: str, urls: List[Optional[str]]) -> List[str]:
+        """Image files that belong to one unknown face, inside SNAPSHOT_DIR only."""
+        import os
+
+        root = os.path.abspath(settings.SNAPSHOT_DIR)
+        candidates = [
+            os.path.join(root, "unknowns", f"unknown_{unknown_id}.jpg"),
+            os.path.join(root, "unknowns", f"context_{unknown_id}.jpg"),
+            os.path.join(root, "frames", f"fullframe_{unknown_id}.jpg"),
+        ]
+        for url in urls:
+            if url and url.startswith("/snapshots/"):
+                candidates.append(os.path.join(root, *url[len("/snapshots/"):].split("/")))
+        files = []
+        for path in candidates:
+            path = os.path.abspath(path)
+            # A stored URL is data, not a trusted path: nothing outside the
+            # snapshot folder is ever deleted on its say-so.
+            if path.startswith(root + os.sep) and path not in files:
+                files.append(path)
+        return files
+
+    @staticmethod
+    def purge_expired(days: int, batch: int = 500) -> Dict[str, int]:
+        """
+        Permanently remove unknown faces not seen for `days` days.
+
+        Keyed on last_seen, like archiving: someone who keeps coming back is
+        never removed, however long ago they were first seen.
+
+        Rows go first and files after, per batch. If the process dies in
+        between, the leftovers are orphan image files nobody links to -- the
+        other order would leave rows on the page pointing at missing images.
+        """
+        import os
+
+        removed = {"faces": 0, "files": 0}
+        if days <= 0:
+            return removed
+        while True:
+            db: Session = SessionLocal()
+            try:
+                rows = (
+                    UnknownService._expired_query(db, days)
+                    .with_entities(UnknownFace.id, UnknownFace.snapshot_url, UnknownFace.full_frame)
+                    .limit(batch)
+                    .all()
+                )
+                if not rows:
+                    break
+                ids = [r[0] for r in rows]
+                # Explicit, not left to ON DELETE CASCADE: the constraint
+                # exists only where migration 012 was applied by hand.
+                db.query(UnknownFaceView).filter(
+                    UnknownFaceView.unknown_face_id.in_(ids)
+                ).delete(synchronize_session=False)
+                db.query(UnknownFace).filter(UnknownFace.id.in_(ids)).delete(
+                    synchronize_session=False
+                )
+                db.commit()
+            except Exception as e:
+                db.rollback()
+                logger.error(f"Failed to remove expired unknown faces: {e}")
+                break
+            finally:
+                db.close()
+
+            removed["faces"] += len(rows)
+            for unknown_id, snapshot_url, full_frame in rows:
+                for path in UnknownService._snapshot_files(unknown_id, [snapshot_url, full_frame]):
+                    try:
+                        os.remove(path)
+                        removed["files"] += 1
+                    except FileNotFoundError:
+                        pass
+                    except OSError as e:
+                        logger.warning(f"Could not delete {path}: {e}")
+                try:
+                    # Or the next sighting of a look-alike is "merged" into a
+                    # row that no longer exists, and disappears.
+                    from app.services.unknown_dedup import get_dedup_index
+                    get_dedup_index().drop(unknown_id)
+                except Exception:
+                    pass
+        if removed["faces"]:
+            logger.info(
+                f"Removed {removed['faces']} unknown faces not seen in {days} days "
+                f"({removed['files']} image files)"
+            )
+            try:
+                # The review clusters built from those faces must not outlive them.
+                from app.services.clustering_service import ClusteringService
+                ClusteringService.reconcile()
+            except Exception as e:
+                logger.warning(f"Cluster reconcile after removal failed: {e}")
+        return removed
+
+    @staticmethod
+    def start_retention(interval_sec: float = 6 * 3600.0, first_delay_sec: float = 120.0) -> None:
+        """Remove expired unknown faces now and then, for as long as the server runs.
+
+        Reads UNKNOWN_FACE_RETENTION_DAYS each time, so 0 (off) is honoured
+        without a restart mattering. Started once from the app's lifespan.
+        """
+        import threading
+        import time
+
+        def loop():
+            time.sleep(first_delay_sec)
+            while True:
+                try:
+                    days = int(getattr(settings, "UNKNOWN_FACE_RETENTION_DAYS", 0) or 0)
+                    if days > 0:
+                        UnknownService.purge_expired(days)
+                except Exception as e:
+                    logger.error(f"Unknown-face retention pass failed: {e}")
+                time.sleep(interval_sec)
+
+        threading.Thread(target=loop, name="unknown-retention", daemon=True).start()
+
     @staticmethod
     def count_by_status() -> Dict[str, int]:
         """Row counts per status — how full the review queue actually is."""

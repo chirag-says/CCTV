@@ -37,3 +37,9 @@ bin/
 app/vision/bytetrack_cpp/build/
 app/vision/bytetrack_cpp/*.pyd
 app/vision/bytetrack_cpp/*.so
+
+# Learned cross-camera topology (per deployment; see app/vision/topology.py)
+data/handoff_topology.json
+data/handoff_topology.json.tmp
+data/handoff_numbers.json
+data/handoff_numbers.json.tmp

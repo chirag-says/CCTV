@@ -25,6 +25,8 @@ from app.config import settings
 from app.services.person_service import PersonService
 from app.vision.camera_worker import camera_manager
 from app.core.websocket import ws_manager
+from app.vision.handoff import get_handoff
+from app.vision.appearance import get_appearance
 from app.db.session import SessionLocal, init_db, create_default_admin
 from app.db.models import DetectionEvent, TrackingSession, UnknownFace
 from app.utils.image_utils import frame_to_jpeg_bytes, resize_frame
@@ -93,6 +95,16 @@ def handle_pipeline_event(event: dict):
     # what happened; this only says where to draw a rectangle right now.
     if event_type == "frame_metadata":
         camera_id = event.get("camera_id", "")
+        # Cross-camera numbering runs whether or not anyone is watching: a
+        # person's number must already be known when they walk into the view
+        # someone IS watching. Here, not in the pipeline, because this is the
+        # one process that sees every camera.
+        handoff = get_handoff()
+        if handoff is not None:
+            try:
+                handoff.process(event)
+            except Exception as e:
+                logger.debug(f"handoff failed for {camera_id}: {e}")
         if _main_loop and ws_manager.has_metadata_subscribers(camera_id):
             payload = {k: v for k, v in event.items() if k != "event_type"}
             try:
@@ -101,6 +113,20 @@ def handle_pipeline_event(event: dict):
                 )
             except Exception:
                 pass
+        return
+
+    # A body crop for cross-camera handoff (see app/vision/appearance.py).
+    # Embedded here, in the one process that owns both the model and the
+    # handoff engine, then discarded. It must return before the event queue:
+    # the crop is raw image bytes and belongs in neither the events table nor
+    # a WebSocket frame.
+    if event_type == "track_crop":
+        appearance = get_appearance()
+        if appearance is not None:
+            appearance.submit(
+                event.get("camera_id", ""), event.get("track_id", -1),
+                event.get("timestamp") or 0.0, event.get("jpeg"),
+            )
         return
 
     # vehicle_count events are high-frequency — broadcast only, don't persist
@@ -317,6 +343,13 @@ def _report_canonical_unknown_id(
         if worker is not None:
             worker.pipeline.unknown_registry.submit_persistence_result(
                 local_id, canonical_id
+            )
+        else:
+            # Cameras in processes: the pipeline is on the far side of a
+            # process boundary, so the news goes down its result queue.
+            from app.vision.process_manager import process_camera_manager
+            process_camera_manager.send_control(
+                camera_id, {"unknown_persisted": [local_id, canonical_id]}
             )
     except Exception as e:
         logger.debug(f"Could not report canonical unknown id to {camera_id}: {e}")
@@ -669,6 +702,14 @@ async def lifespan(app: FastAPI):
     logger.info(f"📖 Docs: http://{settings.HOST}:{settings.PORT}/docs")
     logger.info("📷 Cameras will start when triggered from the dashboard")
 
+    # ── Unknown-face retention ────────────────────────────────
+    # Always started; it does nothing while UNKNOWN_FACE_RETENTION_DAYS is 0.
+    try:
+        from app.services.unknown_service import UnknownService
+        UnknownService.start_retention()
+    except Exception as e:
+        logger.warning(f"⚠️  Unknown-face retention not started: {e}")
+
     # ── Start AI Identity Review Worker (if enabled) ──────────
     _identity_review_worker = None
     if settings.ENABLE_IDENTITY_REVIEW:
@@ -769,6 +810,7 @@ from app.routes import share_camera_page
 from app.routes import reid as reid_route
 from app.routes import identity_review
 from app.routes import system_health
+from app.routes import zones
 
 app.include_router(auth.router)
 app.include_router(persons.router)
@@ -787,6 +829,7 @@ app.include_router(share_camera_page.router)
 app.include_router(reid_route.router)
 app.include_router(identity_review.router)
 app.include_router(system_health.router)
+app.include_router(zones.router)
 
 
 # ── Health Check ──────────────────────────────────────────────

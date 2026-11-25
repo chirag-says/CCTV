@@ -93,6 +93,10 @@ async def get_dashboard(user=Depends(require_admin)):
         finally:
             db.close()
 
+        # Whether the AI half of AI Identity Review is actually answering.
+        from app.services.vlm_service import get_vlm_status
+        stats["verifier"] = get_vlm_status()
+
         return stats
     except Exception as e:
         logger.error(f"Dashboard stats failed: {e}")

@@ -72,6 +72,23 @@ class ProcessCameraManager:
         self._on_event = on_event
         self._on_unknown = on_unknown
 
+    def send_control(self, camera_id: str, payload: dict) -> bool:
+        """Say something to the pipeline running `camera_id`, in whichever
+        process holds it. Best effort: False if it is not running."""
+        from app.vision.camera_process import CONTROL
+
+        for index, group in list(self._proc_specs.items()):
+            if any(spec.get("camera_id") == camera_id for spec in group):
+                q = self._result_queues.get(index)
+                if q is None:
+                    return False
+                try:
+                    q.put_nowait((CONTROL, camera_id, payload))
+                    return True
+                except Exception:
+                    return False
+        return False
+
     def load_encodings_all(self, encodings: list):
         """Cached for processes started later. Running processes keep the
         gallery they were handed; a reload means a restart."""
@@ -329,7 +346,15 @@ class ProcessCameraManager:
                     if cid:
                         self._beats[cid] = (time.monotonic(), int(event.get("frames", 0)))
                     continue
-                if event.get("event_type") == "unknown_face" and self._on_unknown:
+                # An unknown-face report is recognised by its label, and -- so
+                # that a forgotten label can never again silently discard
+                # every stranger -- by its shape: it has no event_type at all
+                # and names an unknown identity or carries face views.
+                is_unknown = event.get("event_type") == "unknown_face" or (
+                    "event_type" not in event
+                    and ("unknown_id" in event or event.get("views_only"))
+                )
+                if is_unknown and self._on_unknown:
                     self._on_unknown(event)
                 elif self._on_event:
                     self._on_event(event)

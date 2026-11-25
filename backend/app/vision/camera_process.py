@@ -36,12 +36,36 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 
-def _drain_results(inbox_q, per_camera: dict, stop: threading.Event):
+def as_unknown_face_event(data: dict) -> dict:
+    """Label an unknown-face report so the parent can route it.
+
+    The pipeline hands unknown faces to `on_unknown` as a bare dict with no
+    `event_type`, because in thread mode that callback goes straight to the
+    one function that handles them. Here both callbacks share ONE queue to the
+    parent, and the parent tells them apart by `event_type`. Unlabelled, every
+    report was taken for an ordinary pipeline event, failed to persist with
+    "Failed to persist event: 'event_type'", and was dropped: from the day
+    cameras moved into processes (2026-09-10) to 2026-11-20 not one new
+    unknown face reached the database, and the Unknown Faces page showed
+    nothing new.
+    """
+    return {**data, "event_type": "unknown_face"}
+
+
+# First element of a message from the parent that is not an inference result.
+CONTROL = "_control"
+
+
+def _drain_results(inbox_q, per_camera: dict, stop: threading.Event, on_control=None):
     """Fan the process's single result queue out to per-camera inboxes.
 
     One queue crosses the process boundary; each camera then waits on its own
     in-process queue. Without this every camera would have to inspect and
     re-queue results belonging to its seven neighbours.
+
+    The same queue carries the parent's few words to a pipeline, as
+    (CONTROL, camera_id, payload). It is the only channel that runs this way,
+    and the traffic is a handful of small messages a minute.
     """
     while not stop.is_set():
         try:
@@ -50,6 +74,13 @@ def _drain_results(inbox_q, per_camera: dict, stop: threading.Event):
             continue
         if item is None:
             break
+        if item[0] == CONTROL:
+            if on_control is not None:
+                try:
+                    on_control(item[1], item[2])
+                except Exception as e:                   # noqa: BLE001
+                    logger.debug(f"control message failed: {e}")
+            continue
         camera_id = item[0]
         q = per_camera.get(camera_id)
         if q is not None:
@@ -115,8 +146,22 @@ def _run(worker_index, camera_specs, shm_name, n_slots, slot_bytes,
     per_camera_inbox = {}
     stop = threading.Event()
 
+    by_camera = {}          # camera id -> pipeline, filled as they start
+
+    def on_control(camera_id, payload):
+        """The parent saved (or matched) an unknown face this camera reported.
+
+        Without this the pipeline never learns its stranger has a row: in
+        thread mode the consumer reaches into the pipeline directly, and here
+        there is a process boundary in the way.
+        """
+        pipe = by_camera.get(camera_id)
+        saved = payload.get("unknown_persisted") if isinstance(payload, dict) else None
+        if pipe is not None and saved:
+            pipe.unknown_registry.submit_persistence_result(saved[0], saved[1])
+
     router = threading.Thread(
-        target=_drain_results, args=(result_q, per_camera_inbox, stop),
+        target=_drain_results, args=(result_q, per_camera_inbox, stop, on_control),
         name=f"results-{worker_index}", daemon=True,
     )
     router.start()
@@ -127,6 +172,10 @@ def _run(worker_index, camera_specs, shm_name, n_slots, slot_bytes,
             event_q.put_nowait(event)
         except Exception:
             pass
+
+    def emit_unknown(data):
+        """Unknown faces share the event queue; see as_unknown_face_event."""
+        emit(as_unknown_face_event(data))
 
     pipelines = []
     threads = []
@@ -161,7 +210,7 @@ def _run(worker_index, camera_specs, shm_name, n_slots, slot_bytes,
                 camera_id=camera_id,
                 stream_source=spec["stream_source"],
                 on_event=emit,
-                on_unknown=emit,
+                on_unknown=emit_unknown,
                 on_frame=None,
             )
             pipe.attach_inference_client(client)
@@ -173,6 +222,7 @@ def _run(worker_index, camera_specs, shm_name, n_slots, slot_bytes,
             continue
 
         pipelines.append(pipe)
+        by_camera[camera_id] = pipe
         t = threading.Thread(target=_camera_loop, args=(pipe, stop, emit),
                              name=f"camera-{camera_id}", daemon=True)
         t.start()

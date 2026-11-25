@@ -4,7 +4,7 @@ Loads from environment variables / .env file.
 """
 
 from pydantic_settings import BaseSettings
-from typing import List
+from typing import List, Optional
 import os
 
 
@@ -522,6 +522,12 @@ class Settings(BaseSettings):
     # Unknown confirmation replaces the old UNKNOWN_MATURATION_SEC timer. A
     # timer can be satisfied by a single bad angle held for half a second; a
     # vote spread over a span cannot. Only a CONFIRMED unknown creates a row.
+    # Unknown faces not seen for this many days are DELETED for good -- the
+    # row, its extra face views and its image files. Enrolled faces are never
+    # touched. Counted from when the face was LAST seen, so a regular who
+    # keeps coming back is never removed. 0 = keep until reviewed.
+    # See UnknownService.purge_expired.
+    UNKNOWN_FACE_RETENTION_DAYS: int = 15
     UNKNOWN_CONFIRM_VOTES: int = 3
     UNKNOWN_CONFIRM_WINDOW_SEC: float = 6.0
     UNKNOWN_CONFIRM_MIN_SPAN_SEC: float = 1.0
@@ -862,6 +868,79 @@ class Settings(BaseSettings):
     REID_SIGHTING_COOLDOWN: float = 5.0   # Min seconds between sightings per person/camera
     REID_FRAME_INTERVAL: int = 10         # Extract ReID features every N frames (performance)
     REID_MODEL: str = "resnet50_imagenet" # Options: resnet50_imagenet, osnet_x1_0_msmt17
+
+    # ── Global Person Identity (Phase 4) ───────────────────────
+    # Independent, reversible layer above ByteTrack.  "off" is a complete
+    # rollback; "shadow" computes/logs proposals without changing labels;
+    # "authoritative" may attach confirmed global IDs after replay calibration.
+    GLOBAL_ID_MODE: str = "shadow"          # off | shadow | authoritative
+    GLOBAL_ID_MISSING_TTL_SEC: float = 120.0
+    GLOBAL_ID_FACE_GALLERY_SIZE: int = 8
+    GLOBAL_ID_BODY_GALLERY_SIZE: int = 8
+    GLOBAL_ID_BODY_MATCH_THRESHOLD: float = 0.56
+    # No body-only or unknown-face gallery match is accepted until SentinelAI
+    # replay calibration supplies margins. Blank/None therefore fails closed.
+    GLOBAL_ID_BODY_MIN_MARGIN: Optional[float] = None
+    GLOBAL_ID_FACE_MATCH_THRESHOLD: Optional[float] = None
+    GLOBAL_ID_FACE_MIN_MARGIN: Optional[float] = None
+    GLOBAL_ID_BODY_VOTES_REQUIRED: int = 3
+    GLOBAL_ID_BODY_VOTE_WINDOW_SEC: float = 8.0
+    GLOBAL_ID_BODY_VOTE_MIN_SPAN_SEC: float = 1.0
+    # JSON list of directed, measured transitions, for example:
+    # [{"from":"cam-a","to":"cam-b","min_sec":5,"max_sec":30,"overlap":false}]
+    GLOBAL_ID_CAMERA_TOPOLOGY: str = "[]"
+    GLOBAL_ID_PERSIST_EVENTS: bool = True
+
+    # ── Cross-camera handoff (app/vision/handoff.py) ──────────
+    # Gives each person one short number ("#12") on every camera, carried
+    # across cameras by floor position, linked handoff areas, or a recognised
+    # name. Runs in the main process on live-view metadata; off is a complete
+    # rollback to per-camera "Track #N" labels.
+    HANDOFF_ENABLED: bool = True
+    HANDOFF_CLAIM_WINDOW_SEC: float = 5.0    # new track may take an earlier number this long
+    HANDOFF_LIVE_GRACE_SEC: float = 1.0      # unseen this long = no longer visible
+    HANDOFF_MEMORY_SEC: float = 60.0         # departed number stays claimable (>= longest link)
+    HANDOFF_CONFIG_REFRESH_SEC: float = 30.0 # re-read areas/links/calibration from the DB
+    # Learn how the cameras relate from ordinary traffic (app/vision/topology.py):
+    # which pairs see the same floor, and which a person walks between and how
+    # long it takes. Needs no calibration and no drawn areas. False freezes
+    # what has been learned without discarding it.
+    HANDOFF_LEARN_TOPOLOGY: bool = True
+    # Where the learned topology is kept across restarts. Relative paths are
+    # under backend/. Deleting the file means relearning from the next day's
+    # traffic, nothing worse.
+    HANDOFF_TOPOLOGY_PATH: str = "data/handoff_topology.json"
+    HANDOFF_STITCH_GAP_SEC: float = 4.0      # longest tracker dropout one camera's track is carried across
+    # Body appearance (app/vision/appearance.py): OSNet re-identification
+    # embeddings of tracked bodies, computed in the main process. Tells apart
+    # people who took the same route together. Costs one small batched model
+    # call per few crops; False falls back to position and timing alone.
+    # Independent of ENABLE_REID / REID_MODEL, which drive the older
+    # ReIDTracker and default to a network that is not a re-ID model.
+    HANDOFF_APPEARANCE_ENABLED: bool = True
+    HANDOFF_APPEARANCE_WEIGHTS: str = ""     # "" = backend/models/osnet_x1_0_msmt17.pth
+    HANDOFF_APPEARANCE_MIN_PX: int = 96      # shorter bodies are not readable; see appearance.py
+    # Similarity at which a look ALONE carries a number, and the lead it needs
+    # over the next-best candidate. Measured on COE: 0.85-0.93 for one person
+    # seen from the same side on two cameras, at most 0.65 for two people.
+    HANDOFF_LOOK_MATCH: float = 0.82
+    HANDOFF_LOOK_MARGIN: float = 0.10
+    # A track that has just appeared usually takes over an earlier number within
+    # a second or so. Its own throwaway number is not shown for this long, so
+    # the overlay does not flash #791 before settling on #510. 0 = show at once.
+    HANDOFF_LABEL_SETTLE_SEC: float = 1.5
+    # A recognised (enrolled) person keeps ONE number for the calendar day,
+    # however long they are out of sight and across server restarts. Strangers
+    # still get a number per visit. False = everyone is per visit.
+    HANDOFF_KEEP_NAMED_ALL_DAY: bool = True
+    HANDOFF_NUMBERS_PATH: str = "data/handoff_numbers.json"
+
+    # ── Zone floor association (app/vision/zone_tracker.py) ───
+    ZONE_ASSOC_GATE_SIGMA: float = 3.0       # combined std-devs still counted as one person
+    ZONE_ASSOC_CALIB_FLOOR_M: float = 0.5    # assumed hand-calibration error, metres
+    ZONE_ASSOC_MAX_DIST_M: float = 3.0       # hard cap on association distance, metres
+    ZONE_MEMBER_TTL_SEC: float = 2.0
+    ZONE_IDENTITY_TTL_SEC: float = 10.0
 
     # ── Stream Health & Auto-Recovery ─────────────────────────
     STREAM_STALE_TIMEOUT_SEC: float = 10.0       # No fresh frame for this long → STALE

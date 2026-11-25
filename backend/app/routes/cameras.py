@@ -272,6 +272,25 @@ async def camera_metadata(
 
 # ── MJPEG Streaming (snapshot endpoint and fallback only) ─────
 
+async def _go2rtc_snapshot(camera_id: str) -> Optional[bytes]:
+    """One JPEG from go2rtc's copy of the stream, or None if it has none."""
+    import httpx
+    from urllib.parse import quote
+    from app.config import settings
+
+    url = f"{settings.GO2RTC_INTERNAL_URL.rstrip('/')}/api/frame.jpeg?src={quote(camera_id, safe='')}"
+    try:
+        # A keyframe decode can take a few seconds on a cold stream.
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            response = await client.get(url)
+    except httpx.HTTPError as e:
+        logger.debug(f"go2rtc snapshot failed for {camera_id}: {e}")
+        return None
+    if response.status_code != 200 or not response.content.startswith(b"\xff\xd8"):
+        return None
+    return response.content
+
+
 @router.get("/{camera_id}/feed")
 async def camera_feed(
     camera_id: str,
@@ -293,7 +312,18 @@ async def camera_feed(
 
     worker = camera_manager._workers.get(camera_id)
     if not worker or not worker.pipeline:
-        return Response(content=b"", status_code=204)
+        # Server mode: pipelines live in camera processes, so this process has
+        # no frame to encode. go2rtc is already pulling the camera and can cut
+        # a JPEG from its own stream; without this the calibration page could
+        # never show a frame to click on.
+        jpeg = await _go2rtc_snapshot(camera_id)
+        if not jpeg:
+            return Response(content=b"", status_code=204)
+        return Response(
+            content=jpeg,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+        )
 
     # Never return stale JPEG — return 204 if stream is not LIVE
     from app.vision.stream_health import StreamState

@@ -149,6 +149,8 @@ class IdentityReviewWorker:
         self._max_consecutive_failures = 10
         self._run_count = 0
 
+    _verifier_offline_logged = False     # so the outage is logged once, not every cycle
+
     def start(self):
         """Start the background worker thread."""
         if self._running:
@@ -231,6 +233,15 @@ class IdentityReviewWorker:
         """Execute one full review cycle."""
         cycle_start = time.time()
         logger.info(f"Gallery Optimizer cycle #{self._run_count + 1} starting...")
+
+        # Phase 0: drop clusters whose faces are gone (enrolled, dismissed, or
+        # removed by retention), so nothing below works on evidence that no
+        # longer exists.
+        try:
+            from app.services.clustering_service import ClusteringService
+            ClusteringService.reconcile()
+        except Exception as e:
+            logger.warning(f"Cluster reconcile skipped: {e}")
 
         # Phase 1: Clustering
         cluster_stats = self._phase_clustering()
@@ -441,6 +452,25 @@ class IdentityReviewWorker:
 
                 vlm = get_vlm_reviewer()
                 vlm_enabled = getattr(vlm, "enabled", True)
+                # Ask whether the verifier is there before sending it work.
+                # When it is not, ambiguous matches go to the human queue
+                # without a second opinion -- the same honest outcome as
+                # having no verifier configured -- instead of thirty refused
+                # connections a cycle that nobody ever saw.
+                if vlm_enabled:
+                    from app.services.vlm_service import get_vlm_status
+                    verifier = get_vlm_status()
+                    if not verifier["available"]:
+                        vlm_enabled = False
+                        if not self._verifier_offline_logged:
+                            logger.warning(
+                                f"AI verifier unavailable: {verifier['detail']} Matches are "
+                                f"queued for review without an AI opinion until it is back."
+                            )
+                            self._verifier_offline_logged = True
+                    elif self._verifier_offline_logged:
+                        logger.info("AI verifier is back; ambiguous matches are being verified again.")
+                        self._verifier_offline_logged = False
                 vlm_cache = get_vlm_cache()
                 gallery_version = self._get_gallery_version(db)
 
