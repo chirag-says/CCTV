@@ -320,7 +320,13 @@ class CameraManager:
         processes and a process cannot be spawned one camera at a time. In
         thread mode this keeps its original behaviour exactly.
         """
-        if self._server_mode():
+        # A browser (phone) camera's frames arrive over a WebSocket and live in
+        # THIS process's memory (routes.browser_camera._browser_sessions). A
+        # camera process is a separate interpreter with its own empty copy of
+        # that dict, so a pipeline there never sees a frame: video shows on the
+        # monitor but nothing is ever detected, and the watchdog restarts the
+        # process forever. Browser cameras therefore always run in-process.
+        if self._server_mode() and not str(stream_source).startswith("browser:"):
             from app.vision.process_manager import process_camera_manager
             process_camera_manager.add_camera(camera_id, stream_source)
             logger.info(f"Camera {camera_id} registered for server mode")
@@ -444,7 +450,16 @@ class CameraManager:
         """Get status for all cameras."""
         if self._server_mode():
             from app.vision.process_manager import process_camera_manager
-            return process_camera_manager.get_all_status()
+            status = process_camera_manager.get_all_status()
+            if self._workers:
+                # In-process browser cameras are not known to the process manager.
+                status = dict(status)
+                cams = dict(status.get("cameras") or {})
+                for cid, worker in self._workers.items():
+                    cams[cid] = worker.status
+                status["cameras"] = cams
+                status["total_active"] = len(cams)
+            return status
         return {
             "cameras": {
                 cid: worker.status for cid, worker in self._workers.items()
@@ -457,7 +472,8 @@ class CameraManager:
         """Get IDs of all active cameras."""
         if self._server_mode():
             from app.vision.process_manager import process_camera_manager
-            return process_camera_manager.get_active_camera_ids()
+            ids = list(process_camera_manager.get_active_camera_ids())
+            return ids + [cid for cid in self._workers if cid not in ids]
         return list(self._workers.keys())
 
     def get_all_occupancy(self) -> int:
